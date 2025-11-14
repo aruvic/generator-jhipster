@@ -73,8 +73,13 @@ import java.time.LocalTime;
 <%_ } if (anyFieldIsDuration) { _%>
 import java.time.Duration;
 <%_ } if (entityContainsCollectionField) { _%>
+<%_ if (enableSwaggerCodegen) { _%>
+import java.util.ArrayList;
+import java.util.List;
+<%_ } else { _%>
 import java.util.HashSet;
 import java.util.Set;
+<%_ } _%>
 <%_ } _%>
 <%_ if (anyFieldIsUUID || otherEntityPrimaryKeyTypesIncludesUUID) { _%>
 import java.util.UUID;
@@ -137,6 +142,9 @@ public class <%= persistClass %> <&- fragments.extendsSection() -&>implements Se
 <&- fragments.classAdditionalFieldsSection() -&>
 
 <%_
+const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
+const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
+
 // An embedded entity should not reference entities that embed it, unless the other entities are also embedded
 for (relationship of relationships) {
   if (typeof relationship.fieldApiDescription) { _%>
@@ -154,7 +162,7 @@ for (relationship of relationships) {
         <%_ }); _%>
     }, allowSetters = true)
     <%_ } _%>
-    private Set<<%= relationship.otherEntity.persistClass %>> <%= relationship.relationshipFieldNamePlural %> = new HashSet<>();
+    private <%= relationshipCollectionType %><<%= relationship.otherEntity.persistClass %>> <%= relationship.relationshipFieldNamePlural %> = new <%= relationshipCollectionImpl %><>();
 
   <%_ } else if (relationship.relationshipManyToOne) { _%>
     <%_ if (relationship.ignoreOtherSideProperty) { _%>
@@ -174,7 +182,7 @@ for (relationship of relationships) {
       <%_ }); _%>
     }, allowSetters = true)
     <%_ } _%>
-    private Set<<%= relationship.otherEntity.persistClass %>> <%= relationship.relationshipFieldNamePlural %> = new HashSet<>();
+    private <%= relationshipCollectionType %><<%= relationship.otherEntity.persistClass %>> <%= relationship.relationshipFieldNamePlural %> = new <%= relationshipCollectionImpl %><>();
 
   <%_ } else { _%>
     private <%= relationship.otherEntity.persistClass %> <%= relationship.relationshipFieldName %>;
@@ -229,7 +237,7 @@ for (relationship of relationships) {
 for (const relationship of relationships) {
 _%>
   <%_ if (relationship.collection) { _%>
-    public Set<<%= relationship.otherEntity.persistClass %>> get<%= relationship.relationshipNameCapitalizedPlural %>() {
+    public <%= relationshipCollectionType %><<%= relationship.otherEntity.persistClass %>> get<%= relationship.relationshipNameCapitalizedPlural %>() {
         return this.<%= relationship.relationshipFieldNamePlural %>;
     }
 
@@ -242,7 +250,7 @@ _%>
 <&- fragments.relationship<%- relationship.relationshipNameCapitalized %>CustomSetSection() -&>
 <&_ if (!fragments.relationship<%- relationship.relationshipNameCapitalized %>CustomSetSection()) { -&>
   <%_ if (relationship.collection) { _%>
-    public void set<%= relationship.relationshipNameCapitalizedPlural %>(Set<<%= relationship.otherEntity.persistClass %>> <%= relationship.otherEntity.entityInstancePlural %>) {
+    public void set<%= relationship.relationshipNameCapitalizedPlural %>(<%= relationshipCollectionType %><<%= relationship.otherEntity.persistClass %>> <%= relationship.otherEntity.entityInstancePlural %>) {
     <%_ if (relationship.otherRelationship && relationship.relationshipUpdateBackReference) { _%>
         if (this.<%= relationship.relationshipFieldNamePlural %> != null) {
       <%_ if (relationship.otherRelationship.collection) { _%>
@@ -286,7 +294,7 @@ _%>
     <%_ if (fluentMethods) { _%>
       <%_ if (relationship.collection) { _%>
 
-    public <%= persistClass %> <%= relationship.relationshipFieldNamePlural %>(Set<<%= relationship.otherEntity.persistClass %>> <%= relationship.otherEntity.entityInstancePlural %>) {
+    public <%= persistClass %> <%= relationship.relationshipFieldNamePlural %>(<%= relationshipCollectionType %><<%= relationship.otherEntity.persistClass %>> <%= relationship.otherEntity.entityInstancePlural %>) {
         this.set<%= relationship.relationshipNameCapitalizedPlural %>(<%= relationship.otherEntity.entityInstancePlural %>);
         return this;
     }

@@ -430,7 +430,8 @@ ${classProperties
   get preparingEachEntity() {
     return this.asPreparingEachEntityTaskGroup({
       prepareEntity({ entity, application }) {
-        if (entity.entityRestLayer === false) {
+        const entityRestLayer = entity.entityRestLayer !== false && (!application.enableSwaggerCodegen || entity.builtInUser);
+        if (!entityRestLayer) {
           (entity as unknown as ClientEntity).entityClientModelOnly = true;
         }
 
@@ -438,7 +439,7 @@ ${classProperties
           authorities.length > 0 ? `hasAnyAuthority(${authorities.map(auth => `'${auth}'`).join(',')})` : undefined;
         mutateData(entity, {
           entityPersistenceLayer: true,
-          entityRestLayer: true,
+          entityRestLayer,
           entitySpringPreAuthorize: hasAnyAuthority(entity.entityAuthority?.split(',') ?? []),
           entitySpringReadPreAuthorize: hasAnyAuthority([
             ...(entity.entityAuthority?.split(',') ?? []),
