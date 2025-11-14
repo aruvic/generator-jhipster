@@ -18,6 +18,7 @@
  */
 import { asWriteFilesBlock, asWriteFilesSection, asWritingEntitiesTask } from '../../../base-application/support/task-type-inference.ts';
 import { javaMainPackageTemplatesBlock } from '../../../java/support/index.ts';
+import type { Application as SpringDataRelationalApplication, Entity as SpringDataRelationalEntity } from './types.ts';
 
 const domainFiles = asWriteFilesBlock([
   {
@@ -89,6 +90,14 @@ const sqlFiles = asWriteFilesSection({
 
 export function cleanupEntitiesTask() {}
 
+const buildEntityContext = (application: SpringDataRelationalApplication, entity: SpringDataRelationalEntity) => {
+  const context = { ...application, ...entity };
+  if (context.hasParentEntity === undefined) {
+    context.hasParentEntity = Boolean(entity.parentEntity) || Boolean(entity.extends);
+  }
+  return context;
+};
+
 export default asWritingEntitiesTask(async function writeEntitiesTask({ application, entities }) {
   for (const entity of entities.filter(entity => !entity.skipServer)) {
     if (entity.builtInUser) {
@@ -100,12 +109,12 @@ export default asWritingEntitiesTask(async function writeEntitiesTask({ applicat
             templates: ['domain/_persistClass_Callback.java'],
           },
         ],
-        context: { ...application, ...entity },
+        context: buildEntityContext(application as SpringDataRelationalApplication, entity as SpringDataRelationalEntity),
       });
     } else {
       await this.writeFiles({
         sections: sqlFiles,
-        context: { ...application, ...entity },
+        context: buildEntityContext(application as SpringDataRelationalApplication, entity as SpringDataRelationalEntity),
       });
     }
   }

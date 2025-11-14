@@ -29,6 +29,20 @@
     -->
     <changeSet id="<%- changelogDate %>-1" author="jhipster">
         <createTable tableName="<%- entity.entityTableName %>"<%- this.formatAsLiquibaseRemarks(entity.documentation, true) %>>
+<%_ const parentEntity = entity.parentEntity; _%>
+<%_ const inheritedPrimaryKey = parentEntity?.primaryKey; _%>
+<%_ if (entity.polymorphicChild && inheritedPrimaryKey) {
+      const inheritedField = inheritedPrimaryKey.fields[0];
+_%>
+            <column name="<%- inheritedField.columnName %>" type="<%- inheritedField.columnType %>">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+<%_ } _%>
+<%_ if (entity.polymorphicRoot && entity.discriminatorColumn) { _%>
+            <column name="<%- entity.discriminatorColumn.name %>" type="<%- entity.discriminatorColumn.sqlType %>">
+                <constraints nullable="false"/>
+            </column>
+<%_ } _%>
 <%_ for (field of fields) { _%>
             <column name="<%- field.columnName %>" type="<%- field.columnType %>"<%- this.createDefaultValueLiquibaseAttribute(field, true) -%><%- this.formatAsLiquibaseRemarks(field.documentation, true) %><%- field.id && field.liquibaseAutoIncrement ? ' autoIncrement="true" startWith="1500"' : '' %>>
   <%_ if (field.id) { _%>

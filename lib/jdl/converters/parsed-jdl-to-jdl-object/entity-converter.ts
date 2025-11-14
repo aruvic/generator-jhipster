@@ -45,11 +45,19 @@ export function convertEntities(
       tableName: parsedEntity.tableName,
       comment: formatComment(parsedEntity.documentation),
       annotations: Object.fromEntries(
-        parsedEntity.annotations?.map(annotation => [
-          lowerFirst(annotation.optionName),
-          annotation.type === 'UNARY' ? true : annotation.optionValue,
-        ]) ?? [],
+        parsedEntity.annotations?.map(annotation => {
+          let annotationValue: any;
+          if (annotation.type === 'UNARY') {
+            annotationValue = true;
+          } else if (annotation.type === 'OBJECT') {
+            annotationValue = annotation.optionValues;
+          } else {
+            annotationValue = annotation.optionValue;
+          }
+          return [lowerFirst(annotation.optionName), annotationValue];
+        }) ?? [],
       ),
+      extends: parsedEntity.extends,
     });
     const jdlFields = jdlFieldGetterFunction(parsedEntity);
     jdlEntity.addFields(jdlFields);

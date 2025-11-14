@@ -19,6 +19,7 @@
 import type { Entity as AngularEntity } from '../../generators/angular/types.d.ts';
 import type {
   Application as BaseApplication,
+  DiscriminatorColumnConfig,
   Entity as BaseApplicationEntity,
   RelationshipWithEntity,
 } from '../../generators/base-application/types.d.ts';
@@ -77,6 +78,13 @@ export interface EntityAll<F extends FieldAll = FieldAll, R extends Relationship
 
   otherEntities?: this[];
   otherEntitiesWithPersistableRelationship?: this[];
+  parentEntity?: EntityAll;
+  childEntities?: EntityAll[];
+  polymorphicRoot?: boolean;
+  polymorphicChild?: boolean;
+  discriminatorColumn?: DiscriminatorColumnConfig;
+  discriminatorValue?: string;
+  abstractClass?: boolean;
 
   regularEagerRelations?: RelationshipWithEntity<R, this>[];
   eagerRelations?: RelationshipWithEntity<R, this>[];

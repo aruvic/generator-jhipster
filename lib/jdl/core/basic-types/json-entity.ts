@@ -26,7 +26,7 @@ import { merge } from '../utils/object-utils.ts';
  * The JSONEntity class represents a read-to-be exported to JSON entity.
  */
 class JSONEntity {
-  annotations: Record<string, boolean | string | number | undefined>;
+  annotations: Record<string, AnnotationValue>;
   name: string;
   fields: JSONField[];
   relationships: JSONRelationship[];
@@ -45,6 +45,7 @@ class JSONEntity {
   skipServer?: boolean;
   skipClient?: boolean;
   applications: string[];
+  extends?: string;
 
   /**
    * Creates a new JSONEntity instance.
@@ -72,6 +73,7 @@ class JSONEntity {
     this.fields = merged.fields;
     this.annotations = merged.annotations ?? {};
     this.relationships = merged.relationships;
+    this.extends = merged.extends;
     this.documentation = merged.documentation;
     this.entityTableName = merged.entityTableName;
     this.dto = merged.dto;
@@ -131,12 +133,14 @@ class JSONEntity {
     });
   }
 
-  setAnnotations(annotations: Record<string, boolean | string | number | undefined> = {}) {
+  setAnnotations(annotations: Record<string, AnnotationValue> = {}) {
     Object.assign(this.annotations, annotations);
   }
 }
 
 export default JSONEntity;
+
+type AnnotationValue = boolean | string | number | Record<string, boolean | string | number>;
 
 function getDefaults(entityName: string): Pick<JSONEntity, 'name' | 'fields' | 'relationships' | 'annotations'> {
   return {

@@ -104,6 +104,7 @@ export const buildTokens = (tokens: { applicationTokens: TokenParam; deploymentT
   // Entity constants
   createTokenFromConfig({ name: 'ENTITY', pattern: 'entity' });
   createTokenFromConfig({ name: 'ENUM', pattern: 'enum' });
+  createTokenFromConfig({ name: 'EXTENDS', pattern: 'extends' });
   // Relationship-related
   createTokenFromConfig({ name: 'RELATIONSHIP', pattern: 'relationship' });
   createTokenFromConfig({ name: 'BUILT_IN_ENTITY', pattern: BUILT_IN_ENTITY });

@@ -320,9 +320,9 @@ export default function performAdditionalSyntaxChecks(cst: CstNode, runtime: JDL
       this.checkNameSyntax(context.NAME[0], CONSTANT_PATTERN, 'constant');
     }
 
-    entityDeclaration(context: Record<'NAME', IToken[]>) {
+    entityDeclaration(context: Record<'entityName', IToken[]>) {
       super.entityDeclaration(context);
-      this.checkNameSyntax(context.NAME[0], ENTITY_NAME_PATTERN, 'entity');
+      this.checkNameSyntax(context.entityName[0], ENTITY_NAME_PATTERN, 'entity');
     }
 
     fieldDeclaration(context: Record<'NAME', IToken[]>) {

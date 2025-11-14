@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 import type { CstNode, ICstVisitor, IToken } from 'chevrotain';
+import { lowerFirst } from 'lodash-es';
 
 import { relationshipOptions, validations } from '../built-in-options/index.ts';
 import type {
@@ -156,8 +157,8 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
     }
 
     entityDeclaration(
-      context: Record<'ENTITY' | 'NAME' | 'JAVADOC', IToken[]> &
-        Record<'annotationDeclaration' | 'entityTableNameDeclaration' | 'entityBody', CstNode[]>,
+      context: Record<'ENTITY' | 'entityName' | 'JAVADOC', IToken[]> &
+        Record<'annotationDeclaration' | 'entityTableNameDeclaration' | 'entityBody', CstNode[]> & { extends?: IToken[] },
     ) {
       const annotations: ParsedJDLAnnotation[] = [];
       if (context.annotationDeclaration) {
@@ -171,12 +172,14 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
         documentation = trimComment(context.JAVADOC[0].image);
       }
 
-      const name = context.NAME[0].image;
+      const name = context.entityName[0].image;
 
       let tableName: string | undefined;
       if (context.entityTableNameDeclaration) {
         tableName = this.visit(context.entityTableNameDeclaration);
       }
+
+      const superClass = context.extends?.[0].image;
 
       let body: ParsedJDLEntityField[] = [];
       if (context.entityBody) {
@@ -187,36 +190,30 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
         annotations,
         name,
         tableName,
+        extends: superClass,
         body,
         documentation,
       };
     }
 
-    annotationDeclaration(context: Record<'AT' | 'value' | 'option', IToken[]>) {
+    annotationDeclaration(context: Record<'AT' | 'option', IToken[]> & { value?: IToken[]; valueMap?: CstNode[] }) {
       const optionName = context.option[0].image;
+      if (context.valueMap) {
+        return { optionName, type: 'OBJECT', optionValues: this.visit(context.valueMap[0]) };
+      }
       if (!context.value) {
         return { optionName, type: 'UNARY' };
       }
-      const { image: valueImage } = context.value[0];
-      const { tokenType } = context.value[0];
-      let optionValue: unknown;
-      switch (tokenType.name) {
-        case 'INTEGER':
-          optionValue = Number.parseInt(valueImage, 10);
-          break;
-        case 'DECIMAL':
-          optionValue = Number.parseFloat(valueImage);
-          break;
-        case 'TRUE':
-          optionValue = true;
-          break;
-        case 'FALSE':
-          optionValue = false;
-          break;
-        default:
-          optionValue = valueImage.replace(/"/g, '');
-      }
+      const optionValue = parseAnnotationValueToken(context.value[0]);
       return { optionName, optionValue, type: 'BINARY' };
+    }
+
+    annotationKeyValueList(context: { annotationKeyValue?: CstNode[] }) {
+      return Object.fromEntries((context.annotationKeyValue ?? []).map(entry => this.visit(entry)));
+    }
+
+    annotationKeyValue(context: { key: IToken[]; value: IToken[] }) {
+      return [lowerFirst(context.key[0].image), parseAnnotationValueToken(context.value[0])];
     }
 
     entityTableNameDeclaration(context: Record<'NAME', IToken[]>) {
@@ -801,6 +798,22 @@ function getSpecialUnaryOptionDeclaration(
     list,
     excluded,
   };
+}
+
+function parseAnnotationValueToken(token: IToken): string | number | boolean {
+  const { image, tokenType } = token;
+  switch (tokenType.name) {
+    case 'INTEGER':
+      return Number.parseInt(image, 10);
+    case 'DECIMAL':
+      return Number.parseFloat(image);
+    case 'TRUE':
+      return true;
+    case 'FALSE':
+      return false;
+    default:
+      return image.replace(/"/g, '');
+  }
 }
 
 function trimComment(comment: string): string {

@@ -28,7 +28,8 @@ export default class JDLEntity {
   tableName: string | undefined;
   fields: Record<string, JDLField>;
   comment: string | undefined;
-  annotations: Record<string, boolean | string | number | undefined>;
+  annotations: Record<string, AnnotationValue>;
+  extends?: string;
 
   constructor(args: Partial<JDLEntity>) {
     const merged: Partial<JDLEntity> = merge(defaults(), args);
@@ -40,6 +41,7 @@ export default class JDLEntity {
     this.fields = merged.fields ?? {};
     this.comment = merged.comment;
     this.annotations = merged.annotations ?? {};
+    this.extends = merged.extends;
   }
 
   /**
@@ -83,6 +85,9 @@ export default class JDLEntity {
       }
     });
     stringifiedEntity += `entity ${this.name}`;
+    if (this.extends) {
+      stringifiedEntity += ` extends ${this.extends}`;
+    }
     if (this.tableName) {
       stringifiedEntity += ` (${this.tableName})`;
     }
@@ -92,6 +97,8 @@ export default class JDLEntity {
     return stringifiedEntity;
   }
 }
+
+type AnnotationValue = boolean | string | number | Record<string, boolean | string | number>;
 
 function defaults(): Pick<JDLEntity, 'fields' | 'annotations'> {
   return {

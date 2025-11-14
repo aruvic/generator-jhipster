@@ -109,6 +109,19 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 <title>${application.dasherizedBaseName}</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                             </configOptions>
+                            <typeMappings>
+                                <typeMapping>date=LocalDate</typeMapping>
+                                <typeMapping>DateTime=Instant</typeMapping>
+                                <typeMapping>Time=LocalTime</typeMapping>
+                                <typeMapping>Duration=Duration</typeMapping>
+                            </typeMappings>
+                            <importMappings>
+                                <importMapping>Instant=java.time.Instant</importMapping>
+                                <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
+                                <importMapping>LocalDate=java.time.LocalDate</importMapping>
+                                <importMapping>LocalTime=java.time.LocalTime</importMapping>
+                                <importMapping>Duration=java.time.Duration</importMapping>
+                            </importMappings>
                         </configuration>
                     </execution>
                 </executions>

@@ -21,6 +21,17 @@
         Added the constraints for entity <%- entity.entityClass %>.
     -->
     <changeSet id="<%- changelogDate %>-2" author="jhipster">
+<%_ if (entity.polymorphicChild && entity.parentEntity?.primaryKey) {
+      const inheritedField = entity.parentEntity.primaryKey.fields[0];
+      const constraintName = this.getFKConstraintName(entity.entityTableName, entity.parentEntity.name, prodDatabaseType);
+_%>
+        <addForeignKeyConstraint baseColumnNames="<%- inheritedField.columnName %>"
+                                 baseTableName="<%- entity.entityTableName %>"
+                                 constraintName="<%- constraintName %>"
+                                 referencedColumnNames="<%- inheritedField.columnName %>"
+                                 referencedTableName="<%- entity.parentEntity.entityTableName %>"
+                                 />
+<%_ } _%>
 <%_ for (relationship of relationships) { _%>
 <%- include('./add_relationship_constraints', { entity, relationship, prodDatabaseType }) -%>
 <%_ } _%>

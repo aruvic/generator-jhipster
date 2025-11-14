@@ -31,6 +31,18 @@ import org.hibernate.type.SqlTypes;
 <&_ if (fragment.annotationSection) { -&>
 @Entity
 @Table(name = "<%- entityTableName %>")
+  <%_ if (polymorphicRoot) { _%>
+    @Inheritance(strategy = InheritanceType.JOINED)
+    <%_ if (discriminatorColumn) { _%>
+    @DiscriminatorColumn(
+        name = "<%- discriminatorColumn.name %>",
+        discriminatorType = <%- discriminatorColumn.discriminatorTypeLiteral %><% if (discriminatorColumn.length) { %>,
+        length = <%- discriminatorColumn.length %><% } %>
+    )
+    <%_ } _%>
+  <%_ } else if (discriminatorValue) { _%>
+    @DiscriminatorValue("<%- discriminatorValue %>")
+  <%_ } _%>
 <&_ } -&>
 
 <%_ for (const field of fields) { -%>
@@ -54,7 +66,22 @@ import org.hibernate.type.SqlTypes;
   <%_ } _%>
   <%_ if (field.fieldTypeUUID && (prodDatabaseTypeMysql || prodDatabaseTypeMariadb)) { _%>
     @JdbcTypeCode(SqlTypes.VARCHAR)
-    @Column(name = "<%- field.fieldNameAsDatabaseColumn %>", length = 36<%- field.fieldValidationRequired ? ', nullable = false' : '' %><%- field.fieldValidationUnique ? ', unique = true' : '' %>)
+    @Column(
+      name = "<%- field.fieldNameAsDatabaseColumn %>"
+      , length = 36
+    <%_ if (field.fieldValidationRequired) { %>
+      , nullable = false
+    <%_ } _%>
+    <%_ if (field.fieldValidationUnique) { %>
+      , unique = true
+    <%_ } _%>
+    <%_ if (field.columnInsertable === false) { %>
+      , insertable = false
+    <%_ } _%>
+    <%_ if (field.columnUpdatable === false) { %>
+      , updatable = false
+    <%_ } _%>
+    )
   <%_ } else { _%>
     @Column(
       name = "<%- field.fieldNameAsDatabaseColumn %>"
@@ -69,6 +96,12 @@ import org.hibernate.type.SqlTypes;
     <%_ } _%>
     <%_ if (field.fieldValidationUnique) { %>
       , unique = true
+    <%_ } _%>
+    <%_ if (field.columnInsertable === false) { %>
+      , insertable = false
+    <%_ } _%>
+    <%_ if (field.columnUpdatable === false) { %>
+      , updatable = false
     <%_ } _%>
   )
   <%_ } _%>

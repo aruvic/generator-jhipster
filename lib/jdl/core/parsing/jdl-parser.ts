@@ -36,6 +36,8 @@ export default class JDLParser extends CstParser {
     this.constantDeclaration();
     this.entityDeclaration();
     this.annotationDeclaration();
+    this.annotationKeyValueList();
+    this.annotationKeyValue();
     this.entityTableNameDeclaration();
     this.entityBody();
     this.fieldDeclaration();
@@ -122,22 +124,26 @@ export default class JDLParser extends CstParser {
 
   entityDeclaration(): CstNode {
     this.RULE('entityDeclaration', () => {
-      this.OPTION(() => {
-        this.CONSUME(this.tokens.JAVADOC);
-      });
-
       this.MANY(() => {
-        this.SUBRULE(this.annotationDeclaration);
+        this.OR([
+          { ALT: () => this.CONSUME(this.tokens.JAVADOC) },
+          { ALT: () => this.SUBRULE(this.annotationDeclaration) },
+        ]);
       });
 
       this.CONSUME(this.tokens.ENTITY);
-      this.CONSUME(this.tokens.NAME);
+      this.CONSUME(this.tokens.NAME, { LABEL: 'entityName' });
 
       this.OPTION1(() => {
         this.SUBRULE(this.entityTableNameDeclaration);
       });
 
       this.OPTION2(() => {
+        this.CONSUME(this.tokens.EXTENDS);
+        this.CONSUME1(this.tokens.NAME, { LABEL: 'extends' });
+      });
+
+      this.OPTION3(() => {
         this.SUBRULE(this.entityBody);
       });
     });
@@ -153,6 +159,7 @@ export default class JDLParser extends CstParser {
         this.OR({
           IGNORE_AMBIGUITIES: true,
           DEF: [
+            { ALT: () => this.SUBRULE(this.annotationKeyValueList, { LABEL: 'valueMap' }) },
             { ALT: () => this.CONSUME(this.tokens.STRING, { LABEL: 'value' }) },
             { ALT: () => this.CONSUME(this.tokens.INTEGER, { LABEL: 'value' }) },
             { ALT: () => this.CONSUME(this.tokens.DECIMAL, { LABEL: 'value' }) },
@@ -162,6 +169,36 @@ export default class JDLParser extends CstParser {
           ],
         });
         this.CONSUME(this.tokens.RPAREN);
+      });
+    });
+    return noopCst;
+  }
+
+  annotationKeyValueList(): CstNode {
+    this.RULE('annotationKeyValueList', () => {
+      this.SUBRULE(this.annotationKeyValue);
+      this.MANY(() => {
+        this.CONSUME(this.tokens.COMMA);
+        this.SUBRULE1(this.annotationKeyValue);
+      });
+    });
+    return noopCst;
+  }
+
+  annotationKeyValue(): CstNode {
+    this.RULE('annotationKeyValue', () => {
+      this.CONSUME(this.tokens.NAME, { LABEL: 'key' });
+      this.CONSUME(this.tokens.EQUALS);
+      this.OR({
+        IGNORE_AMBIGUITIES: true,
+        DEF: [
+          { ALT: () => this.CONSUME(this.tokens.STRING, { LABEL: 'value' }) },
+          { ALT: () => this.CONSUME(this.tokens.INTEGER, { LABEL: 'value' }) },
+          { ALT: () => this.CONSUME(this.tokens.DECIMAL, { LABEL: 'value' }) },
+          { ALT: () => this.CONSUME(this.tokens.TRUE, { LABEL: 'value' }) },
+          { ALT: () => this.CONSUME(this.tokens.FALSE, { LABEL: 'value' }) },
+          { ALT: () => this.CONSUME2(this.tokens.NAME, { LABEL: 'value' }) },
+        ],
       });
     });
     return noopCst;
@@ -192,12 +229,11 @@ export default class JDLParser extends CstParser {
 
   fieldDeclaration(): CstNode {
     this.RULE('fieldDeclaration', () => {
-      this.OPTION(() => {
-        this.CONSUME(this.tokens.JAVADOC);
-      });
-
       this.MANY(() => {
-        this.SUBRULE(this.annotationDeclaration);
+        this.OR([
+          { ALT: () => this.CONSUME(this.tokens.JAVADOC) },
+          { ALT: () => this.SUBRULE(this.annotationDeclaration) },
+        ]);
       });
 
       this.CONSUME(this.tokens.NAME);

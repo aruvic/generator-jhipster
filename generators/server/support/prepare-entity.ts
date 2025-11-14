@@ -45,6 +45,7 @@ export function preparePostEntityServerDerivedProperties(
   mutateData(entity, {
     uniqueEnums: ({ fields }) => [...new Set(fields.filter(field => field.fieldIsEnum))],
   });
+  disableWritableDuplicateColumnFields(entity);
 
   if (entity.primaryKey?.derived) {
     entity.isUsingMapsId = true;
@@ -63,6 +64,46 @@ export function preparePostEntityServerDerivedProperties(
           otherField =>
             `${relationship.id && relationship.relationshipOneToOne ? '' : `${hibernateSnakeCase(relationship.relationshipName)}_`}${(otherField as DatabaseField).columnName}`,
         );
+      }
+    }
+  }
+}
+
+function disableWritableDuplicateColumnFields(
+  entity: SpringBootEntity<SpringBootField, RelationshipWithEntity<SpringBootRelationship, SpringBootEntity>>,
+) {
+  if (entity.databaseType !== 'sql') {
+    return;
+  }
+  const columns = new Map<string, SpringBootField[]>();
+  const getFieldColumnName = (field: SpringBootField): string | undefined => {
+    const databaseField = field as SpringBootField & DatabaseField;
+    return databaseField.columnName ?? field.fieldNameAsDatabaseColumn;
+  };
+
+  for (const field of entity.fields) {
+    const columnName = getFieldColumnName(field);
+    if (!columnName) {
+      continue;
+    }
+    const group = columns.get(columnName) ?? [];
+    group.push(field);
+    columns.set(columnName, group);
+  }
+  for (const fields of columns.values()) {
+    if (fields.length <= 1) {
+      continue;
+    }
+    const writableField = fields.find(field => !('derived' in field && field.derived)) ?? fields[0];
+    for (const field of fields) {
+      if (field === writableField) {
+        continue;
+      }
+      if (field.columnInsertable !== false) {
+        field.columnInsertable = false;
+      }
+      if (field.columnUpdatable !== false) {
+        field.columnUpdatable = false;
       }
     }
   }

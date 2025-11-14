@@ -50,6 +50,13 @@ export type Field = BaseApplicationField &
     fieldJavaBuildSpecification?: string;
     // TODO move to spring-boot?
     propertyJavaCustomFilter?: { type: string; superType: string; fieldType: string };
+
+    javaValueSample1?: string;
+    javaValueSample2?: string;
+    fieldValidateRulesPatternJava?: string;
+
+    columnInsertable?: boolean;
+    columnUpdatable?: boolean;
   };
 
 export interface Relationship extends BaseApplicationRelationship, JavaAddedRelationshipProperties, Property {

@@ -54,12 +54,33 @@ import static <%- packageName %>.web.rest.TestUtil.createUpdateProxyForBean;
     if (databaseTypeSql && !reactive) {
       transactionalAnnotation = '\n    @Transactional';
     }
+    const findFirstConcreteChildEntity = entities => {
+      if (!Array.isArray(entities)) return undefined;
+      for (const childEntity of entities) {
+        if (childEntity && !childEntity.abstractClass) return childEntity;
+      }
+      for (const childEntity of entities) {
+        const found = findFirstConcreteChildEntity(childEntity?.childEntities);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
+    const instantiationExpression = instantiationChildEntity
+      ? `new ${instantiationChildEntity.persistClass}()`
+      : abstractClass
+        ? `new ${persistClass}() {}`
+        : `new ${persistClass}()`;
+    const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
 _%>
 <%_ if (entityAbsolutePackage !== packageName) { _%>
 import <%- packageName %>.web.rest.TestUtil;
 <% } %>
 import <%- packageName %>.IntegrationTest;
 import <%- entityAbsolutePackage %>.domain.<%- persistClass %>;
+<%_ if (needsInstantiationImport) { _%>
+import <%- instantiationChildEntity.entityAbsolutePackage %>.domain.<%- instantiationChildEntity.persistClass %>;
+<%_ } _%>
 <%_ const imported = []; _%>
 <%_ for (relationship of relationships) { _%>
   <%_ // import entities in required relationships
@@ -525,7 +546,7 @@ class <%- entityClass %>ResourceIT {
      */
     public static <%- persistClass %> create<%- (fieldStatus === 'UPDATED_') ? 'Updated' : '' %>Entity(<%- (databaseTypeSql && anyRelationshipIsRequired) ? 'EntityManager em' : '' %>) {
   <%_ if (fluentMethods) { _%>
-        <% if (anyRelationshipIsRequired) { %><%- persistClass %> <%- createInstance %> = <% } else { %>return <% } %>new <%- persistClass %>()
+        <% if (anyRelationshipIsRequired) { %><%- persistClass %> <%- createInstance %> = <% } else { %>return <% } %><%- instantiationExpression %>
     <%_ if (reactive && databaseTypeSql && primaryKey.typeUUID && !isUsingMapsId) { _%>
             .<%- primaryKey.name %>(UUID.randomUUID())
     <%_ } _%>
@@ -543,7 +564,7 @@ class <%- entityClass %>ResourceIT {
       <%_ continue; _%>
     <%_ } _%>
   <%_ } else { _%>
-        <%- persistClass %> <%- createInstance %> = new <%- persistClass %>();
+        <%- persistClass %> <%- createInstance %> = <%- instantiationExpression %>;
     <%_ if (reactive && databaseTypeSql && primaryKey.typeUUID && !isUsingMapsId) { _%>
         <%- createInstance %>.<%- primaryKey.fields[0].propertySupplierName %>(UUID.randomUUID());
     <%_ } _%>

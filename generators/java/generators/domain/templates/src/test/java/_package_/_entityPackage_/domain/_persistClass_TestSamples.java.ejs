@@ -18,9 +18,32 @@
 -%>
 package <%- entityAbsolutePackage %>.domain;
 
+<%_
+const findFirstConcreteChildEntity = entities => {
+  if (!Array.isArray(entities)) return undefined;
+  for (const childEntity of entities) {
+    if (childEntity && !childEntity.abstractClass) return childEntity;
+  }
+  for (const childEntity of entities) {
+    const found = findFirstConcreteChildEntity(childEntity?.childEntities);
+    if (found) return found;
+  }
+  return undefined;
+};
+const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
+const instantiationExpression = instantiationChildEntity
+  ? `new ${instantiationChildEntity.persistClass}()`
+  : abstractClass
+    ? `new ${persistClass}() {}`
+    : `new ${persistClass}()`;
+const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
+_%>
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 import <%- packageName %>.web.rest.TestUtil;
+<%_ if (needsInstantiationImport) { _%>
+import <%- instantiationChildEntity.entityAbsolutePackage %>.domain.<%- instantiationChildEntity.persistClass %>;
+<%_ } _%>
 <%_ if (fields.some(field => field.fieldTypeString) || fields.some(field => field.fieldTypeUUID)) { _%>
 import java.util.UUID;
 <%_ } _%>
@@ -49,9 +72,9 @@ public class <%- persistClass %>TestSamples {
 
     public static <%- persistClass %> get<%- persistClass %>Sample1() {
 <%_ if (fluentMethods) { _%>
-        return new <%- persistClass %>()<% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueSample1 %>)<% } %>;
+        return <%- instantiationExpression %><% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueSample1 %>)<% } %>;
 <%_ } else { _%>
-        <%- persistClass %> <%- persistInstance %> = new <%- persistClass %>();
+        <%- persistClass %> <%- persistInstance %> = <%- instantiationExpression %>;
   <%_ for (const field of sampleFields) { _%>
         <%- persistInstance %>.<%- field.propertyConsumerName %>(<%- field.javaValueSample1 %>);
   <%_ } _%>
@@ -61,9 +84,9 @@ public class <%- persistClass %>TestSamples {
 
     public static <%- persistClass %> get<%- persistClass %>Sample2() {
 <%_ if (fluentMethods) { _%>
-        return new <%- persistClass %>()<% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueSample2 %>)<% } %>;
+        return <%- instantiationExpression %><% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueSample2 %>)<% } %>;
 <%_ } else { _%>
-        <%- persistClass %> <%- persistInstance %> = new <%- persistClass %>();
+        <%- persistClass %> <%- persistInstance %> = <%- instantiationExpression %>;
   <%_ for (const field of sampleFields) { _%>
         <%- persistInstance %>.<%- field.propertyConsumerName %>(<%- field.javaValueSample2 %>);
   <%_ } _%>
@@ -73,9 +96,9 @@ public class <%- persistClass %>TestSamples {
 
     public static <%- persistClass %> get<%- persistClass %>RandomSampleGenerator() {
 <%_ if (fluentMethods) { _%>
-        return new <%- persistClass %>()<% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueGenerator %>)<% } %>;
+        return <%- instantiationExpression %><% for (const field of sampleFields) { %>.<%- field.fieldName %>(<%- field.javaValueGenerator %>)<% } %>;
 <%_ } else { _%>
-        <%- persistClass %> <%- persistInstance %> = new <%- persistClass %>();
+        <%- persistClass %> <%- persistInstance %> = <%- instantiationExpression %>;
   <%_ for (const field of sampleFields) { _%>
         <%- persistInstance %>.<%- field.propertyConsumerName %>(<%- field.javaValueGenerator %>);
   <%_ } _%>

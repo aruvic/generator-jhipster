@@ -18,12 +18,35 @@
 -%>
 package <%- entityAbsolutePackage %>.domain;
 
+<%_
+const findFirstConcreteChildEntity = entities => {
+  if (!Array.isArray(entities)) return undefined;
+  for (const childEntity of entities) {
+    if (childEntity && !childEntity.abstractClass) return childEntity;
+  }
+  for (const childEntity of entities) {
+    const found = findFirstConcreteChildEntity(childEntity?.childEntities);
+    if (found) return found;
+  }
+  return undefined;
+};
+const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
+const instantiationExpression = instantiationChildEntity
+  ? `new ${instantiationChildEntity.persistClass}()`
+  : abstractClass
+    ? `new ${persistClass}() {}`
+    : `new ${persistClass}()`;
+const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
+_%>
 import static <%- entityAbsolutePackage %>.domain.<%- persistClass %>TestSamples.*;
 <%_ for (const otherEntity of otherEntities.filter(otherEntity => !otherEntity.builtIn)) { _%>
 import static <%- otherEntity.entityAbsolutePackage %>.domain.<%- otherEntity.persistClass %>TestSamples.*;
 <%_ } _%>
 <%_ for (const otherEntity of otherEntities.filter(otherEntity => entityPackage !== otherEntity.entityPackage)) { _%>
 import <%- otherEntity.entityAbsolutePackage %>.domain.<%- otherEntity.persistClass %>;
+<%_ } _%>
+<%_ if (needsInstantiationImport) { _%>
+import <%- instantiationChildEntity.entityAbsolutePackage %>.domain.<%- instantiationChildEntity.persistClass %>;
 <%_ } _%>
 <%_ if (relationships.some(relationship => relationship.collection)) { _%>
 <%_ if (enableSwaggerCodegen) { _%>
@@ -45,7 +68,7 @@ class <%- persistClass %>Test {
         TestUtil.equalsVerifier(<%- persistClass %>.class);
 <%_ if (!embedded) { _%>
         <%- persistClass %> <%- persistInstance %>1 = get<%- persistClass %>Sample1();
-        <%- persistClass %> <%- persistInstance %>2 = new <%- persistClass %>();
+        <%- persistClass %> <%- persistInstance %>2 = <%- instantiationExpression %>;
         assertThat(<%- persistInstance %>1).isNotEqualTo(<%- persistInstance %>2);
 
         <%- persistInstance %>2.<%- primaryKey.propertyConsumerName %>(<%- persistInstance %>1.<%- primaryKey.propertySupplierName %>());
@@ -59,7 +82,7 @@ class <%- persistClass %>Test {
 
     @Test
     void hashCodeVerifier() {
-        <%- persistClass %> <%- persistInstance %> = new <%- persistClass %>();
+        <%- persistClass %> <%- persistInstance %> = <%- instantiationExpression %>;
         assertThat(<%- persistInstance %>.hashCode()).isZero();
 
         <%- persistClass %> <%- persistInstance %>1 = get<%- persistClass %>Sample1();

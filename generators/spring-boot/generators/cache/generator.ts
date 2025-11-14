@@ -74,15 +74,20 @@ export default class SpringCacheGenerator extends SpringBootApplicationGenerator
             });
 
           source.addEntryToCache = ({ entry }) => this.editFile(cacheConfigurationFile, addEntryToCacheCallback(entry));
-          source.addEntityToCache = ({ entityAbsoluteClass, relationships }) => {
+          source.addEntityToCache = ({ entityAbsoluteClass, relationships, skipEntityCache }) => {
             const entry = `${entityAbsoluteClass}.class.getName()`;
-            this.editFile(
-              cacheConfigurationFile,
-              addEntryToCacheCallback(entry),
+            const callbacks = [];
+            if (!skipEntityCache) {
+              callbacks.push(addEntryToCacheCallback(entry));
+            }
+            callbacks.push(
               ...(relationships ?? [])
                 .filter(rel => rel.collection)
                 .map(rel => addEntryToCacheCallback(`${entry} + ".${rel.propertyName}"`)),
             );
+            if (callbacks.length > 0) {
+              this.editFile(cacheConfigurationFile, ...callbacks);
+            }
           };
         } else {
           // Add noop
@@ -261,9 +266,16 @@ export default class SpringCacheGenerator extends SpringBootApplicationGenerator
       customizeFiles({ application, entities, source }) {
         if (application.databaseTypeSql) {
           for (const entity of entities.filter(entity => !entity.skipServer && !entity.builtInUser)) {
+            const skipEntityCache = Boolean(entity.parentEntity);
+            if (skipEntityCache && application.enableHibernateCache) {
+              this.log.warn(
+                `Skipping cache configuration for inherited entity ${entity.name}; annotate the inheritance root ${entity.parentEntity?.name} instead.`,
+              );
+            }
             source.addEntityToCache?.({
               entityAbsoluteClass: entity.entityAbsoluteClass,
               relationships: entity.relationships,
+              skipEntityCache,
             });
           }
         }

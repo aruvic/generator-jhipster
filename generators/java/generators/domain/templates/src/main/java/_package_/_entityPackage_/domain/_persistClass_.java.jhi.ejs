@@ -114,7 +114,7 @@ import <%- otherEntity.entityAbsoluteClass %>;
 <%_ } _%>
 <&- fragments.annotationSection() -&>
 @SuppressWarnings("common-java:DuplicatedBlocks")
-public class <%- persistClass %> <&- fragments.extendsSection() -&>implements Serializable<&- fragments.additionalInterfacesSection() -&> {
+public <%- abstractClass ? 'abstract ' : '' %>class <%- persistClass %> <&- fragments.extendsSection() -&>implements Serializable<&- fragments.additionalInterfacesSection() -&> {
 
     @Serial
     private static final long serialVersionUID = 1L;

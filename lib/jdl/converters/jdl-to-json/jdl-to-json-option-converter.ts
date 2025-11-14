@@ -123,8 +123,12 @@ function preventEntitiesFromBeingSearched(entityNames: Set<string>) {
 }
 
 function setOptionToEntityName(option: ParsedJDLAnnotation, entityName: string): void {
-  const { optionName, optionValue } = option;
+  const { optionName } = option;
   const optionContentForEntity = convertedOptionContent.get(entityName) ?? {};
-  optionContentForEntity[optionName] = optionValue;
+  if (option.type === 'UNARY') {
+    optionContentForEntity[optionName] = true;
+  } else if ('optionValue' in option) {
+    optionContentForEntity[optionName] = option.optionValue;
+  }
   convertedOptionContent.set(entityName, optionContentForEntity);
 }
