@@ -84,6 +84,67 @@
             </resource>
         </resources>
         <plugins>
+<%_ if (enableSwaggerCodegen) { _%>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-openapi-generated-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/openapi/src/main/java</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>${openapi-generator-maven-plugin.version}</version>
+                <configuration>
+                    <inputSpec>${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
+                    <generatorName>spring</generatorName>
+                    <apiPackage><%= packageName %>.web.api</apiPackage>
+                    <modelPackage><%= packageName %>.service.api.dto</modelPackage>
+                    <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
+                    <skipValidateSpec>false</skipValidateSpec>
+                    <configOptions>
+                        <delegatePattern>true</delegatePattern>
+                        <title><%= dasherizedBaseName %></title>
+                        <useSpringBoot3>true</useSpringBoot3>
+                    </configOptions>
+                    <typeMappings>
+                        <typeMapping>date=LocalDate</typeMapping>
+                        <typeMapping>DateTime=Instant</typeMapping>
+                        <typeMapping>Time=LocalTime</typeMapping>
+                        <typeMapping>Duration=Duration</typeMapping>
+                    </typeMappings>
+                    <importMappings>
+                        <importMapping>Instant=java.time.Instant</importMapping>
+                        <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
+                        <importMapping>LocalDate=java.time.LocalDate</importMapping>
+                        <importMapping>LocalTime=java.time.LocalTime</importMapping>
+                        <importMapping>Duration=java.time.Duration</importMapping>
+                    </importMappings>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>generate-openapi-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+<%_ } _%>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -498,21 +559,6 @@
                                             </pluginExecutionFilter>
                                             <action>
                                                 <ignore/>
-                                            </action>
-                                        </pluginExecution>
-<%_ } _%>
-<%_ if (enableSwaggerCodegen) { _%>
-                                        <pluginExecution>
-                                            <pluginExecutionFilter>
-                                                <groupId>org.openapitools</groupId>
-                                                <artifactId>openapi-generator-maven-plugin</artifactId>
-                                                <versionRange>${openapi-generator-maven-plugin.version}</versionRange>
-                                                <goals>
-                                                    <goal>generate</goal>
-                                                </goals>
-                                            </pluginExecutionFilter>
-                                            <action>
-                                                <ignore />
                                             </action>
                                         </pluginExecution>
 <%_ } _%>

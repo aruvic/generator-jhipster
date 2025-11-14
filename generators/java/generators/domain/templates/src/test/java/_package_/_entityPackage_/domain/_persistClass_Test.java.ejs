@@ -26,8 +26,13 @@ import static <%- otherEntity.entityAbsolutePackage %>.domain.<%- otherEntity.pe
 import <%- otherEntity.entityAbsolutePackage %>.domain.<%- otherEntity.persistClass %>;
 <%_ } _%>
 <%_ if (relationships.some(relationship => relationship.collection)) { _%>
+<%_ if (enableSwaggerCodegen) { _%>
+import java.util.ArrayList;
+import java.util.List;
+<%_ } else { _%>
 import java.util.HashSet;
 import java.util.Set;
+<%_ } _%>
 <%_ } _%>
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,7 +67,12 @@ class <%- persistClass %>Test {
         assertThat(<%- persistInstance %>).hasSameHashCodeAs(<%- persistInstance %>1);
     }
 <%_ } _%>
-<%_ for (const relationship of relationships.filter(rel => !rel.otherEntity.builtIn && (!embedded || rel.otherEntity.embedded && rel.ownerSide))) { _%>
+<%_
+const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
+const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
+
+for (const relationship of relationships.filter(rel => !rel.otherEntity.builtIn && (!embedded || (rel.otherEntity.embedded && rel.ownerSide)))) {
+_%>
 
     @Test
     void <%- relationship.relationshipName %>Test() {
@@ -103,9 +113,9 @@ class <%- persistClass %>Test {
   <%_ if (relationship.collection) { _%>
 
     <%_ if (fluentMethods) { _%>
-        <%- persistInstance %>.<%- relationship.propertyName %>(new HashSet<>(Set.of(<%- relationship.otherEntity.persistInstance %>Back)));
+        <%- persistInstance %>.<%- relationship.propertyName %>(new <%- relationshipCollectionImpl %><>(<%- relationshipCollectionType %>.of(<%- relationship.otherEntity.persistInstance %>Back)));
     <%_ } else { _%>
-        <%- persistInstance %>.<%- relationship.propertyConsumerName %>(new HashSet<>(Set.of(<%- relationship.otherEntity.persistInstance %>Back)));
+        <%- persistInstance %>.<%- relationship.propertyConsumerName %>(new <%- relationshipCollectionImpl %><>(<%- relationshipCollectionType %>.of(<%- relationship.otherEntity.persistInstance %>Back)));
     <%_ } _%>
         assertThat(<%- persistInstance %>.<%- relationship.propertySupplierName %>()).containsOnly(<%- relationship.otherEntity.persistInstance %>Back);
     <%_ if (relationship.otherRelationship && relationship.relationshipUpdateBackReference && !relationship.otherEntity.embedded && relationship.otherRelationship.collection) { _%>
@@ -114,7 +124,7 @@ class <%- persistClass %>Test {
         assertThat(<%- relationship.otherEntity.persistInstance %>Back.<%- relationship.otherRelationship.propertySupplierName %>()).isEqualTo(<%- persistInstance %>);
     <%_ } _%>
 
-        <%- persistInstance %>.<%- relationship.propertyConsumerName %>(new HashSet<>());
+        <%- persistInstance %>.<%- relationship.propertyConsumerName %>(new <%- relationshipCollectionImpl %><>());
         assertThat(<%- persistInstance %>.<%- relationship.propertySupplierName %>()).doesNotContain(<%- relationship.otherEntity.persistInstance %>Back);
     <%_ if (relationship.otherRelationship && relationship.relationshipUpdateBackReference && !relationship.otherEntity.embedded && relationship.otherRelationship.collection) { _%>
         assertThat(<%- relationship.otherEntity.persistInstance %>Back.<%- relationship.otherRelationship.propertySupplierName %>()).doesNotContain(<%- persistInstance %>);
