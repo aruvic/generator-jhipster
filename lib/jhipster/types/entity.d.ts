@@ -24,7 +24,9 @@ export type Entity<F extends Field = Field, R extends Relationship = Relationshi
 
   fields?: F[];
   relationships?: R[];
-  annotations?: Record<string, string | boolean>;
+  annotations?: Record<string, string | boolean | number | Record<string, string | boolean | number>>;
+  extends?: string;
+  hasParentEntity?: boolean;
 
   readOnly?: boolean;
   embedded?: boolean;

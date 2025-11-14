@@ -19,11 +19,21 @@
 import type { ApplicationType } from '../../../core/application-types.ts';
 import type { RelationshipType } from '../basic-types/relationships.ts';
 
-export type ParsedJDLAnnotation = {
-  optionName: string;
-  type: 'UNARY' | 'BINARY';
-  optionValue?: boolean | string | number;
-};
+export type ParsedJDLAnnotation =
+  | {
+      optionName: string;
+      type: 'UNARY';
+    }
+  | {
+      optionName: string;
+      type: 'BINARY';
+      optionValue: boolean | string | number;
+    }
+  | {
+      optionName: string;
+      type: 'OBJECT';
+      optionValues: Record<string, boolean | string | number>;
+    };
 
 export type ParsedJDLValidation = {
   key: string;
@@ -44,6 +54,7 @@ export type ParsedJDLEntity = {
   tableName?: string;
   documentation?: string;
   annotations?: ParsedJDLAnnotation[];
+  extends?: string;
   body?: ParsedJDLEntityField[];
 };
 export type ParsedJDLApplicationConfig = {

@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 import type { CstNode, ICstVisitor, IToken } from 'chevrotain';
+import { lowerFirst } from 'lodash-es';
 
 import { relationshipOptions, validations } from '../built-in-options/index.ts';
 import type {
@@ -152,8 +153,10 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
     }
 
     entityDeclaration(
-      context: Record<'ENTITY' | 'NAME' | 'JAVADOC', IToken[]> &
-        Record<'annotationDeclaration' | 'entityTableNameDeclaration' | 'entityBody', CstNode[]>,
+      context: Record<'ENTITY' | 'entityName' | 'JAVADOC', IToken[]> &
+        Record<'annotationDeclaration' | 'entityTableNameDeclaration' | 'entityBody', CstNode[]> & {
+          extends?: IToken[];
+        },
     ) {
       const annotations: ParsedJDLAnnotation[] = [];
       if (context.annotationDeclaration) {
@@ -167,11 +170,16 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
         documentation = trimComment(context.JAVADOC[0].image);
       }
 
-      const name = context.NAME[0].image;
+      const name = context.entityName[0].image;
 
       let tableName: string | undefined;
       if (context.entityTableNameDeclaration) {
         tableName = this.visit(context.entityTableNameDeclaration);
+      }
+
+      let superClass: string | undefined;
+      if (context.extends) {
+        superClass = context.extends[0].image;
       }
 
       let body: ParsedJDLEntityField[] = [];
@@ -183,35 +191,21 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
         annotations,
         name,
         tableName,
+        extends: superClass,
         body,
         documentation,
       };
     }
 
-    annotationDeclaration(context: Record<'AT' | 'value' | 'option', IToken[]>) {
+    annotationDeclaration(context: Record<'AT' | 'option', IToken[]> & { value?: IToken[]; valueMap?: CstNode[] }) {
       const optionName = context.option[0].image;
+      if (context.valueMap) {
+        return { optionName, type: 'OBJECT', optionValues: this.visit(context.valueMap[0]) };
+      }
       if (!context.value) {
         return { optionName, type: 'UNARY' };
       }
-      const { image: valueImage } = context.value[0];
-      const { tokenType } = context.value[0];
-      let optionValue: unknown;
-      switch (tokenType.name) {
-        case 'INTEGER':
-          optionValue = parseInt(valueImage, 10);
-          break;
-        case 'DECIMAL':
-          optionValue = parseFloat(valueImage);
-          break;
-        case 'TRUE':
-          optionValue = true;
-          break;
-        case 'FALSE':
-          optionValue = false;
-          break;
-        default:
-          optionValue = valueImage.replace(/"/g, '');
-      }
+      const optionValue = parseAnnotationValueToken(context.value[0]);
       return { optionName, optionValue, type: 'BINARY' };
     }
 
@@ -252,6 +246,18 @@ export const buildJDLAstBuilderVisitor = (runtime: JDLRuntime) => {
         documentation: comment,
         annotations,
       };
+    }
+
+    annotationKeyValueList(context: { annotationKeyValue?: CstNode[] }) {
+      if (!context.annotationKeyValue) {
+        return {};
+      }
+      return Object.fromEntries(context.annotationKeyValue.map(entry => this.visit(entry)));
+    }
+
+    annotationKeyValue(context: { key: IToken[]; value: IToken[] }) {
+      const key = lowerFirst(context.key[0].image);
+      return [key, parseAnnotationValueToken(context.value[0])];
     }
 
     type(context: Record<'NAME', IToken[]>) {
@@ -791,6 +797,22 @@ function getSpecialUnaryOptionDeclaration(
     list,
     excluded,
   };
+}
+
+function parseAnnotationValueToken(token: IToken): string | number | boolean {
+  const { image, tokenType } = token;
+  switch (tokenType.name) {
+    case 'INTEGER':
+      return parseInt(image, 10);
+    case 'DECIMAL':
+      return parseFloat(image);
+    case 'TRUE':
+      return true;
+    case 'FALSE':
+      return false;
+    default:
+      return image.replace(/"/g, '');
+  }
 }
 
 function trimComment(comment: string): string {

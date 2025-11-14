@@ -155,7 +155,14 @@ function convertAnnotationsToOptions(
   const result: Record<string, boolean | string | number | any[]> = {};
   annotations.forEach(annotation => {
     const annotationName = lowerFirst(annotation.optionName);
-    const value = annotation.optionValue ?? true;
+    let value: any;
+    if (annotation.type === 'UNARY') {
+      value = true;
+    } else if (annotation.type === 'OBJECT') {
+      value = annotation.optionValues;
+    } else {
+      value = annotation.optionValue;
+    }
     if (annotationName in result) {
       const previousValue = result[annotationName];
       if (Array.isArray(previousValue)) {

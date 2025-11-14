@@ -23,7 +23,7 @@ export const entityServerFiles = asWriteEntityFilesSection({
   model: [
     javaMainPackageTemplatesBlock({
       condition: ctx => ctx.entityDomainLayer,
-      templates: ['_entityPackage_/domain/_persistClass_.java.jhi'],
+      templates: ['_entityPackage_/domain/_persistClass_.java.jhi', '_entityPackage_/domain/_persistClass_.java.jhi.inheritance'],
     }),
   ],
   modelTestFiles: [

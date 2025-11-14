@@ -185,6 +185,14 @@ export function prepareEntityPrimaryKeyForTemplates(
     application,
   }: { entity: EntityAll; enableCompositeId?: boolean; application?: any },
 ) {
+  if (entityWithConfig.parentEntity) {
+    if (!entityWithConfig.parentEntity.primaryKey) {
+      prepareEntityPrimaryKeyForTemplates.call(this, { entity: entityWithConfig.parentEntity as EntityAll, application });
+    }
+    entityWithConfig.primaryKey = entityWithConfig.parentEntity.primaryKey as PrimaryKey<FieldAll>;
+    return entityWithConfig;
+  }
+
   const idFields = entityWithConfig.fields.filter(field => field.id);
   const idRelationships = entityWithConfig.relationships.filter(relationship => relationship.id);
   let idCount = idFields.length + idRelationships.length;

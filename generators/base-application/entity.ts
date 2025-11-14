@@ -260,6 +260,16 @@ export type PrimaryKey<F extends Field = Field> = {
   ids: any[];
 };
 
+export type DiscriminatorColumnConfig = {
+  rawName: string;
+  name: string;
+  discriminatorType: 'STRING' | 'CHAR' | 'INTEGER';
+  discriminatorTypeLiteral: string;
+  length?: number;
+  sqlType: string;
+  values?: Record<string, string>;
+};
+
 type BaseApplicationAddedEntityProperties = {
   clientRootFolder: string;
   entityAuthority?: string;
@@ -273,6 +283,8 @@ type BaseApplicationAddedEntityProperties = {
   builtInAuthority?: boolean;
   adminEntity?: boolean;
   hasCyclicRequiredRelationship?: boolean;
+  abstract?: boolean;
+  discriminator?: Record<string, any>;
 
   entityNameCapitalized: string;
   entityNameKebabCase: string;
@@ -328,6 +340,13 @@ type BaseApplicationAddedEntityProperties = {
   applicationType?: string;
   microfrontend?: boolean;
   skipUiGrouping?: boolean;
+  parentEntity?: Entity;
+  childEntities?: Entity[];
+  polymorphicRoot?: boolean;
+  polymorphicChild?: boolean;
+  discriminatorColumn?: DiscriminatorColumnConfig;
+  discriminatorValue?: string;
+  abstractClass?: boolean;
 };
 
 /**

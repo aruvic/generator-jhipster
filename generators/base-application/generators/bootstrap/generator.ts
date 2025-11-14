@@ -43,6 +43,7 @@ import { createAuthorityEntity, createUserEntity, createUserManagementEntity } f
 import {
   addFakerToEntity,
   derivedPrimaryKeyProperties,
+  linkEntityInheritance,
   loadEntitiesAnnotations,
   loadEntitiesOtherSide,
   prepareCommonFieldForTemplates,
@@ -328,6 +329,7 @@ export default class BootstrapBaseApplicationGenerator extends BaseApplicationGe
         const entities = entitiesToLoad.map(({ entityBootstrap }) => entityBootstrap);
         loadEntitiesAnnotations(entities);
         this.validateResult(loadEntitiesOtherSide(entities, { application }));
+        linkEntityInheritance(entities, this.log);
 
         for (const entity of entities) {
           if (!entity.builtIn) {

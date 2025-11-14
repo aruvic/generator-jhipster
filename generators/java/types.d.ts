@@ -60,6 +60,9 @@ export type Field = BaseApplicationField &
     javaValueSample1?: string;
     javaValueSample2?: string;
     fieldValidateRulesPatternJava?: string;
+
+    columnInsertable?: boolean;
+    columnUpdatable?: boolean;
   };
 
 export interface Relationship extends BaseApplicationRelationship, Property {

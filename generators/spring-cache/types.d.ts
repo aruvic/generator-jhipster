@@ -12,7 +12,11 @@ import type command from './command.ts';
 
 export type Source = SpringBootSource & {
   addEntryToCache?(entry: { entry: string }): void;
-  addEntityToCache?(entry: { entityAbsoluteClass: string; relationships?: { propertyName: string; collection: boolean }[] }): void;
+  addEntityToCache?(entry: {
+    entityAbsoluteClass: string;
+    relationships?: { propertyName: string; collection: boolean }[];
+    skipEntityCache?: boolean;
+  }): void;
 };
 
 type Command = HandleCommandTypes<typeof command>;

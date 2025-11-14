@@ -20,12 +20,31 @@
  This is a fragment file, it will be merged into the root template if available.
  EJS fragments will process % delimiter tags in the template and & delimiter tags during the merge process.
 -%>
-<&_ if (fragment.importSection) { -&>
+<&_
+  let templateParentEntity = undefined;
+  if (typeof parentEntity !== 'undefined' && parentEntity) {
+    templateParentEntity = parentEntity;
+  } else if (typeof entity !== 'undefined' && entity && entity.parentEntity) {
+    templateParentEntity = entity.parentEntity;
+  }
+  const templateRelationships = typeof relationships !== 'undefined' && relationships ? relationships : [];
+  const cacheableRelationships = templateRelationships.filter(
+    relationship => relationship.relationshipOneToMany || relationship.relationshipManyToMany,
+  );
+  const templateExtends = typeof entity !== 'undefined' && entity && entity.extends;
+  const inheritsFromParent =
+    (typeof hasParentEntity !== 'undefined' && Boolean(hasParentEntity)) ||
+    Boolean(templateParentEntity) ||
+    Boolean(templateExtends);
+  const shouldAnnotateEntityCache = !inheritsFromParent;
+  const shouldImportCache = shouldAnnotateEntityCache || cacheableRelationships.length > 0;
+-&>
+<&_ if (fragment.importSection && shouldImportCache) { -&>
 import org.hibernate.annotations.Cache;
 import org.hibernate.annotations.CacheConcurrencyStrategy;
 <&_ } -&>
 
-<&_ if (fragment.annotationSection) { -&>
+<&_ if (fragment.annotationSection && shouldAnnotateEntityCache) { -&>
 @Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
 <&_ } -&>
 

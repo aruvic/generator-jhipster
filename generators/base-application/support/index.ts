@@ -22,6 +22,7 @@ export * from './debug.ts';
 export * from './doc.ts';
 export * from './enum.ts';
 export * from './entity.ts';
+export * from './inheritance.ts';
 export * from './entities.ts';
 export * from './faker.ts';
 export * from './field-utils.ts';
