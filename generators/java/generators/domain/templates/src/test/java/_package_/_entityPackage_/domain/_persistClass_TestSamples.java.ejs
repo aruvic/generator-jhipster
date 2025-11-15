@@ -54,37 +54,74 @@ import <%= packageName %>.web.rest.TestUtil;
 <%_ if (needsInstantiationImport) { _%>
 import <%= instantiationChildEntity.entityAbsolutePackage %>.domain.<%= instantiationChildEntity.persistClass %>;
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeString) || fields.some(field => field.fieldTypeUUID)) { _%>
+<%_
+const includePrimaryKeySamples = !embedded && primaryKey && !primaryKey.derived && !primaryKey.composite;
+const sampleFields = fields.filter(field => !field.mapstructExpression && (field.fieldTypeInteger || field.fieldTypeLong || field.fieldTypeString || field.fieldTypeUUID));
+const useFluentSamples = fluentMethods && !includePrimaryKeySamples;
+const primaryKeySamples = includePrimaryKeySamples ? { sample1: undefined, sample2: undefined, generator: undefined } : undefined;
+if (includePrimaryKeySamples) {
+  if (primaryKey.typeLong) {
+    primaryKeySamples.sample1 = '1L';
+    primaryKeySamples.sample2 = '2L';
+    primaryKeySamples.generator = 'longCount.incrementAndGet()';
+  } else if (primaryKey.typeInteger) {
+    primaryKeySamples.sample1 = '1';
+    primaryKeySamples.sample2 = '2';
+    primaryKeySamples.generator = 'intCount.incrementAndGet()';
+  } else if (primaryKey.typeUUID) {
+    primaryKeySamples.sample1 = 'UUID.fromString("00000000-0000-0000-0000-000000000001")';
+    primaryKeySamples.sample2 = 'UUID.fromString("00000000-0000-0000-0000-000000000002")';
+    primaryKeySamples.generator = 'UUID.randomUUID()';
+  } else {
+    primaryKeySamples.sample1 = '"id1"';
+    primaryKeySamples.sample2 = '"id2"';
+    primaryKeySamples.generator = 'UUID.randomUUID().toString()';
+  }
+}
+_%>
+<%_ if (
+  fields.some(field => field.fieldTypeString) ||
+  fields.some(field => field.fieldTypeUUID) ||
+  (includePrimaryKeySamples && (primaryKey.typeUUID || (!primaryKey.typeLong && !primaryKey.typeInteger)))
+) { _%>
 import java.util.UUID;
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeLong || field.fieldTypeInteger)) { _%>
+<%_ if (
+  fields.some(field => field.fieldTypeLong || field.fieldTypeInteger) ||
+  (includePrimaryKeySamples && (primaryKey.typeLong || primaryKey.typeInteger))
+) { _%>
 import java.util.Random;
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeLong)) { _%>
+<%_ if (fields.some(field => field.fieldTypeLong) || (includePrimaryKeySamples && primaryKey.typeLong)) { _%>
 import java.util.concurrent.atomic.AtomicLong;
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeInteger)) { _%>
+<%_ if (fields.some(field => field.fieldTypeInteger) || (includePrimaryKeySamples && primaryKey.typeInteger)) { _%>
 import java.util.concurrent.atomic.AtomicInteger;
 <%_ } _%>
 
-<%_ const sampleFields = fields.filter(field => !field.mapstructExpression && (field.fieldTypeInteger || field.fieldTypeLong || field.fieldTypeString || field.fieldTypeUUID)); _%>
 public class <%= persistClass %>TestSamples {
 
-<%_ if (fields.some(field => field.fieldTypeLong || field.fieldTypeInteger)) { _%>
+<%_ if (
+  fields.some(field => field.fieldTypeLong || field.fieldTypeInteger) ||
+  (includePrimaryKeySamples && (primaryKey.typeLong || primaryKey.typeInteger))
+) { _%>
     private static final Random random = new Random();
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeLong)) { _%>
+<%_ if (fields.some(field => field.fieldTypeLong) || (includePrimaryKeySamples && primaryKey.typeLong)) { _%>
     private static final AtomicLong longCount = new AtomicLong(random.nextInt() + ( 2L * Integer.MAX_VALUE ));
 <%_ } _%>
-<%_ if (fields.some(field => field.fieldTypeInteger)) { _%>
+<%_ if (fields.some(field => field.fieldTypeInteger) || (includePrimaryKeySamples && primaryKey.typeInteger)) { _%>
     private static final AtomicInteger intCount = new AtomicInteger(random.nextInt() + ( 2 * Short.MAX_VALUE ));
 <%_ } _%>
 
     public static <%= persistClass %> get<%= persistClass %>Sample1() {
-<%_ if (fluentMethods) { _%>
-        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueSample1 %>)<% }) %>;
+<%_ if (useFluentSamples) { _%>
+        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueSample1 %>)<% }) %><% if (includePrimaryKeySamples) { %>.<%- primaryKey.name %>(<%- primaryKeySamples.sample1 %>)<% } %>;
 <%_ } else { _%>
         <%= persistClass %> <%= persistInstance %> = <%- instantiationExpression %>;
+  <%_ if (includePrimaryKeySamples) { _%>
+        <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.sample1 %>);
+  <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
         <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueSample1 %>);
   <%_ } _%>
@@ -93,10 +130,13 @@ public class <%= persistClass %>TestSamples {
     }
 
     public static <%= persistClass %> get<%= persistClass %>Sample2() {
-<%_ if (fluentMethods) { _%>
-        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueSample2 %>)<% }) %>;
+<%_ if (useFluentSamples) { _%>
+        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueSample2 %>)<% }) %><% if (includePrimaryKeySamples) { %>.<%- primaryKey.name %>(<%- primaryKeySamples.sample2 %>)<% } %>;
 <%_ } else { _%>
         <%= persistClass %> <%= persistInstance %> = <%- instantiationExpression %>;
+  <%_ if (includePrimaryKeySamples) { _%>
+        <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.sample2 %>);
+  <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
         <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueSample2 %>);
   <%_ } _%>
@@ -105,10 +145,13 @@ public class <%= persistClass %>TestSamples {
     }
 
     public static <%= persistClass %> get<%= persistClass %>RandomSampleGenerator() {
-<%_ if (fluentMethods) { _%>
-        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueGenerator %>)<% }) %>;
+<%_ if (useFluentSamples) { _%>
+        return <%- instantiationExpression %><% sampleFields.forEach(field => { %>.<%- field.fieldName %>(<%- field.javaValueGenerator %>)<% }) %><% if (includePrimaryKeySamples) { %>.<%- primaryKey.name %>(<%- primaryKeySamples.generator %>)<% } %>;
 <%_ } else { _%>
         <%= persistClass %> <%= persistInstance %> = <%- instantiationExpression %>;
+  <%_ if (includePrimaryKeySamples) { _%>
+        <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.generator %>);
+  <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
         <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueGenerator %>);
   <%_ } _%>

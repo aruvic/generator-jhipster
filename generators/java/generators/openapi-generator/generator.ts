@@ -16,6 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { readFile } from 'node:fs/promises';
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.js';
 import { JavaApplicationGenerator } from '../../generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../support/files.ts';
@@ -51,6 +52,10 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
           ],
           context: application,
         });
+
+        if (application.oas3Input) {
+          await this.copyProvidedOpenApiSpec(application);
+        }
       },
     });
   }
@@ -151,5 +156,49 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
 
   get [JavaApplicationGenerator.POST_WRITING]() {
     return this.delegateTasksToBlueprint(() => this.postWriting);
+  }
+
+  async copyProvidedOpenApiSpec(application: any) {
+    const resolvedInputPath = this.destinationPath(application.oas3Input);
+    const candidatePaths = this.buildOpenApiSourceCandidates(resolvedInputPath);
+    const failedCandidates: string[] = [];
+    let specContents: string | undefined;
+    let usedPath: string | undefined;
+    for (const candidate of candidatePaths) {
+      try {
+        specContents = await readFile(candidate, 'utf-8');
+        usedPath = candidate;
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        failedCandidates.push(`${candidate}: ${message}`);
+      }
+    }
+    if (!specContents || !usedPath) {
+      const errorDetails = failedCandidates.length > 0 ? `\n${failedCandidates.join('\n')}` : '';
+      throw new Error(`Unable to read OpenAPI specification from ${resolvedInputPath}.${errorDetails}`);
+    }
+    if (usedPath !== resolvedInputPath) {
+      this.log.info(`Using OpenAPI specification at ${usedPath}`);
+    }
+    const destination = `${application.srcMainResources}swagger/api.yml`;
+    const finalContents = specContents.endsWith('\n') ? specContents : `${specContents}\n`;
+    this.writeDestination(destination, finalContents);
+  }
+
+  buildOpenApiSourceCandidates(resolvedInputPath: string) {
+    const candidates: string[] = [];
+    const addCandidate = (candidate: string) => {
+      if (candidate && !candidates.includes(candidate)) {
+        candidates.push(candidate);
+      }
+    };
+    const lowerCasePath = resolvedInputPath.toLowerCase();
+    if (lowerCasePath.endsWith('.jdl')) {
+      const basePath = resolvedInputPath.slice(0, -4);
+      ['.yaml', '.yml', '.json'].forEach(extension => addCandidate(`${basePath}${extension}`));
+    }
+    addCandidate(resolvedInputPath);
+    return candidates;
   }
 }

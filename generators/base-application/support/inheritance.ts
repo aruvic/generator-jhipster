@@ -86,13 +86,14 @@ function applyInheritanceMetadata(entity: BaseApplicationEntity, logger?: Logger
   }
 
   if (entity.parentEntity) {
-    if (!entity.parentEntity.discriminatorColumn) {
+    const polymorphicAncestor = findPolymorphicAncestor(entity.parentEntity);
+    if (!polymorphicAncestor) {
       logger?.warn(`Entity ${entity.name} extends ${entity.parentEntity.name} without a discriminator definition`);
     }
-    entity.polymorphicChild = Boolean(entity.parentEntity.discriminatorColumn);
+    entity.polymorphicChild = Boolean(polymorphicAncestor);
     entity.abstractClass = entity.abstractClass ?? false;
     if (!entity.discriminatorValue) {
-      const parentValues = entity.parentEntity.discriminatorColumn?.values;
+      const parentValues = polymorphicAncestor?.discriminatorColumn?.values;
       const derivedValue = parentValues?.[entity.name];
       if (derivedValue) {
         entity.discriminatorValue = derivedValue;
@@ -111,6 +112,17 @@ function applyInheritanceMetadata(entity: BaseApplicationEntity, logger?: Logger
   }
 
   (entity as any).hasParentEntity = Boolean(entity.parentEntity);
+}
+
+function findPolymorphicAncestor(entity: BaseApplicationEntity | undefined): BaseApplicationEntity | undefined {
+  let current = entity;
+  while (current) {
+    if (current.discriminatorColumn) {
+      return current;
+    }
+    current = current.parentEntity;
+  }
+  return undefined;
 }
 
 function normalizeDiscriminatorValue(value: any): string | undefined {

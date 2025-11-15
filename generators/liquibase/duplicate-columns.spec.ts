@@ -1,8 +1,11 @@
-import { before, describe, it } from 'esmocha';
+import { before, describe, expect, it } from 'esmocha';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { defaultHelpers as helpers, runResult } from '../../lib/testing/index.ts';
+import { SERVER_MAIN_RES_DIR } from '../generator-constants.js';
 
-const GENERATOR = 'jhipster:spring-data-relational';
+const GENERATOR = 'jhipster:liquibase';
 
 const applicationConfig = {
   baseName: 'duplicates',
@@ -18,6 +21,7 @@ const applicationConfig = {
   packageFolder: 'com/mycompany/myapp',
   nativeLanguage: 'en',
   languages: ['en'],
+  skipClient: true,
 };
 
 const duplicateColumnEntity = {
@@ -56,28 +60,27 @@ const discriminatorColumnEntity = {
   relationships: [],
 };
 
+const readChangelog = (relativePath: string) => readFileSync(join(runResult.cwd, relativePath), 'utf-8');
+const countColumnOccurrences = (content: string, columnName: string) =>
+  (content.match(new RegExp(`<column name="${columnName}"`, 'g')) ?? []).length;
+
 describe(`generator - ${GENERATOR} duplicate columns`, () => {
   before(async () => {
     await helpers
       .runJHipster(GENERATOR)
-      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any])
-      .withMockedSource({ except: ['addTestSpringFactory'] });
+      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any]);
   });
 
-  it('marks duplicate column mappings as read-only mirrors', () => {
-    const entityPath = 'src/main/java/com/mycompany/myapp/domain/TypeCarrier.java';
-    runResult.assertNoFileContent(entityPath, /@Column\(\s+name = "type_key"[\s\S]+insertable = false[\s\S]+private String typeKey;/);
-    runResult.assertFileContent(
-      entityPath,
-      /@Column\(\s+name = "type_key"[\s\S]+insertable = false[\s\S]+updatable = false[\s\S]+private String typeKeyAlias;/,
-    );
+  it('writes each mirrored column only once', () => {
+    const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240202000000_added_entity_TypeCarrier.xml`;
+    const changelogContent = readChangelog(changelogPath);
+    expect(countColumnOccurrences(changelogContent, 'type_key')).to.equal(1);
   });
 
-  it('marks explicit discriminator column fields as read-only mirrors', () => {
-    const entityPath = 'src/main/java/com/mycompany/myapp/domain/EntityRefOrValue.java';
-    runResult.assertFileContent(
-      entityPath,
-      /@Column\(\s+name = "at_type"[\s\S]+nullable = false[\s\S]+insertable = false[\s\S]+updatable = false[\s\S]+private String atType;/,
-    );
+  it('does not duplicate discriminator columns', () => {
+    const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000000_added_entity_EntityRefOrValue.xml`;
+    const changelogContent = readChangelog(changelogPath);
+    expect(countColumnOccurrences(changelogContent, 'at_type')).to.equal(1);
+    expect(changelogContent).to.match(/<column name="at_type" type="varchar\(31\)">/);
   });
 });

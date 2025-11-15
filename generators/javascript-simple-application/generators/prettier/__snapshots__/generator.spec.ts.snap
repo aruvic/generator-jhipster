@@ -8,6 +8,7 @@ exports[`generator - javascript-simple-application:prettier fromInit(false) shou
     "contents": "node_modules
 package-lock.json
 .git
+src/main/resources/swagger/api.yml
 ",
     "stateCleared": "modified",
   },
@@ -55,6 +56,7 @@ exports[`generator - javascript-simple-application:prettier fromInit(true) shoul
     "contents": "node_modules
 package-lock.json
 .git
+src/main/resources/swagger/api.yml
 ",
     "stateCleared": "modified",
   },
@@ -98,6 +100,7 @@ exports[`generator - javascript-simple-application:prettier monorepository(true)
     "contents": "node_modules
 package-lock.json
 .git
+src/main/resources/swagger/api.yml
 ",
     "stateCleared": "modified",
   },
@@ -141,6 +144,7 @@ exports[`generator - javascript-simple-application:prettier monorepository(true)
     "contents": "node_modules
 package-lock.json
 .git
+src/main/resources/swagger/api.yml
 ",
     "stateCleared": "modified",
   },

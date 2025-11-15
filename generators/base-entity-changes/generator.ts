@@ -138,7 +138,7 @@ export default abstract class BaseEntityChangesGenerator<
 
     const entities = Object.values(previousEntitiesByName);
     loadEntitiesAnnotations(entities);
-    loadEntitiesOtherSide(entities);
+    loadEntitiesOtherSide(entities, { allowMissingOtherEntity: true });
     addEntitiesOtherRelationships(entities);
 
     // Compare entity changes and create changelogs

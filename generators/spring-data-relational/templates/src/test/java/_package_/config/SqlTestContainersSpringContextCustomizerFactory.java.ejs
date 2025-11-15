@@ -38,12 +38,31 @@ import org.springframework.test.context.ContextCustomizerFactory;
 import org.springframework.test.context.MergedContextConfiguration;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.boot.test.util.TestPropertyValues;
+import org.testcontainers.DockerClientFactory;
 
 public class SqlTestContainersSpringContextCustomizerFactory implements ContextCustomizerFactory {
 
-    private Logger log = LoggerFactory.getLogger(SqlTestContainersSpringContextCustomizerFactory.class);
+    private static final Logger log = LoggerFactory.getLogger(SqlTestContainersSpringContextCustomizerFactory.class);
 
     private static SqlTestContainer prodTestContainer;
+    private static Boolean embeddedSqlEnabled;
+
+    public static boolean isEmbeddedSqlEnabled() {
+        if (embeddedSqlEnabled == null) {
+            embeddedSqlEnabled = detectEmbeddedSqlAvailability();
+        }
+        return embeddedSqlEnabled;
+    }
+
+    private static boolean detectEmbeddedSqlAvailability() {
+        try {
+            DockerClientFactory.instance().client();
+            return true;
+        } catch (Throwable e) {
+            log.warn("Testcontainers for EmbeddedSQL is not available. Some tests will be disabled: {}", e.getMessage());
+            return false;
+        }
+    }
 
     @Override
     public ContextCustomizer createContextCustomizer(Class<?> testClass, List<ContextConfigurationAttributes> configAttributes) {
@@ -55,9 +74,9 @@ public class SqlTestContainersSpringContextCustomizerFactory implements ContextC
                 EmbeddedSQL sqlAnnotation = AnnotatedElementUtils.findMergedAnnotation(testClass, EmbeddedSQL.class);
     <%_ if (prodDatabaseType !== devDatabaseType) { _%>
                 boolean usingTestProdProfile = Arrays.asList(context.getEnvironment().getActiveProfiles()).contains("test" + JHipsterConstants.SPRING_PROFILE_PRODUCTION);
-                if (null != sqlAnnotation && usingTestProdProfile) {
+                if (null != sqlAnnotation && usingTestProdProfile && isEmbeddedSqlEnabled()) {
     <%_ } else { _%>
-                if (null != sqlAnnotation) {
+                if (null != sqlAnnotation && isEmbeddedSqlEnabled()) {
     <%_ } _%>
                     log.debug("detected the EmbeddedSQL annotation on class {}", testClass.getName());
                     log.info("Warming up the sql database");

@@ -22,6 +22,7 @@ import type { Application as JavaApplication } from './types.ts';
 
 export type JavaAddedApplicationProperties = {
   useNpmWrapper: boolean;
+  oas3Input?: string;
 };
 
 export const mutateApplication = {

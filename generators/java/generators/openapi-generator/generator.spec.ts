@@ -17,7 +17,8 @@
  * limitations under the License.
  */
 import { before, describe, expect, it } from 'esmocha';
-import { basename, dirname, resolve } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defaultHelpers as helpers, fromMatrix, result } from '../../../../lib/testing/index.ts';
@@ -60,4 +61,65 @@ describe(`generator - ${generator}`, () => {
       });
     });
   }
+
+  describe('with custom oas3 input', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Custom TMF683
+  version: 1.2.3
+paths:
+  /sample:
+    get:
+      operationId: getSample
+      responses:
+        '200':
+          description: ok
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'TMF683.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'TMF683.yaml' });
+    });
+
+    it('should copy the provided specification to api.yml without altering its contents', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: Custom TMF683');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', '<% if (authenticationTypeJwt) { %>');
+    });
+  });
+
+  describe('with custom oas3 input referencing a .jdl file', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: External TMF683
+  version: 9.9.9
+paths: {}
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'TMF683-Party_Interaction.oas.yaml'), customSpec);
+        })
+        .withJHipsterConfig({
+          buildTool: 'maven',
+          addOpenapiGeneratorPlugin: true,
+          oas3Input: 'TMF683-Party_Interaction.oas.jdl',
+        });
+    });
+
+    it('should resolve the sibling OpenAPI specification file', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: External TMF683');
+    });
+  });
 });
