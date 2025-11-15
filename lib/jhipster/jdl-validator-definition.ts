@@ -119,6 +119,11 @@ export const builtInConfigPropsValidations: Record<string, JDLValidatorOption> =
   ENABLE_HIBERNATE_CACHE: { type: 'BOOLEAN' },
   ENABLE_SWAGGER_CODEGEN: { type: 'BOOLEAN' },
   ENABLE_TRANSLATION: { type: 'BOOLEAN' },
+  OAS3_INPUT: {
+    type: 'STRING',
+    pattern: JWT_SECRET_KEY_PATTERN,
+    msg: 'oas3Input property',
+  },
   FRONT_END_BUILDER: {
     type: 'NAME',
     pattern: ALPHABETIC,

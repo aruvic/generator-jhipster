@@ -90,6 +90,7 @@ lint-staged
     "contents": "node_modules
 package-lock.json
 .git
+src/main/resources/swagger/api.yml
 ",
     "stateCleared": "modified",
   },

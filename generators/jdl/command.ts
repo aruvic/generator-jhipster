@@ -85,6 +85,14 @@ const command = {
       },
       scope: 'generator',
     },
+    oas3Input: {
+      description: 'Path to an OpenAPI v3 specification to copy to generated applications',
+      cli: {
+        type: String,
+        name: 'oas3-input',
+      },
+      scope: 'generator',
+    },
   },
   import: ['workspaces'],
 } as const satisfies JHipsterCommandDefinition;

@@ -426,6 +426,33 @@ export default class SqlGenerator extends BaseApplicationGenerator<
           });
         }
       },
+      async removeChildEntityCacheAnnotation({ application, entities }) {
+        if (!application.enableHibernateCache) return;
+        for (const entity of entities.filter(entity => !entity.builtIn && !entity.embedded && entity.parentEntity)) {
+          const entityFile = `${application.srcMainJava}/${entity.entityAbsoluteFolder}/domain/${entity.persistClass}.java`;
+          this.editFile(
+            entityFile,
+            { ignoreNonExisting: true },
+            content => {
+              if (!content) {
+                return content;
+              }
+              const cacheAnnotationRegex =
+                /(@Table\([\s\S]*?\)\s*\n)(\s*@Cache\(usage\s*=\s*CacheConcurrencyStrategy\.READ_WRITE\)\s*\n)/;
+              if (!cacheAnnotationRegex.test(content)) {
+                return content;
+              }
+              let updated = content.replace(cacheAnnotationRegex, '$1');
+              if (!/@Cache\(/.test(updated)) {
+                updated = updated
+                  .replace(/import\s+org\.hibernate\.annotations\.Cache;\s*\n/, '')
+                  .replace(/import\s+org\.hibernate\.annotations\.CacheConcurrencyStrategy;\s*\n/, '');
+              }
+              return updated;
+            },
+          );
+        }
+      },
     });
   }
 

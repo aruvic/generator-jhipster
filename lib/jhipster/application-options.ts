@@ -86,6 +86,7 @@ const optionNames = {
   ENABLE_HIBERNATE_CACHE: 'enableHibernateCache',
   ENABLE_SWAGGER_CODEGEN: 'enableSwaggerCodegen',
   ENABLE_TRANSLATION: 'enableTranslation',
+  OAS3_INPUT: 'oas3Input',
   ENTITY_SUFFIX: 'entitySuffix',
   EXPERIMENTAL: 'experimental',
   GATEWAY_SERVER_PORT: 'gatewayServerPort',
@@ -176,6 +177,7 @@ export const jhipsterOptionValues = {
   [optionNames.ENABLE_HIBERNATE_CACHE]: true,
   [optionNames.ENABLE_SWAGGER_CODEGEN]: false,
   [optionNames.ENABLE_TRANSLATION]: true,
+  [optionNames.OAS3_INPUT]: '',
   [optionNames.ENTITY_SUFFIX]: '',
   [optionNames.EXPERIMENTAL]: false,
   [optionNames.I_18_N]: true,
@@ -246,6 +248,7 @@ export const jhipsterOptionTypes: Record<string, JDLApplicationOptionType> = {
   [optionNames.ENABLE_HIBERNATE_CACHE]: { type: ApplicationOptionTypes.BOOLEAN },
   [optionNames.ENABLE_SWAGGER_CODEGEN]: { type: ApplicationOptionTypes.BOOLEAN },
   [optionNames.ENABLE_TRANSLATION]: { type: ApplicationOptionTypes.BOOLEAN },
+  [optionNames.OAS3_INPUT]: { type: ApplicationOptionTypes.STRING },
   [optionNames.ENTITY_SUFFIX]: { type: ApplicationOptionTypes.STRING },
   [optionNames.EXPERIMENTAL]: { type: ApplicationOptionTypes.BOOLEAN },
   [optionNames.GATEWAY_SERVER_PORT]: { type: ApplicationOptionTypes.INTEGER },
@@ -284,6 +287,7 @@ export const jhipsterQuotedOptionNames: string[] = [
   optionNames.REMEMBER_ME_KEY,
   optionNames.JWT_SECRET_KEY,
   optionNames.GRADLE_DEVELOCITY_HOST,
+  optionNames.OAS3_INPUT,
 ];
 
 export const builtInJDLApplicationConfig: JDLApplicationConfig = {

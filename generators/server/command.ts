@@ -29,6 +29,14 @@ const command = {
       },
       scope: 'storage',
     },
+    oas3Input: {
+      description: 'Path to an OpenAPI v3 specification that should replace src/main/resources/swagger/api.yml',
+      cli: {
+        type: String,
+        name: 'oas3-input',
+      },
+      scope: 'storage',
+    },
     searchEngine: {
       description: 'Provide search engine for the application when skipping server side generation',
       cli: {

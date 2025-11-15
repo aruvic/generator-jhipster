@@ -16,6 +16,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { readFile } from 'node:fs/promises';
+
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.ts';
 import { JavaApplicationGenerator } from '../../../java/generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../../java/support/files.ts';
@@ -51,6 +53,10 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
           ],
           context: application,
         });
+
+        if (application.oas3Input) {
+          await this.copyProvidedOpenApiSpec(application);
+        }
       },
     });
   }
@@ -149,5 +155,31 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
 
   get [JavaApplicationGenerator.POST_WRITING]() {
     return this.delegateTasksToBlueprint(() => this.postWriting);
+  }
+
+  async copyProvidedOpenApiSpec(application: { oas3Input: string; srcMainResources: string }) {
+    const resolvedInputPath = this.destinationPath(application.oas3Input);
+    const candidatePaths = this.buildOpenApiSourceCandidates(resolvedInputPath);
+    const failures: string[] = [];
+    for (const candidate of candidatePaths) {
+      try {
+        const contents = await readFile(candidate, 'utf-8');
+        this.writeDestination(
+          `${application.srcMainResources}swagger/api.yml`,
+          contents.endsWith('\n') ? contents : `${contents}\n`,
+        );
+        if (candidate !== resolvedInputPath) this.log.info(`Using OpenAPI specification at ${candidate}`);
+        return;
+      } catch (error) {
+        failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    throw new Error(`Unable to read OpenAPI specification from ${resolvedInputPath}.\n${failures.join('\n')}`);
+  }
+
+  private buildOpenApiSourceCandidates(resolvedInputPath: string): string[] {
+    if (!resolvedInputPath.toLowerCase().endsWith('.jdl')) return [resolvedInputPath];
+    const basePath = resolvedInputPath.slice(0, -4);
+    return [`${basePath}.yaml`, `${basePath}.yml`, `${basePath}.json`, resolvedInputPath];
   }
 }

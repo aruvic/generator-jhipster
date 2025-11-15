@@ -33,6 +33,7 @@ import type { Application as JavaApplication, Field as JavaField, Relationship a
 export type JavaAddedApplicationProperties = {
   useNpmWrapper: boolean;
   javaPackagingDestDir: string;
+  oas3Input?: string;
 };
 
 export const mutateApplicationPreparing = {

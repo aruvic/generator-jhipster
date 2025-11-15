@@ -28,6 +28,10 @@ export const addEntitiesOtherRelationships = (entities: BaseApplicationEntity[])
   const result: { warning: string[] } = { warning: [] };
   for (const entity of entities.filter(entity => !entity.builtIn)) {
     for (const relationship of entity.relationships ?? []) {
+      if (!relationship.otherEntity) {
+        result.warning.push(`Error at entity ${entity.name}: could not find the entity ${relationship.otherEntityName}`);
+        continue;
+      }
       if (
         !relationship.otherRelationship &&
         !relationship.otherEntity.embedded &&

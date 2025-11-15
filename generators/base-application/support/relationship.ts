@@ -73,7 +73,10 @@ export const loadEntitiesAnnotations = (entities: BaseApplicationEntity[]): void
 
 export const loadEntitiesOtherSide = (
   entities: BaseApplicationEntity[],
-  { application }: { application?: BaseApplicationApplication } = {},
+  {
+    application,
+    allowMissingOtherEntity = false,
+  }: { application?: BaseApplicationApplication; allowMissingOtherEntity?: boolean } = {},
 ): ValidationResult => {
   const result: { warning: string[] } = { warning: [] };
   for (const entity of entities) {
@@ -89,6 +92,10 @@ export const loadEntitiesOtherSide = (
             errors.push('jwt and session authentication types in monolith or gateway applications with database');
           }
           throw new Error(`Error at entity ${entity.name}: relationships with built-in User entity is supported in ${errors}.`);
+        }
+        if (allowMissingOtherEntity) {
+          result.warning.push(`Error at entity ${entity.name}: could not find the entity ${relationship.otherEntityName}`);
+          continue;
         }
         throw new Error(`Error at entity ${entity.name}: could not find the entity ${relationship.otherEntityName}`);
       }

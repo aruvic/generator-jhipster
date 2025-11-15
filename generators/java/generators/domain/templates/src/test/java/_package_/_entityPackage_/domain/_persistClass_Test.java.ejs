@@ -65,7 +65,9 @@ class <%- persistClass %>Test {
 
     @Test
     void equalsVerifier() throws Exception {
+<%_ if (!abstractClass) { _%>
         TestUtil.equalsVerifier(<%- persistClass %>.class);
+<%_ } _%>
 <%_ if (!embedded) { _%>
         <%- persistClass %> <%- persistInstance %>1 = get<%- persistClass %>Sample1();
         <%- persistClass %> <%- persistInstance %>2 = <%- instantiationExpression %>;

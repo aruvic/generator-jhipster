@@ -180,6 +180,7 @@ export type Application<E extends BaseApplicationEntity = Entity> = Command['App
     addSpringSnapshotRepository: boolean;
 
     enableSwaggerCodegen: boolean;
+    oas3Input?: string;
     skipFakeData: boolean;
     skipCheckLengthOfIdentifier: boolean;
 

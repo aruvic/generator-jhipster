@@ -68,6 +68,7 @@ const {
   WITH_ADMIN_UI,
   ENABLE_GRADLE_DEVELOCITY,
   GRADLE_DEVELOCITY_HOST,
+  OAS3_INPUT,
 } = OptionNames;
 
 export const applicationConfigCategoryToken = createTokenFromConfig({ name: 'CONFIG_KEY', pattern: Lexer.NA });
@@ -105,6 +106,7 @@ export const buildApplicationTokens = (tokenConfigs: JDLTokenConfig[]) => {
     { name: 'FRONT_END_BUILDER', pattern: 'frontendBuilder' }, // TODO always valid?
     { name: 'SKIP_USER_MANAGEMENT', pattern: SKIP_USER_MANAGEMENT },
     { name: 'ENABLE_SWAGGER_CODEGEN', pattern: ENABLE_SWAGGER_CODEGEN },
+    { name: 'OAS3_INPUT', pattern: OAS3_INPUT },
     { name: 'REACTIVE', pattern: REACTIVE },
     { name: 'ENTITY_SUFFIX', pattern: ENTITY_SUFFIX },
     { name: 'DTO_SUFFIX', pattern: DTO_SUFFIX },

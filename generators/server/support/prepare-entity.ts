@@ -90,15 +90,12 @@ function disableWritableDuplicateColumnFields(
     group.push(field);
     columns.set(columnName, group);
   }
-  for (const fields of columns.values()) {
-    if (fields.length <= 1) {
-      continue;
+
+  const markColumnsAsReadOnly = (fields: SpringBootField[] | undefined) => {
+    if (!fields?.length) {
+      return;
     }
-    const writableField = fields.find(field => !('derived' in field && field.derived)) ?? fields[0];
     for (const field of fields) {
-      if (field === writableField) {
-        continue;
-      }
       if (field.columnInsertable !== false) {
         field.columnInsertable = false;
       }
@@ -106,5 +103,18 @@ function disableWritableDuplicateColumnFields(
         field.columnUpdatable = false;
       }
     }
+  };
+
+  const discriminatorColumnName = entity.discriminatorColumn?.name;
+  if (discriminatorColumnName) {
+    markColumnsAsReadOnly(columns.get(discriminatorColumnName));
+  }
+
+  for (const fields of columns.values()) {
+    if (fields.length <= 1) {
+      continue;
+    }
+    const writableField = fields.find(field => !('derived' in field && field.derived)) ?? fields[0];
+    markColumnsAsReadOnly(fields.filter(field => field !== writableField));
   }
 }
