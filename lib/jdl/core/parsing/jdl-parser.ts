@@ -126,10 +126,7 @@ export default class JDLParser extends CstParser {
   entityDeclaration(): CstNode {
     this.RULE('entityDeclaration', () => {
       this.MANY(() => {
-        this.OR([
-          { ALT: () => this.CONSUME(this.tokens.JAVADOC) },
-          { ALT: () => this.SUBRULE(this.annotationDeclaration) },
-        ]);
+        this.OR([{ ALT: () => this.CONSUME(this.tokens.JAVADOC) }, { ALT: () => this.SUBRULE(this.annotationDeclaration) }]);
       });
 
       this.CONSUME(this.tokens.ENTITY);
@@ -231,10 +228,7 @@ export default class JDLParser extends CstParser {
   fieldDeclaration(): CstNode {
     this.RULE('fieldDeclaration', () => {
       this.MANY(() => {
-        this.OR([
-          { ALT: () => this.CONSUME(this.tokens.JAVADOC) },
-          { ALT: () => this.SUBRULE(this.annotationDeclaration) },
-        ]);
+        this.OR([{ ALT: () => this.CONSUME(this.tokens.JAVADOC) }, { ALT: () => this.SUBRULE(this.annotationDeclaration) }]);
       });
 
       this.CONSUME(this.tokens.NAME);

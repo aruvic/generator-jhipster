@@ -1,0 +1,68 @@
+/**
+ * Copyright 2013-2025 the original author or authors from the JHipster project.
+ *
+ * This file is part of the JHipster project, see https://www.jhipster.tech/
+ * for more information.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package <%= packageName %>;
+
+<%_ const imports = importsSet || []; _%>
+<%_ for (const importStmt of imports) { _%>
+import <%= importStmt %>;
+<%_ } _%>
+
+/**
+ * MapStruct mapper interface for <%= mapperName %>.
+ * Automatically generated from OpenAPI specification to handle DTO ↔ Domain mappings.
+ */
+@Mapper(
+    componentModel = "spring",
+    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
+    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR<%_ } _%>
+)
+public interface <%= mapperName %> {
+
+    <%= mapperName %> INSTANCE = Mappers.getMapper(<%= mapperName %>.class);
+
+<%_ for (const method of methods) { _%>
+    /**
+     * Maps <%= method.sourceName %> to <%= method.targetName %>.
+     */
+<%_ if (method.annotations && method.annotations.length > 0) { _%>
+<%_ for (const annotation of method.annotations) { _%>
+    <%= annotation %>
+<%_ } _%>
+<%_ } _%>
+    <%= method.targetName %> <%= method.methodName %>(<%= method.sourceName %> source);
+
+<%_ } _%>
+
+<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>
+    // Polymorphic type mappings
+<%_ for (const polymorphic of polymorphicTypes) { _%>
+
+    /**
+     * Polymorphic mapper for <%= polymorphic.baseType.split('.').pop() %>.
+     */
+<%_ for (const subtype of polymorphic.subtypes) { _%>
+    @SubclassMapping(source = <%= subtype.sourceType.split('.').pop() %>.class, target = <%= subtype.targetType.split('.').pop() %>.class)
+<%_ } _%>
+    <%= polymorphic.baseType.split('.').pop() %> mapPolymorphic(<%= polymorphic.baseType.split('.').pop() %> source);
+
+<%_ } _%>
+<%_ } _%>
+
+}

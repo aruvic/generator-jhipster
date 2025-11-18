@@ -17,6 +17,7 @@
  * limitations under the License.
  */
 import { readFile } from 'node:fs/promises';
+
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.js';
 import { JavaApplicationGenerator } from '../../generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../support/files.ts';

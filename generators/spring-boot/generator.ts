@@ -41,6 +41,7 @@ import { ADD_SPRING_MILESTONE_REPOSITORY } from '../generator-constants.js';
 import { addJavaImport, generateKeyStore, javaBeanCase } from '../java/support/index.ts';
 import { getPomVersionProperties, parseMavenPom } from '../maven/support/index.ts';
 import {
+  generateMapStructMappers,
   getJavaValueGeneratorForType,
   getSpecificationBuildForType,
   insertContentIntoApplicationProperties,
@@ -598,6 +599,7 @@ ${classProperties
           this.validateResult(await generateKeyStore(keyStoreFile, { packageName: application.packageName! }));
         }
       },
+      
     });
   }
 
@@ -775,6 +777,15 @@ ${classProperties
           resourceKey: `${application.srcMainResources}config/*`,
           comment: `Rule https://rules.sonarsource.com/java/RSPEC-6437 is ignored, hardcoded passwords are provided for development purposes`,
         });
+      },
+      async generateMapStructMappers({ application }) {
+        this.log.info('SpringBoot (postWriting): invoking generateMapStructMappers');
+        try {
+          await generateMapStructMappers(this, application);
+        } catch (err: any) {
+          this.log.warn('SpringBoot: generateMapStructMappers failed (postWriting):');
+          this.log.warn(err?.message || err);
+        }
       },
     });
   }

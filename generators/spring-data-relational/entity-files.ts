@@ -18,6 +18,7 @@
  */
 import { asWriteFilesBlock, asWriteFilesSection, asWritingEntitiesTask } from '../base-application/support/task-type-inference.ts';
 import { javaMainPackageTemplatesBlock } from '../java/support/index.ts';
+
 import type { Application as SpringDataRelationalApplication, Entity as SpringDataRelationalEntity } from './types.ts';
 
 const domainFiles = asWriteFilesBlock([
@@ -90,10 +91,7 @@ const sqlFiles = asWriteFilesSection({
 
 export function cleanupEntitiesTask() {}
 
-const buildEntityContext = (
-  application: SpringDataRelationalApplication,
-  entity: SpringDataRelationalEntity,
-) => {
+const buildEntityContext = (application: SpringDataRelationalApplication, entity: SpringDataRelationalEntity) => {
   const context = { ...application, ...entity };
   if (context.hasParentEntity === undefined) {
     context.hasParentEntity = Boolean(entity.parentEntity) || Boolean(entity.extends);
