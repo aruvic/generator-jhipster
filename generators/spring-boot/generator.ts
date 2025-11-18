@@ -33,6 +33,7 @@ import { ADD_SPRING_MILESTONE_REPOSITORY } from '../generator-constants.ts';
 import { addJavaImport, generateKeyStore, javaBeanCase } from '../java/support/index.ts';
 import type { JavaArtifactType } from '../java-simple-application/types.ts';
 import {
+  generateMapStructMappers,
   getJavaValueGeneratorForType,
   getSpecificationBuildForType,
   insertContentIntoApplicationProperties,
@@ -650,6 +651,7 @@ ${classProperties
           this.validateResult(await generateKeyStore(keyStoreFile, { packageName: application.packageName! }));
         }
       },
+      
     });
   }
 
@@ -940,6 +942,15 @@ if (os.isMacOsX() && !arch.isAmd64()) {
             condition: application.reactive,
             dependencies: [{ groupId: 'io.netty', artifactId: 'netty-resolver-dns-native-macos', classifier: 'osx-aarch_64' }],
           });
+        }
+      },
+      async generateMapStructMappers({ application }) {
+        this.log.info('SpringBoot (postWriting): invoking generateMapStructMappers');
+        try {
+          await generateMapStructMappers(this, application);
+        } catch (err: any) {
+          this.log.warn('SpringBoot: generateMapStructMappers failed (postWriting):');
+          this.log.warn(err?.message || err);
         }
       },
     });
