@@ -112,11 +112,16 @@ export interface PolymorphicSubtype {
   targetType: string;
 }
 
+interface ParseOpenAPISpecOptions {
+  isFilePath?: boolean;
+}
+
 /**
  * Parse OpenAPI specification from swagger/api.yml
  */
-export function parseOpenAPISpec(swaggerPath: string): ParsedOpenAPISpec {
-  const yamlContent = readFileSync(swaggerPath, 'utf-8');
+export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpecOptions = {}): ParsedOpenAPISpec {
+  const { isFilePath = true } = options;
+  const yamlContent = isFilePath ? readFileSync(swaggerInput, 'utf-8') : swaggerInput;
   const spec = parseYaml(yamlContent) as any;
 
   const operations: OpenAPIOperation[] = [];
@@ -134,6 +139,30 @@ export function parseOpenAPISpec(swaggerPath: string): ParsedOpenAPISpec {
     }
     return current;
   }
+
+  const getSchemaName = (schema: any): string | undefined => {
+    if (!schema) {
+      return undefined;
+    }
+
+    const refName = extractSchemaRef(schema);
+    if (refName) {
+      return refName;
+    }
+
+    if (schema.$ref) {
+      const resolved = resolveRef(schema.$ref);
+      if (resolved) {
+        return getSchemaName(resolved);
+      }
+    }
+
+    if (schema.type === 'array' && schema.items) {
+      return getSchemaName(schema.items);
+    }
+
+    return schema.title as string | undefined;
+  };
 
   // Extract all operations from paths
   if (spec.paths) {
@@ -161,8 +190,10 @@ export function parseOpenAPISpec(swaggerPath: string): ParsedOpenAPISpec {
 
         if (requestBodySpec?.content?.['application/json']?.schema) {
           const requestSchema = requestBodySpec.content['application/json'].schema;
-          const resolvedSchema = requestSchema.$ref ? resolveRef(requestSchema.$ref) : requestSchema;
-          openAPIOperation.requestBodySchema = extractSchemaRef(resolvedSchema);
+          const schemaName = getSchemaName(requestSchema);
+          if (schemaName) {
+            openAPIOperation.requestBodySchema = schemaName;
+          }
         }
 
         // Extract response schema (prefer 200, then 201) - handle both direct and $ref
@@ -175,16 +206,18 @@ export function parseOpenAPISpec(swaggerPath: string): ParsedOpenAPISpec {
           const responseSchema = responseStatus.content['application/json'].schema;
           const resolvedSchema = responseSchema.$ref ? resolveRef(responseSchema.$ref) : responseSchema;
 
-          if (resolvedSchema?.type === 'array' && resolvedSchema.items?.$ref) {
+          if (resolvedSchema?.type === 'array' || responseSchema?.type === 'array') {
             openAPIOperation.responseIsArray = true;
-            const arrayItemSchema = resolveRef(resolvedSchema.items.$ref);
-            openAPIOperation.responseSchema = extractSchemaRef(arrayItemSchema);
-          } else if (resolvedSchema?.items?.$ref) {
-            openAPIOperation.responseIsArray = true;
-            const arrayItemSchema = resolveRef(resolvedSchema.items.$ref);
-            openAPIOperation.responseSchema = extractSchemaRef(arrayItemSchema);
+            const arraySchema = resolvedSchema?.items ?? responseSchema?.items;
+            const arraySchemaName = getSchemaName(arraySchema);
+            if (arraySchemaName) {
+              openAPIOperation.responseSchema = arraySchemaName;
+            }
           } else {
-            openAPIOperation.responseSchema = extractSchemaRef(resolvedSchema);
+            const schemaName = getSchemaName(responseSchema) ?? getSchemaName(resolvedSchema);
+            if (schemaName) {
+              openAPIOperation.responseSchema = schemaName;
+            }
           }
         }
 

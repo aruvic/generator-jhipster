@@ -248,7 +248,7 @@ describe('Mapper Context Builder', () => {
     it('should collect MapStruct imports', () => {
       const context: MapperContext = {
         mapperName: 'TestMapper',
-        packageName: 'eu.example.app.web.mapper',
+        packageName: 'eu.example.app.web.api.mapper',
         methods: [],
       };
 
@@ -262,7 +262,7 @@ describe('Mapper Context Builder', () => {
     it('should include UUID import if needed', () => {
       const context: MapperContext = {
         mapperName: 'TestMapper',
-        packageName: 'eu.example.app.web.mapper',
+        packageName: 'eu.example.app.web.api.mapper',
         methods: [
           {
             methodName: 'test',
@@ -283,7 +283,7 @@ describe('Mapper Context Builder', () => {
     it('should include type imports from methods', () => {
       const context: MapperContext = {
         mapperName: 'TestMapper',
-        packageName: 'eu.example.app.web.mapper',
+        packageName: 'eu.example.app.web.api.mapper',
         methods: [
           {
             methodName: 'test',
@@ -305,7 +305,7 @@ describe('Mapper Context Builder', () => {
     it('should include polymorphic mapping imports', () => {
       const context: MapperContext = {
         mapperName: 'TestMapper',
-        packageName: 'eu.example.app.web.mapper',
+        packageName: 'eu.example.app.web.api.mapper',
         methods: [],
         polymorphicTypes: [
           {
@@ -330,7 +330,7 @@ describe('Mapper Context Builder', () => {
     it('should not include java package imports except specific ones', () => {
       const context: MapperContext = {
         mapperName: 'TestMapper',
-        packageName: 'eu.example.app.web.mapper',
+        packageName: 'eu.example.app.web.api.mapper',
         methods: [
           {
             methodName: 'test',
