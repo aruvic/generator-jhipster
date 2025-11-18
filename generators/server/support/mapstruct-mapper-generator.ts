@@ -38,8 +38,9 @@ export async function generateMapStructMappers(generator: any, application: Spri
   }
 
   // Check if swagger/api.yml exists
-  const swaggerPath = generator.destinationPath('src/main/resources/swagger/api.yml');
-  if (!existsSync(swaggerPath)) {
+  const swaggerRelativePath = 'src/main/resources/swagger/api.yml';
+  const swaggerPath = generator.destinationPath(swaggerRelativePath);
+  if (!generator.fs.exists(swaggerPath)) {
     generator.log.debug('Swagger API spec not found at:', swaggerPath);
     return;
   }
@@ -47,8 +48,14 @@ export async function generateMapStructMappers(generator: any, application: Spri
   try {
     generator.log.info('MapStruct: starting mapper generation from OpenAPI spec');
 
+    const swaggerContent = generator.readDestination(swaggerRelativePath)?.toString();
+    if (!swaggerContent) {
+      generator.log.debug('Swagger API spec is not yet available for reading at:', swaggerPath);
+      return;
+    }
+
     // Parse OpenAPI spec
-    const spec = parseOpenAPISpec(swaggerPath);
+    const spec = parseOpenAPISpec(swaggerContent, { isFilePath: false });
 
     if (!spec.operations || spec.operations.length === 0) {
       generator.log.info('MapStruct: no operations found in OpenAPI spec');
@@ -67,27 +74,44 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     generator.log.info(`MapStruct: generated ${mapperContexts.length} mapper contexts`);
 
-    // The template is located in the generators/server/templates directory
-    // We read it from the source directory since this is during generation
-    const templateFile = 'generators/server/templates/mapper.java.ejs';
-    const templatePath = generator.destinationPath(templateFile).replace(/\.yo-rc\.json.*$/, '') + templateFile;
-    const sourcePath = join(process.cwd(), templateFile);
+    // Prefer blueprint override first, then the bundled template
+    const candidateTemplatePaths: string[] = [];
+    const relativeTemplatePath = join('server', 'templates', 'mapper.java.ejs');
 
-    let actualTemplatePath = sourcePath;
-    if (!existsSync(sourcePath) && existsSync(templatePath)) {
-      actualTemplatePath = templatePath;
+    if (typeof generator.templatePath === 'function') {
+      const blueprintTemplatePath = generator.templatePath(relativeTemplatePath);
+      if (existsSync(blueprintTemplatePath)) {
+        candidateTemplatePaths.push(blueprintTemplatePath);
+      }
     }
 
-    if (!existsSync(actualTemplatePath)) {
-      generator.log.warn(`MapStruct: mapper template not found at ${actualTemplatePath} or ${sourcePath}`);
+    const bundledTemplatePath = generator.fetchFromInstalledJHipster(relativeTemplatePath);
+    if (existsSync(bundledTemplatePath)) {
+      candidateTemplatePaths.push(bundledTemplatePath);
+    }
+
+    const actualTemplatePath = candidateTemplatePaths[0];
+    if (!actualTemplatePath) {
+      generator.log.warn(`MapStruct: mapper template not found at expected paths: ${candidateTemplatePaths.join(', ') || 'none'}`);
       return;
     }
 
     const templateContent = readFileSync(actualTemplatePath, 'utf-8');
 
-    // Create mapper directory
-    const mapperDir = join(application.srcMainJava, application.packageNameWithSlashes, 'web', 'mapper');
+    // Determine the Java package source directory; fall back to srcMainJava/packageNameWithSlashes if needed
+    const javaPackageDir =
+      application.javaPackageSrcDir ??
+      (application.srcMainJava && application.packageNameWithSlashes
+        ? join(application.srcMainJava, application.packageNameWithSlashes)
+        : undefined);
 
+    if (!javaPackageDir) {
+      generator.log.warn('MapStruct: unable to resolve Java package directory, skipping mapper generation');
+      return;
+    }
+
+    // Create mapper directory inside the Java package source tree
+    const mapperDir = join(javaPackageDir, 'web', 'api', 'mapper');
     const mapperDirFull = generator.destinationPath(mapperDir);
     mkdirSync(mapperDirFull, { recursive: true });
 

@@ -128,7 +128,7 @@ function createInputMapper(
 
   return {
     mapperName,
-    packageName: `${basePackage}.web.mapper`,
+    packageName: `${basePackage}.web.api.mapper`,
     methods,
     polymorphicTypes: polymorphicTypes.length > 0 ? polymorphicTypes : undefined,
   };
@@ -182,7 +182,7 @@ function createOutputMapper(
 
   return {
     mapperName,
-    packageName: `${basePackage}.web.mapper`,
+    packageName: `${basePackage}.web.api.mapper`,
     methods,
     polymorphicTypes: polymorphicTypes.length > 0 ? polymorphicTypes : undefined,
   };

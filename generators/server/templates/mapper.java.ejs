@@ -43,7 +43,7 @@ public interface <%= mapperName %> {
      */
 <%_ if (method.annotations && method.annotations.length > 0) { _%>
 <%_ for (const annotation of method.annotations) { _%>
-    <%= annotation %>
+    <%- annotation %>
 <%_ } _%>
 <%_ } _%>
     <%= method.targetName %> <%= method.methodName %>(<%= method.sourceName %> source);
