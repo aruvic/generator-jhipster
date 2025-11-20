@@ -23,9 +23,11 @@ package <%- packageName %>.config;
  */
 public final class Constants {
 
-<%_ if (generateBuiltInUserEntity) { _%>
+<%_ const hasLoginRegex = typeof loginRegex !== 'undefined' && loginRegex; _%>
+<%_ const shouldIncludeLoginRegex = generateBuiltInUserEntity || hasLoginRegex; _%>
+<%_ if (shouldIncludeLoginRegex) { _%>
     // Regex for acceptable logins
-    public static final String LOGIN_REGEX = "<%- loginRegex %>";
+    public static final String LOGIN_REGEX = "<%- hasLoginRegex ? loginRegex : '^(?>[a-zA-Z0-9!$&*+=?^_`{|}~.-]+@[a-zA-Z0-9-]+(?:\\\\.[a-zA-Z0-9-]+)*)|(?>[_.@A-Za-z0-9-]+)$' %>";
 
 <%_ } _%>
 <%_ if (generateBuiltInUserEntity || databaseTypeSql || databaseTypeMongodb || databaseTypeCouchbase) { _%>

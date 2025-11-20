@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 import ejs from 'ejs';
@@ -25,6 +25,8 @@ import ejs from 'ejs';
 import type { Application as SpringBootApplication } from '../types.ts';
 
 import { collectImports, generateMapperContexts } from './mapper-context-builder.ts';
+import { generateUnifiedMappers } from './unified-mapper-generator.ts';
+import { generateHybridMappers } from './hybrid-mapper-generator.ts';
 import { parseOpenAPISpec } from './openapi-mapper-generator.ts';
 
 /**
@@ -64,8 +66,43 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     generator.log.info(`MapStruct: found ${spec.operations.length} operations in OpenAPI spec`);
 
-    // Generate mapper contexts
-    const mapperContexts = generateMapperContexts(spec, application.packageName!);
+    // Determine which mapper generation strategy to use
+    // Hybrid: 1 PolymorphicMapper + per-entity mappers (RECOMMENDED for complex APIs)
+    // Unified: 2 large Request/Response mappers (good for simple APIs)
+    // Legacy: Per-operation mappers (original approach, not recommended)
+    const strategy = 'hybrid'; // Options: 'hybrid', 'unified', 'legacy'
+
+    let mapperContexts: any[];
+    let templateFiles: Map<string, string> = new Map();
+
+    if (strategy === 'hybrid') {
+      generator.log.info('MapStruct: using hybrid mapper strategy (PolymorphicMapper + per-entity)');
+      const { polymorphicMapper, entityMappers } = generateHybridMappers(spec, application.packageName!);
+      
+      // Add polymorphic mapper
+      mapperContexts = [polymorphicMapper];
+      templateFiles.set('PolymorphicMapper', 'polymorphic-mapper.java.ejs');
+      
+      // Add entity mappers
+      for (const entityMapper of entityMappers) {
+        mapperContexts.push(entityMapper);
+        templateFiles.set(entityMapper.mapperName, 'entity-mapper.java.ejs');
+      }
+    } else if (strategy === 'unified') {
+      // Generate unified Request/Response mappers with @SubclassMapping support
+      generator.log.info('MapStruct: using unified mapper strategy with @SubclassMapping');
+      mapperContexts = generateUnifiedMappers(spec, application.packageName!);
+      for (const context of mapperContexts) {
+        templateFiles.set(context.mapperName, 'unified-mapper.java.ejs');
+      }
+    } else {
+      // Generate per-operation mappers (legacy approach)
+      generator.log.info('MapStruct: using per-operation mapper strategy');
+      mapperContexts = generateMapperContexts(spec, application.packageName!);
+      for (const context of mapperContexts) {
+        templateFiles.set(context.mapperName, 'mapper.java.ejs');
+      }
+    }
 
     if (mapperContexts.length === 0) {
       generator.log.info('MapStruct: no mappers generated from OpenAPI spec');
@@ -74,31 +111,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     generator.log.info(`MapStruct: generated ${mapperContexts.length} mapper contexts`);
 
-    // Prefer blueprint override first, then the bundled template
-    const candidateTemplatePaths: string[] = [];
-    const relativeTemplatePath = join('server', 'templates', 'mapper.java.ejs');
-
-    if (typeof generator.templatePath === 'function') {
-      const blueprintTemplatePath = generator.templatePath(relativeTemplatePath);
-      if (existsSync(blueprintTemplatePath)) {
-        candidateTemplatePaths.push(blueprintTemplatePath);
-      }
-    }
-
-    const bundledTemplatePath = generator.fetchFromInstalledJHipster(relativeTemplatePath);
-    if (existsSync(bundledTemplatePath)) {
-      candidateTemplatePaths.push(bundledTemplatePath);
-    }
-
-    const actualTemplatePath = candidateTemplatePaths[0];
-    if (!actualTemplatePath) {
-      generator.log.warn(`MapStruct: mapper template not found at expected paths: ${candidateTemplatePaths.join(', ') || 'none'}`);
-      return;
-    }
-
-    const templateContent = readFileSync(actualTemplatePath, 'utf-8');
-
-    // Determine the Java package source directory; fall back to srcMainJava/packageNameWithSlashes if needed
+    // Determine the Java package source directory
     const javaPackageDir =
       application.javaPackageSrcDir ??
       (application.srcMainJava && application.packageNameWithSlashes
@@ -115,14 +128,90 @@ export async function generateMapStructMappers(generator: any, application: Spri
     const mapperDirFull = generator.destinationPath(mapperDir);
     mkdirSync(mapperDirFull, { recursive: true });
 
+    // Remove existing mapper files to avoid stale classes lingering between generations
+    try {
+      const existingEntries = readdirSync(mapperDirFull, { withFileTypes: true });
+      for (const entry of existingEntries) {
+        if (entry.isFile() && entry.name.endsWith('Mapper.java')) {
+          unlinkSync(join(mapperDirFull, entry.name));
+        }
+      }
+    } catch (cleanupError) {
+      generator.log.warn(`MapStruct: unable to clean mapper directory ${mapperDirFull}: ${cleanupError}`);
+    }
+
     // Write mapper files
     for (const context of mapperContexts) {
-      const imports = collectImports(context);
+      // Get the appropriate template for this mapper
+      const templateFileName = templateFiles.get(context.mapperName) || 'mapper.java.ejs';
+      const relativeTemplatePath = join('server', 'templates', templateFileName);
+      
+      // Try to load template (blueprint first, then bundled)
+      let templatePath: string | undefined;
+      
+      // Try blueprint generators
+      if (generator.blueprintGenerators) {
+        for (const bp of generator.blueprintGenerators) {
+          if (bp.generatorPath) {
+            const bpPath = join(bp.generatorPath, relativeTemplatePath);
+            if (existsSync(bpPath)) {
+              templatePath = bpPath;
+              break;
+            }
+          }
+        }
+      }
+      
+      // If not found in blueprint, use bundled template
+      if (!templatePath) {
+        const bundledPath = generator.fetchFromInstalledJHipster(relativeTemplatePath);
+        if (bundledPath && existsSync(bundledPath)) {
+          templatePath = bundledPath;
+        }
+      }
+      
+      if (!templatePath) {
+        generator.log.warn(`MapStruct: could not resolve template at ${relativeTemplatePath}, skipping ${context.mapperName}`);
+        continue;
+      }
+      
+      const templateContent = readFileSync(templatePath, 'utf-8');
+      let mapperContent: string;
 
-      const mapperContent = ejs.render(templateContent, {
-        ...context,
-        importsSet: imports,
-      });
+      if (strategy !== 'hybrid' && strategy !== 'unified') {
+        // Legacy per-operation mapper: collect imports and handle collisions
+        const collectedImports = collectImports(context);
+
+        const simpleNameCount: Record<string, number> = {};
+        for (const imp of collectedImports) {
+          const simple = imp.split('.').pop() || imp;
+          simpleNameCount[simple] = (simpleNameCount[simple] || 0) + 1;
+        }
+
+        const collidingNames = new Set<string>(Object.entries(simpleNameCount).filter(([, c]) => c > 1).map(([n]) => n));
+
+        const importsForTemplate = collectedImports.filter(imp => !collidingNames.has(imp.split('.').pop() || ''));
+
+        const methodsForTemplate = (context.methods || []).map((m: any) => {
+          const srcSimple = m.sourceType.split('.').pop() || m.sourceName;
+          const tgtSimple = m.targetType.split('.').pop() || m.targetName;
+
+          return {
+            ...m,
+            sourceName: collidingNames.has(srcSimple) ? m.sourceType : srcSimple,
+            targetName: collidingNames.has(tgtSimple) ? m.targetType : tgtSimple,
+          };
+        });
+
+        mapperContent = ejs.render(templateContent, {
+          ...context,
+          importsSet: importsForTemplate,
+          methods: methodsForTemplate,
+        });
+      } else {
+        // Hybrid or unified mapper: render directly
+        mapperContent = ejs.render(templateContent, context);
+      }
 
       const filePath = join(mapperDirFull, `${context.mapperName}.java`);
       generator.fs.write(filePath, mapperContent);

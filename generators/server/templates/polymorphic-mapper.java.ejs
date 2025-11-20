@@ -1,0 +1,246 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+-%>
+<%
+    const basePackage = packageName.replace('.web.api.mapper', '');
+    const partyRoleSubtype = polymorphicTypes
+        .flatMap(poly => poly.subtypes)
+        .find(subtype => subtype.domainSimpleName === 'PartyRole');
+    const requiresPartyRoleNestedIgnore = polymorphicTypes.some(poly => poly.baseType === 'PartyOrPartyRole');
+    const requiresMappingImport = requiresPartyRoleNestedIgnore || Boolean(partyRoleSubtype);
+%>
+/**
+ * Shared mapper for polymorphic types with @SubclassMapping support.
+ * This mapper handles all abstract/interface types that have multiple concrete implementations.
+ */
+
+package <%- packageName %>;
+
+import org.mapstruct.Mapper;
+<%_ if (requiresMappingImport) { _%>
+import org.mapstruct.Mapping;
+<%_ } _%>
+import org.mapstruct.ObjectFactory;
+import org.mapstruct.ReportingPolicy;
+import org.mapstruct.SubclassMapping;
+import org.mapstruct.SubclassExhaustiveStrategy;
+import org.openapitools.jackson.nullable.JsonNullable;
+
+@Mapper(
+    componentModel = "spring",
+    unmappedTargetPolicy = ReportingPolicy.IGNORE,
+    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR
+)
+public interface <%- mapperName %> {
+
+    // ========== Support Mapping Methods ==========
+    
+    /**
+     * Map JsonNullable<Object> to String for DTO-to-Domain conversions
+     */
+    default String mapJsonNullableObjectToString(JsonNullable<Object> value) {
+        if (value == null || !value.isPresent()) return null;
+        Object obj = value.get();
+        return obj == null ? null : obj.toString();
+    }
+
+    /**
+     * Map String to JsonNullable<Object> for Domain-to-DTO conversions
+     */
+    default JsonNullable<Object> mapStringToJsonNullableObject(String value) {
+        return value == null ? JsonNullable.undefined() : JsonNullable.of(value);
+    }
+
+    /**
+     * Map Object to String
+     */
+    default String mapObjectToString(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    /**
+     * Map String to Object
+     */
+    default Object mapStringToObject(String value) {
+        return value;
+    }
+
+    // ========== Concrete to Abstract Type Mappings ==========
+    
+    /**
+     * Map concrete EntityRef to abstract EntityRefOrValue
+     */
+    default <%- basePackage %>.domain.EntityRefOrValue mapEntityRefToEntityRefOrValue(
+        <%- basePackage %>.domain.EntityRef value
+    ) {
+        return value; // EntityRef extends EntityRefOrValue
+    }
+
+    /**
+     * Map concrete PartyRef to abstract PartyRefOrPartyRoleRef  
+     */
+    default <%- basePackage %>.domain.PartyRefOrPartyRoleRef mapPartyRefToPartyRefOrPartyRoleRef(
+        <%- basePackage %>.domain.PartyRef value
+    ) {
+        return value; // PartyRef extends PartyRefOrPartyRoleRef
+    }
+
+    /**
+     * Map concrete PartyRoleRef to abstract PartyRefOrPartyRoleRef
+     */
+    default <%- basePackage %>.domain.PartyRefOrPartyRoleRef mapPartyRoleRefToPartyRefOrPartyRoleRef(
+        <%- basePackage %>.domain.PartyRoleRef value
+    ) {
+        return value; // PartyRoleRef extends PartyRefOrPartyRoleRef
+    }
+
+    /**
+     * Map concrete PaymentMethodRef to abstract EntityRefOrValue
+     */
+    default <%- basePackage %>.domain.EntityRefOrValue mapPaymentMethodRefToEntityRefOrValue(
+        <%- basePackage %>.domain.PaymentMethodRef value
+    ) {
+        return value; // PaymentMethodRef extends EntityRefOrValue
+    }
+
+<%_ if (partyRoleSubtype) { _%>
+
+    @Mapping(target = "paymentMethods", ignore = true)
+    <%- partyRoleSubtype.domainType %> mapPartyRole(<%- partyRoleSubtype.dtoType %> source);
+
+    @Mapping(target = "paymentMethods", ignore = true)
+    <%- partyRoleSubtype.dtoType %> mapPartyRoleToDto(<%- partyRoleSubtype.domainType %> source);
+
+<%_ } _%>
+
+
+
+<%_ for (const poly of polymorphicTypes) { _%>
+    // ========== <%- poly.baseType %> Polymorphic Mapping ==========
+    
+    /**
+     * Map <%- poly.baseType %> with runtime type resolution
+     */
+    <%_ for (const subtype of poly.subtypes) { _%>
+    @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
+    <%_ } _%>
+    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
+        @Mapping(target = "partyRole.paymentMethods", ignore = true)
+    <%_ } _%>
+    <%- poly.baseDomainType %> map<%- poly.baseType %>(<%- poly.baseDtoType %> source);
+
+    <%_ const variantBridges = poly.variants.filter(variant => !variant.isBase && !variant.isWrapper); _%>
+    <%_ const wrapperVariants = poly.variants.filter(variant => variant.isWrapper && variant.subtypes.length > 0); _%>
+    <%_ if (variantBridges.length > 0) { _%>
+        // ========== <%- poly.baseType %> Variant Bridge Mappings ==========
+
+    <%_ for (const variant of variantBridges) { _%>
+        /**
+         * Bridge mapping for variant <%- variant.dtoSimpleName %> -> <%- poly.baseType %>
+         */
+        default <%- poly.baseDomainType %> map<%- variant.normalizedName %>(<%- variant.dtoType %> source) {
+            return map<%- poly.baseType %>((<%- poly.baseDtoType %>) source);
+        }
+
+        /**
+         * Bridge mapping for <%- poly.baseType %> -> variant <%- variant.dtoSimpleName %>
+         */
+        @SuppressWarnings("unchecked")
+        default <%- variant.dtoType %> map<%- poly.baseType %>To<%- variant.normalizedName %>(<%- poly.baseDomainType %> source) {
+            <%- poly.baseDtoType %> dto = map<%- poly.baseType %>ToDto(source);
+            return dto == null ? null : (<%- variant.dtoType %>) dto;
+        }
+
+    <%_ } _%>
+    <%_ } _%>
+
+    <%_ if (wrapperVariants.length > 0) { _%>
+        // ========== <%- poly.baseType %> Wrapper Variant Mappings ==========
+
+    <%_ for (const variant of wrapperVariants) { _%>
+        /**
+         * Wrapper mapping for variant <%- variant.dtoSimpleName %> -> <%- poly.baseType %>
+         */
+    <%_ for (const subtype of variant.subtypes) { _%>
+        @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
+    <%_ } _%>
+    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
+        @Mapping(target = "partyRole.paymentMethods", ignore = true)
+    <%_ } _%>
+        <%- poly.baseDomainType %> map<%- variant.normalizedName %>(<%- variant.dtoType %> source);
+
+        /**
+         * Object factory assisting wrapper <%- variant.dtoSimpleName %> -> <%- poly.baseType %>
+         */
+        @ObjectFactory
+        default <%- poly.baseDomainType %> create<%- poly.baseType %>From<%- variant.normalizedName %>(<%- variant.dtoType %> source) {
+            if (source == null) return null;
+    <%_ for (const subtype of variant.subtypes) { _%>
+            if (source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+    <%_ } _%>
+            return null;
+        }
+
+        /**
+         * Wrapper reverse mapping: <%- poly.baseType %> -> variant <%- variant.dtoSimpleName %>
+         */
+    <%_ for (const subtype of variant.subtypes) { _%>
+        @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
+    <%_ } _%>
+    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
+        @Mapping(target = "partyRole.paymentMethods", ignore = true)
+    <%_ } _%>
+        <%- variant.dtoType %> map<%- poly.baseType %>To<%- variant.normalizedName %>(<%- poly.baseDomainType %> source);
+
+        /**
+         * Object factory assisting <%- poly.baseType %> -> wrapper <%- variant.dtoSimpleName %>
+         */
+        @ObjectFactory
+        default <%- variant.dtoType %> create<%- variant.normalizedName %>From<%- poly.baseType %>(<%- poly.baseDomainType %> source) {
+            if (source == null) return null;
+    <%_ for (const subtype of variant.subtypes) { _%>
+            if (source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
+    <%_ } _%>
+            return null;
+        }
+
+    <%_ } _%>
+    <%_ } _%>
+
+    /**
+     * Object factory for <%- poly.baseType %> - creates correct concrete instance
+     */
+    @ObjectFactory
+    default <%- poly.baseDomainType %> create<%- poly.baseType %>(<%- poly.baseDtoType %> source) {
+        if (source == null) return null;
+  <%_ for (const subtype of poly.subtypes) { _%>
+        if (source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+  <%_ } _%>
+        return null;
+    }
+
+    /**
+     * Reverse mapping: Domain -> DTO
+     */
+    <%_ for (const subtype of poly.subtypes) { _%>
+    @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
+  <%_ } _%>
+    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
+        @Mapping(target = "partyRole.paymentMethods", ignore = true)
+    <%_ } _%>
+    <%- poly.baseDtoType %> map<%- poly.baseType %>ToDto(<%- poly.baseDomainType %> source);
+
+    /**
+     * Object factory for DTO creation
+     */
+    @ObjectFactory
+    default <%- poly.baseDtoType %> create<%- poly.baseType %>Dto(<%- poly.baseDomainType %> source) {
+        if (source == null) return null;
+  <%_ for (const subtype of poly.subtypes) { _%>
+        if (source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
+  <%_ } _%>
+        return null;
+    }
+
+<%_ } _%>
+}

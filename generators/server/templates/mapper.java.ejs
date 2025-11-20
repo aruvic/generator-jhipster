@@ -31,7 +31,8 @@ import <%= importStmt %>;
 @Mapper(
     componentModel = "spring",
     unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
-    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR<%_ } _%>
+    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR<%_ } _%>,
+    uses = PolymorphicMapper.class
 )
 public interface <%= mapperName %> {
 
@@ -39,14 +40,17 @@ public interface <%= mapperName %> {
 
 <%_ for (const method of methods) { _%>
     /**
-     * Maps <%= method.sourceName %> to <%= method.targetName %>.
+     * Maps <%= method.sourceType.split('.').pop() %> to <%= method.targetType.split('.').pop() %>.
      */
 <%_ if (method.annotations && method.annotations.length > 0) { _%>
 <%_ for (const annotation of method.annotations) { _%>
     <%- annotation %>
 <%_ } _%>
 <%_ } _%>
-    <%= method.targetName %> <%= method.methodName %>(<%= method.sourceName %> source);
+    <%# Use fully-qualified name if type is in .dto package (not imported), otherwise use simple name _%>
+    <%_ const sourceTypeName = method.sourceType.includes('.dto.') ? method.sourceType : method.sourceType.split('.').pop() _%>
+    <%_ const targetTypeName = method.targetType.includes('.dto.') ? method.targetType : method.targetType.split('.').pop() _%>
+    <%= targetTypeName %> <%= method.methodName %>(<%= sourceTypeName %> source);
 
 <%_ } _%>
 
@@ -58,9 +62,14 @@ public interface <%= mapperName %> {
      * Polymorphic mapper for <%= polymorphic.baseType.split('.').pop() %>.
      */
 <%_ for (const subtype of polymorphic.subtypes) { _%>
-    @SubclassMapping(source = <%= subtype.sourceType.split('.').pop() %>.class, target = <%= subtype.targetType.split('.').pop() %>.class)
+    <%# Use fully-qualified names for DTOs in @SubclassMapping _%>
+    <%_ const subtypeSourceName = subtype.sourceType.includes('.dto.') ? subtype.sourceType : subtype.sourceType.split('.').pop() _%>
+    <%_ const subtypeTargetName = subtype.targetType.includes('.dto.') ? subtype.targetType : subtype.targetType.split('.').pop() _%>
+    @SubclassMapping(source = <%= subtypeSourceName %>.class, target = <%= subtypeTargetName %>.class)
 <%_ } _%>
-    <%= polymorphic.baseType.split('.').pop() %> mapPolymorphic(<%= polymorphic.baseType.split('.').pop() %> source);
+    <%# Use fully-qualified name for base type if it's a DTO _%>
+    <%_ const polymorphicBaseTypeName = polymorphic.baseType.includes('.dto.') ? polymorphic.baseType : polymorphic.baseType.split('.').pop() _%>
+    <%= polymorphicBaseTypeName %> mapPolymorphic(<%= polymorphicBaseTypeName %> source);
 
 <%_ } _%>
 <%_ } _%>

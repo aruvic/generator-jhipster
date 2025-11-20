@@ -248,6 +248,16 @@ export function extractSchemaRef(schemaObj: any): string | undefined {
 }
 
 /**
+ * Normalize schema/type names by removing separators that may appear in OpenAPI refs
+ * e.g., `Hub_FVO` -> `HubFVO`, `party-interaction` -> `partyinteraction`
+ */
+export function normalizeTypeName(name: string): string {
+  if (!name) return name;
+  // Remove underscores, hyphens and spaces; preserve casing otherwise
+  return name.replace(/[_\-\s]+/g, '');
+}
+
+/**
  * Build a directed graph of schema relationships
  */
 export function buildSchemaGraph(schemas: Record<string, any>): Map<string, SchemaNode> {
@@ -353,27 +363,29 @@ export function findNestedSchemas(rootSchema: string, graph: Map<string, SchemaN
  * Extract schema name without DTO suffixes (FVO, MVO, DTO, etc.)
  */
 export function stripDtoSuffix(dtoName: string): string {
+  if (!dtoName) return dtoName;
+  const normalized = normalizeTypeName(dtoName);
   const suffixes = ['FVO', 'MVO', 'DTO', 'Dto', 'Fvo', 'Mvo'];
   for (const suffix of suffixes) {
-    if (dtoName.endsWith(suffix)) {
-      return dtoName.substring(0, dtoName.length - suffix.length);
+    if (normalized.endsWith(suffix)) {
+      return normalized.substring(0, normalized.length - suffix.length);
     }
   }
-  return dtoName;
+  return normalized;
 }
 
 /**
  * Build fully-qualified class name for DTO
  */
 export function buildDtoFqcn(dtoName: string, basePackage: string): string {
-  return `${basePackage}.service.api.dto.${dtoName}`;
+  return `${basePackage}.service.api.dto.${normalizeTypeName(dtoName)}`;
 }
 
 /**
  * Build fully-qualified class name for domain entity
  */
 export function buildDomainFqcn(entityName: string, basePackage: string): string {
-  return `${basePackage}.domain.${entityName}`;
+  return `${basePackage}.domain.${normalizeTypeName(entityName)}`;
 }
 
 /**
