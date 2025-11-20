@@ -1,0 +1,44 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+-%>
+/**
+ * MapStruct mapper for <%- entityName %> entity.
+ * Uses PolymorphicMapper for handling abstract/polymorphic types.
+ */
+
+package <%- packageName %>;
+
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
+import org.mapstruct.ReportingPolicy;
+
+@Mapper(
+    componentModel = "spring",
+    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesPolymorphicMapper) { _%>,
+    uses = PolymorphicMapper.class<%_ } _%>
+)
+public interface <%- mapperName %> {
+
+    // ========== Request Mappings (DTO -> Domain) ==========
+<%_ for (const mapping of requestMappings) { _%>
+  <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
+    <%_ for (const annotation of mapping.annotations) { _%>
+    <%- annotation %>
+    <%_ } _%>
+  <%_ } _%>
+  <%_ if (entityName && (entityName === 'Supplier' || entityName === 'BusinessPartner' || entityName === 'Consumer' || entityName === 'Producer')) { _%>
+    @Mapping(target = "paymentMethods", ignore = true)
+  <%_ } _%>
+    <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
+
+<%_ } _%>
+
+    // ========== Response Mappings (Domain -> DTO) ==========
+<%_ for (const mapping of responseMappings) { _%>
+  <%_ if (entityName && (entityName === 'Supplier' || entityName === 'BusinessPartner' || entityName === 'Consumer' || entityName === 'Producer')) { _%>
+    @Mapping(target = "paymentMethods", ignore = true)
+  <%_ } _%>
+    <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
+
+<%_ } _%>
+}

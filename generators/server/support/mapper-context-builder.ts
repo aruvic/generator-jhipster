@@ -31,10 +31,44 @@ import {
 } from './openapi-mapper-generator.ts';
 
 /**
+ * Schemas that don't have corresponding domain entities (abstract/interface types)
+ * These are skipped during mapper generation
+ */
+const ABSTRACT_SCHEMAS = new Set(['Entity', 'Extensible', 'Addressable']);
+
+/**
+ * Field patterns that indicate abstract/polymorphic types that MapStruct can't auto-map
+ * These patterns are used to generate @Mapping(target = "...", ignore = true) annotations
+ */
+const ABSTRACT_TYPE_PATTERNS = [
+  /RefOrValue$/,          // e.g., EntityRefOrValue, AttachmentRefOrValue
+  /OrPartyRole$/,         // e.g., PartyOrPartyRole, PartyRefOrPartyRoleRef
+  /^event$/,              // Generic Object/Any types that vary by schema
+];
+
+/**
+ * Check if a schema should be skipped (no domain entity exists)
+ */
+function shouldSkipSchema(schemaBaseName: string): boolean {
+  return ABSTRACT_SCHEMAS.has(schemaBaseName);
+}
+
+/**
+ * Check if a field name/type indicates an abstract/polymorphic type
+ * Strips _FVO, _MVO, _DTO suffixes before checking
+ */
+function isAbstractTypeField(typeName: string): boolean {
+  // Strip common DTO suffixes
+  const baseName = typeName.replace(/_(FVO|MVO|DTO)$/, '');
+  return ABSTRACT_TYPE_PATTERNS.some(pattern => pattern.test(baseName));
+}
+
+/**
  * Generate mapper contexts from parsed OpenAPI spec
  */
 export function generateMapperContexts(spec: ParsedOpenAPISpec, basePackage: string): MapperContext[] {
   const mappers: MapperContext[] = [];
+  const mapperNamesSeen = new Set<string>();
   const schemaGraph = buildSchemaGraph(spec.schemas);
 
   // Group operations by entity
@@ -48,7 +82,7 @@ export function generateMapperContexts(spec: ParsedOpenAPISpec, basePackage: str
     operationsByEntity.get(entityName)!.push(operation);
   }
 
-  // For each entity/operation, create appropriate mappers
+  // For each entity/operation, create appropriate mappers (deduplicate by mapper name)
   operationsByEntity.forEach((operations, entitySchema) => {
     const entityBaseName = stripDtoSuffix(entitySchema);
 
@@ -57,19 +91,34 @@ export function generateMapperContexts(spec: ParsedOpenAPISpec, basePackage: str
 
       if (operationType === 'create') {
         const mapper = createInputMapper(operation, entityBaseName, basePackage, schemaGraph, spec.schemas, 'create');
-        if (mapper) mappers.push(mapper);
+        if (mapper && !mapperNamesSeen.has(mapper.mapperName)) {
+          mappers.push(mapper);
+          mapperNamesSeen.add(mapper.mapperName);
+        }
 
         const outputMapper = createOutputMapper(operation, entityBaseName, basePackage, schemaGraph, spec.schemas);
-        if (outputMapper) mappers.push(outputMapper);
+        if (outputMapper && !mapperNamesSeen.has(outputMapper.mapperName)) {
+          mappers.push(outputMapper);
+          mapperNamesSeen.add(outputMapper.mapperName);
+        }
       } else if (operationType === 'update') {
         const mapper = createInputMapper(operation, entityBaseName, basePackage, schemaGraph, spec.schemas, 'update');
-        if (mapper) mappers.push(mapper);
+        if (mapper && !mapperNamesSeen.has(mapper.mapperName)) {
+          mappers.push(mapper);
+          mapperNamesSeen.add(mapper.mapperName);
+        }
 
         const outputMapper = createOutputMapper(operation, entityBaseName, basePackage, schemaGraph, spec.schemas);
-        if (outputMapper) mappers.push(outputMapper);
+        if (outputMapper && !mapperNamesSeen.has(outputMapper.mapperName)) {
+          mappers.push(outputMapper);
+          mapperNamesSeen.add(outputMapper.mapperName);
+        }
       } else if (operationType === 'read') {
         const outputMapper = createOutputMapper(operation, entityBaseName, basePackage, schemaGraph, spec.schemas);
-        if (outputMapper) mappers.push(outputMapper);
+        if (outputMapper && !mapperNamesSeen.has(outputMapper.mapperName)) {
+          mappers.push(outputMapper);
+          mapperNamesSeen.add(outputMapper.mapperName);
+        }
       }
       // delete operations typically don't need mappers
     }
@@ -106,11 +155,17 @@ function createInputMapper(
       return; // Skip enums for now, MapStruct can handle them
     }
 
-    const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const baseName = stripDtoSuffix(schemaName);
+    
+    // Skip abstract schemas that don't have domain entities
+    if (shouldSkipSchema(baseName)) {
+      return;
+    }
+
+    const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const domainFqcn = buildDomainFqcn(baseName, basePackage);
 
-    const method = createMappingMethod(baseName, dtoFqcn, domainFqcn, 'dto-to-domain', opType === 'create', opType === 'update');
+    const method = createMappingMethod(baseName, dtoFqcn, domainFqcn, 'dto-to-domain', opType === 'create', opType === 'update', schema);
 
     methods.push(method);
 
@@ -161,11 +216,17 @@ function createOutputMapper(
       return;
     }
 
-    const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const baseName = stripDtoSuffix(schemaName);
+    
+    // Skip abstract schemas that don't have domain entities
+    if (shouldSkipSchema(baseName)) {
+      return;
+    }
+
+    const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const domainFqcn = buildDomainFqcn(baseName, basePackage);
 
-    const method = createMappingMethod(baseName, domainFqcn, dtoFqcn, 'domain-to-dto', false, false);
+    const method = createMappingMethod(baseName, domainFqcn, dtoFqcn, 'domain-to-dto', false, false, schema);
 
     methods.push(method);
 
@@ -198,6 +259,7 @@ function createMappingMethod(
   direction: 'dto-to-domain' | 'domain-to-dto',
   isCreate: boolean,
   isUpdate: boolean,
+  schema?: any,
 ): MapperMethod {
   const annotations: string[] = [];
 
@@ -205,13 +267,39 @@ function createMappingMethod(
     // DTO to domain: ignore IDs for create/update
     if (isCreate || isUpdate) {
       annotations.push('@Mapping(target = "id", ignore = true)');
+      // Note: UUID generation removed - should be handled by JPA @GeneratedValue or service layer
+    }
+  }
 
-      // For create, generate new UUID if applicable
-      if (isCreate) {
-        annotations.push('@Mapping(target = "uuid", expression = "java(java.util.UUID.randomUUID())")');
+  // Ignore fields with abstract/polymorphic types that MapStruct can't handle
+  // Only add ignore annotations for fields that actually exist in the schema and match abstract type patterns
+  const fieldsToIgnore = new Set<string>();
+  
+  // Schema-based detection - only if schema is provided
+  if (schema && schema.properties) {
+    for (const [fieldName, fieldSchema] of Object.entries<any>(schema.properties)) {
+      const fieldType = fieldSchema.$ref || fieldSchema.type;
+      if (fieldType && typeof fieldType === 'string') {
+        const typeBaseName = fieldType.split('/').pop() || '';
+        // Check if field type matches abstract type patterns
+        if (isAbstractTypeField(typeBaseName)) {
+          fieldsToIgnore.add(fieldName);
+        }
+      }
+      // Also check for arrays/lists of abstract types
+      if (fieldSchema.items && fieldSchema.items.$ref) {
+        const itemType = fieldSchema.items.$ref.split('/').pop() || '';
+        if (isAbstractTypeField(itemType)) {
+          fieldsToIgnore.add(fieldName);
+        }
       }
     }
   }
+  
+  // Generate @Mapping ignore annotations for all identified fields
+  fieldsToIgnore.forEach(field => {
+    annotations.push(`@Mapping(target = "${field}", ignore = true)`);
+  });
 
   // Build method name
   let methodName: string;
@@ -289,6 +377,7 @@ function createPolymorphicMapping(
 
 /**
  * Collect unique imports needed for a mapper context
+ * DTOs are always fully-qualified (never imported) to avoid name collisions with domain entities
  */
 export function collectImports(context: MapperContext): string[] {
   const imports = new Set<string>();
@@ -317,26 +406,30 @@ export function collectImports(context: MapperContext): string[] {
     imports.add('org.mapstruct.SubclassExhaustiveStrategy');
   }
 
-  // Add type imports from methods
+  // Add type imports from methods (only domain types; DTOs are always fully-qualified)
   for (const method of context.methods) {
-    const sourcePackage = method.sourceType.substring(0, method.sourceType.lastIndexOf('.'));
-    const targetPackage = method.targetType.substring(0, method.targetType.lastIndexOf('.'));
-
-    if (!sourcePackage.startsWith('java.')) {
+    // Only import domain types, never DTO types
+    if (method.sourceType.includes('.domain.')) {
       imports.add(method.sourceType);
     }
-    if (!targetPackage.startsWith('java.')) {
+    if (method.targetType.includes('.domain.')) {
       imports.add(method.targetType);
     }
   }
 
-  // Add polymorphic type imports
+  // Add polymorphic type imports (domain only; DTOs fully-qualified)
   if (context.polymorphicTypes) {
     for (const polymorphic of context.polymorphicTypes) {
-      imports.add(polymorphic.baseType);
+      if (polymorphic.baseType.includes('.domain.')) {
+        imports.add(polymorphic.baseType);
+      }
       for (const subtype of polymorphic.subtypes) {
-        imports.add(subtype.sourceType);
-        imports.add(subtype.targetType);
+        if (subtype.sourceType.includes('.domain.')) {
+          imports.add(subtype.sourceType);
+        }
+        if (subtype.targetType.includes('.domain.')) {
+          imports.add(subtype.targetType);
+        }
       }
     }
   }
