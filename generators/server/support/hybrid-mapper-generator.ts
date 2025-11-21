@@ -49,6 +49,7 @@ export interface EntityMapperContext {
   packageName: string;
   entityName: string;
   usesMappers: string[];
+  referencedEntities?: string[];
   requestMappings: EntityMapping[];
   responseMappings: EntityMapping[];
 }
@@ -167,6 +168,45 @@ function isWrapperVariantSchema(
   if (hasOwnSchemaProperties(variantSchema)) return false;
 
   return true;
+}
+
+function collectReferencedEntities(schema: any, referencedEntities: Set<string>): void {
+  if (!schema) {
+    return;
+  }
+
+  if (schema.type === 'array' && schema.items) {
+    collectReferencedEntities(schema.items, referencedEntities);
+  }
+
+  const ref = extractSchemaRef(schema);
+  if (ref) {
+    referencedEntities.add(stripDtoSuffix(ref));
+  }
+
+  if (schema.properties) {
+    for (const propertySchema of Object.values<any>(schema.properties)) {
+      collectReferencedEntities(propertySchema, referencedEntities);
+    }
+  }
+
+  if (Array.isArray(schema.allOf)) {
+    for (const item of schema.allOf) {
+      collectReferencedEntities(item, referencedEntities);
+    }
+  }
+
+  if (Array.isArray(schema.oneOf)) {
+    for (const item of schema.oneOf) {
+      collectReferencedEntities(item, referencedEntities);
+    }
+  }
+
+  if (Array.isArray(schema.anyOf)) {
+    for (const item of schema.anyOf) {
+      collectReferencedEntities(item, referencedEntities);
+    }
+  }
 }
 
 function buildPolymorphicMapping(
@@ -356,6 +396,11 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
       const hasMvoVariant = variants.some(variantName => normalizeTypeName(variantName).endsWith('MVO'));
       const hasRequestSpecificVariant = hasFvoVariant || hasMvoVariant;
       const hasBaseVariant = variants.some(variantName => normalizeTypeName(variantName) === normalizedBase);
+      const referencedEntities = new Set<string>();
+
+      for (const variant of variants) {
+        collectReferencedEntities(schemas[variant], referencedEntities);
+      }
 
       for (const variant of variants) {
         const variantDtoType = buildDtoFqcn(variant, basePackage);
@@ -387,6 +432,7 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
         mapperName: `${baseEntity}Mapper`,
         packageName: `${basePackage}.web.api.mapper`,
         entityName: baseEntity,
+        referencedEntities: Array.from(referencedEntities),
         usesMappers: [],
         requestMappings,
         responseMappings,
@@ -431,10 +477,26 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
   const helperMapperClassNames = helperMappers.map(helper => `${helper.packageName}.${helper.mapperName}`);
   const primitiveMapperFqcn = `${basePackage}.web.api.mapper.OpenApiPrimitiveMapper`;
 
-  const entityMappers = Array.from(entityMappersMap.values()).map(mapper => ({
-    ...mapper,
-    usesMappers: [...helperMapperClassNames, primitiveMapperFqcn],
-  } satisfies EntityMapperContext));
+  const entityMappers = Array.from(entityMappersMap.values()).map(mapper => {
+    const usesMapperFqcns = new Set<string>([...helperMapperClassNames, primitiveMapperFqcn]);
+
+    for (const referencedEntity of mapper.referencedEntities ?? []) {
+      if (referencedEntity === mapper.entityName) {
+        continue;
+      }
+      if (ABSTRACT_SCHEMAS.has(referencedEntity)) {
+        continue;
+      }
+      if (entityMappersMap.has(referencedEntity)) {
+        usesMapperFqcns.add(`${mapper.packageName}.${referencedEntity}Mapper`);
+      }
+    }
+
+    return {
+      ...mapper,
+      usesMappers: Array.from(usesMapperFqcns).sort(),
+    } satisfies EntityMapperContext;
+  });
 
   return {
     helperMappers,
