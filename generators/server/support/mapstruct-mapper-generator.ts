@@ -67,7 +67,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
     generator.log.info(`MapStruct: found ${spec.operations.length} operations in OpenAPI spec`);
 
     // Determine which mapper generation strategy to use
-    // Hybrid: 1 PolymorphicMapper + per-entity mappers (RECOMMENDED for complex APIs)
+    // Hybrid: polymorphic helper mappers + per-entity mappers (RECOMMENDED for complex APIs)
     // Unified: 2 large Request/Response mappers (good for simple APIs)
     // Legacy: Per-operation mappers (original approach, not recommended)
     const strategy = 'hybrid'; // Options: 'hybrid', 'unified', 'legacy'
@@ -76,14 +76,22 @@ export async function generateMapStructMappers(generator: any, application: Spri
     let templateFiles: Map<string, string> = new Map();
 
     if (strategy === 'hybrid') {
-      generator.log.info('MapStruct: using hybrid mapper strategy (PolymorphicMapper + per-entity)');
-      const { polymorphicMapper, entityMappers } = generateHybridMappers(spec, application.packageName!);
-      
-      // Add polymorphic mapper
-      mapperContexts = [polymorphicMapper];
-      templateFiles.set('PolymorphicMapper', 'polymorphic-mapper.java.ejs');
-      
-      // Add entity mappers
+      generator.log.info('MapStruct: using hybrid mapper strategy (polymorphic helpers + per-entity)');
+      const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!);
+
+      mapperContexts = [];
+
+      mapperContexts.push({
+        mapperName: 'OpenApiPrimitiveMapper',
+        packageName: `${application.packageName}.web.api.mapper`,
+      });
+      templateFiles.set('OpenApiPrimitiveMapper', 'openapi-primitive-mapper.java.ejs');
+
+      for (const helperMapper of helperMappers) {
+        mapperContexts.push(helperMapper);
+        templateFiles.set(helperMapper.mapperName, 'polymorphic-helper-mapper.java.ejs');
+      }
+
       for (const entityMapper of entityMappers) {
         mapperContexts.push(entityMapper);
         templateFiles.set(entityMapper.mapperName, 'entity-mapper.java.ejs');

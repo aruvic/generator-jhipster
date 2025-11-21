@@ -3,7 +3,7 @@
 -%>
 /**
  * MapStruct mapper for <%- entityName %> entity.
- * Uses PolymorphicMapper for handling abstract/polymorphic types.
+ * Uses polymorphic helper mappers for handling abstract types when needed.
  */
 
 package <%- packageName %>;
@@ -11,11 +11,15 @@ package <%- packageName %>;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.ReportingPolicy;
+<%_ if (entityName === 'JsonPatch') { _%>
+import org.mapstruct.Named;
+import org.openapitools.jackson.nullable.JsonNullable;
+<%_ } _%>
 
 @Mapper(
-    componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesPolymorphicMapper) { _%>,
-    uses = PolymorphicMapper.class<%_ } _%>
+  componentModel = "spring",
+  unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
+  uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public interface <%- mapperName %> {
 
@@ -26,6 +30,9 @@ public interface <%- mapperName %> {
     <%- annotation %>
     <%_ } _%>
   <%_ } _%>
+  <%_ if (entityName === 'JsonPatch') { _%>
+    @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
+  <%_ } _%>
   <%_ if (entityName && (entityName === 'Supplier' || entityName === 'BusinessPartner' || entityName === 'Consumer' || entityName === 'Producer')) { _%>
     @Mapping(target = "paymentMethods", ignore = true)
   <%_ } _%>
@@ -35,10 +42,29 @@ public interface <%- mapperName %> {
 
     // ========== Response Mappings (Domain -> DTO) ==========
 <%_ for (const mapping of responseMappings) { _%>
+  <%_ if (entityName === 'JsonPatch') { _%>
+    @Mapping(target = "value", qualifiedByName = "wrapJsonPatchValue")
+  <%_ } _%>
   <%_ if (entityName && (entityName === 'Supplier' || entityName === 'BusinessPartner' || entityName === 'Consumer' || entityName === 'Producer')) { _%>
     @Mapping(target = "paymentMethods", ignore = true)
   <%_ } _%>
     <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
+<%_ } _%>
+
+<%_ if (entityName === 'JsonPatch') { _%>
+    @Named("unwrapJsonPatchValue")
+    default String unwrapJsonPatchValue(JsonNullable<Object> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        final Object resolved = value.orElse(null);
+        return resolved != null ? resolved.toString() : null;
+    }
+
+    @Named("wrapJsonPatchValue")
+    default JsonNullable<Object> wrapJsonPatchValue(Object value) {
+        return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    }
 <%_ } _%>
 }
