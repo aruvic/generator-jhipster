@@ -1,0 +1,110 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+-%>
+<%
+    const requiresMappingImport = baseType === 'PartyOrPartyRole';
+    const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
+    const wrapperVariants = variants.filter(variant => !variant.isBase && variant.isWrapper);
+    const bridgeVariants = variants.filter(variant => !variant.isBase && !variant.isWrapper);
+%>
+/**
+ * MapStruct helper mapper for the <%- baseType %> polymorphic family.
+ * Provides @ObjectFactory hooks so MapStruct can instantiate concrete subtypes when resolving abstract references.
+ */
+
+package <%- packageName %>;
+
+import org.mapstruct.Mapper;
+<%_ if (requiresMappingImport) { _%>
+import org.mapstruct.Mapping;
+<%_ } _%>
+import org.mapstruct.ObjectFactory;
+import org.mapstruct.ReportingPolicy;
+
+@Mapper(
+    componentModel = "spring",
+    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (hasMapperDependencies) { _%>,
+    uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
+)
+public interface <%- mapperName %> {
+
+<%_ if (baseType === 'PartyOrPartyRole') { _%>
+    @Mapping(target = "partyRole.paymentMethods", ignore = true)
+<%_ } _%>
+    <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
+
+<%_ if (baseType === 'PartyOrPartyRole') { _%>
+    @Mapping(target = "partyRole.paymentMethods", ignore = true)
+<%_ } _%>
+    <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
+
+    @ObjectFactory
+    default <%- baseDtoType %> create<%- baseType %>Dto(<%- baseDomainType %> source) {
+        if (source == null) {
+            return null;
+        }
+<%_ for (const subtype of subtypes) { _%>
+        if (source instanceof <%- subtype.domainType %>) {
+            return new <%- subtype.dtoType %>();
+        }
+<%_ } _%>
+        return null;
+    }
+
+    @ObjectFactory
+    default <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
+        if (source == null) {
+            return null;
+        }
+<%_ for (const subtype of subtypes) { _%>
+        if (source instanceof <%- subtype.dtoType %>) {
+            return new <%- subtype.domainType %>();
+        }
+<%_ } _%>
+        return null;
+    }
+
+<%_ const nonBaseVariants = variants.filter(variant => !variant.isBase && !variant.normalizedName.endsWith('MVO')); _%>
+<%_ for (const variant of nonBaseVariants) { const variantSubtypes = variant.subtypes && variant.subtypes.length > 0 ? variant.subtypes : subtypes; _%>
+
+<%_ if (baseType === 'PartyOrPartyRole') { _%>
+    @Mapping(target = "partyRole.paymentMethods", ignore = true)
+<%_ } _%>
+    <%- baseDomainType %> to<%- baseType %>(<%- variant.dtoType %> source);
+
+    @ObjectFactory
+    default <%- baseDomainType %> create<%- baseType %>(<%- variant.dtoType %> source) {
+        if (source == null) {
+            return null;
+        }
+<%_ for (const subtype of variantSubtypes) { _%>
+        if (source instanceof <%- subtype.dtoType %>) {
+            return new <%- subtype.domainType %>();
+        }
+<%_ } _%>
+        return null;
+    }
+
+<%_ } _%>
+
+<%_ for (const variant of [...wrapperVariants, ...bridgeVariants]) { _%>
+
+    default <%- variant.dtoType %> to<%- variant.normalizedName %>(<%- baseDomainType %> source) {
+        if (source == null) {
+            return null;
+        }
+        final <%- baseDtoType %> dto = to<%- baseType %>Dto(source);
+        return dto instanceof <%- variant.dtoType %> ? (<%- variant.dtoType %>) dto : null;
+    }
+
+    @ObjectFactory
+    default <%- variant.dtoType %> create<%- variant.normalizedName %>From<%- baseType %>(<%- baseDomainType %> source) {
+        if (source == null) {
+            return null;
+        }
+        final <%- baseDtoType %> dto = create<%- baseType %>Dto(source);
+        return dto instanceof <%- variant.dtoType %> ? (<%- variant.dtoType %>) dto : null;
+    }
+
+<%_ } _%>
+}

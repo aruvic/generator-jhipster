@@ -1,0 +1,34 @@
+/**
+ * Shared MapStruct mapper for OpenAPI primitive and JsonNullable conversions.
+ */
+
+package <%- packageName %>;
+
+import org.mapstruct.Mapper;
+import org.mapstruct.ObjectFactory;
+import org.mapstruct.ReportingPolicy;
+import org.openapitools.jackson.nullable.JsonNullable;
+
+@Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
+public interface OpenApiPrimitiveMapper {
+    default String map(Object value) {
+        return value != null ? value.toString() : null;
+    }
+
+    default String map(JsonNullable<?> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        final Object resolved = value.orElse(null);
+        return resolved != null ? resolved.toString() : null;
+    }
+
+    default <T> JsonNullable<T> toJsonNullable(T value) {
+        return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    }
+
+    @ObjectFactory
+    default JsonNullable<Object> mapToJsonNullable(Object value) {
+        return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    }
+}

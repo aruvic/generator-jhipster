@@ -28,12 +28,17 @@ import {
 } from './openapi-mapper-generator.ts';
 
 /**
- * Polymorphic mapper context (shared for all entities)
+ * Polymorphic helper mapper context (per abstract family)
  */
-export interface PolymorphicMapperContext {
+export interface PolymorphicHelperMapperContext {
   mapperName: string;
   packageName: string;
-  polymorphicTypes: PolymorphicTypeMapping[];
+  baseType: string;
+  baseDtoType: string;
+  baseDomainType: string;
+  subtypes: SubtypeInfo[];
+  variants: PolymorphicVariantInfo[];
+  usesMappers: string[];
 }
 
 /**
@@ -43,7 +48,7 @@ export interface EntityMapperContext {
   mapperName: string;
   packageName: string;
   entityName: string;
-  usesPolymorphicMapper: boolean;
+  usesMappers: string[];
   requestMappings: EntityMapping[];
   responseMappings: EntityMapping[];
 }
@@ -223,16 +228,16 @@ function buildPolymorphicMapping(
       const variantSchema = schemas[variantName];
       const variantSubtypeNames = extractSubtypes(variantSchema) ?? [];
       const variantSubtypeInfos: SubtypeInfo[] = variantSubtypeNames
-        .map(subtypeName => {
-          const subEntity = stripDtoSuffix(subtypeName);
-          return {
-            dtoType: buildDtoFqcn(subtypeName, basePackage),
-            domainType: buildDomainFqcn(subEntity, basePackage),
-            dtoSimpleName: subtypeName,
-            domainSimpleName: subEntity,
-          } satisfies SubtypeInfo;
-        })
-        .filter(subtypeInfo => !!subtypeInfo.domainSimpleName);
+          .map(subtypeName => {
+            const subEntity = stripDtoSuffix(subtypeName);
+            return {
+              dtoType: buildDtoFqcn(subtypeName, basePackage),
+              domainType: buildDomainFqcn(subEntity, basePackage),
+              dtoSimpleName: subtypeName,
+              domainSimpleName: subEntity,
+            } satisfies SubtypeInfo;
+          })
+          .filter(subtypeInfo => !!subtypeInfo.domainSimpleName && !ABSTRACT_SCHEMAS.has(subtypeInfo.domainSimpleName));
       return {
         dtoType: buildDtoFqcn(variantName, basePackage),
         dtoSimpleName: variantName,
@@ -247,11 +252,11 @@ function buildPolymorphicMapping(
 
 /**
  * Generate hybrid mapper architecture:
- * - 1 PolymorphicMapper for shared polymorphic types
- * - N EntityMappers for concrete entities
+ * - Dedicated polymorphic helper mappers per abstract family
+ * - Entity mappers referencing those helpers via MapStruct uses
  */
 export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: string): {
-  polymorphicMapper: PolymorphicMapperContext;
+  helperMappers: PolymorphicHelperMapperContext[];
   entityMappers: EntityMapperContext[];
 } {
   const schemas = spec.schemas;
@@ -317,7 +322,7 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
     const baseEntity = stripDtoSuffix(schemaName);
     if (ABSTRACT_SCHEMAS.has(baseEntity)) continue;
 
-    // Skip polymorphic base types (they're in PolymorphicMapper)
+    // Skip polymorphic base types (handled by helper mappers)
     if (isPolymorphic(schema, schemaName)) continue;
 
     // Skip DTO variants (FVO, MVO) - only process base entity once
@@ -352,13 +357,16 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
         const normalizedVariant = normalizeTypeName(variant);
         const isFVO = normalizedVariant.endsWith('FVO');
         const isBaseVariant = normalizedVariant === normalizedBase;
+        const isMVO = normalizedVariant.endsWith('MVO');
 
-        requestMappings.push({
-          methodName: `to${baseEntity}`,
-          sourceType: variantDtoType,
-          targetType: domainType,
-          annotations: isFVO ? ['@Mapping(target = "id", ignore = true)'] : [],
-        });
+        if (!isMVO) {
+          requestMappings.push({
+            methodName: `to${baseEntity}`,
+            sourceType: variantDtoType,
+            targetType: domainType,
+            annotations: isFVO ? ['@Mapping(target = "id", ignore = true)'] : [],
+          });
+        }
 
         responseMappings.push({
           methodName: isBaseVariant ? `to${baseEntity}Dto` : `to${normalizedVariant}`,
@@ -372,19 +380,57 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
         mapperName: `${baseEntity}Mapper`,
         packageName: `${basePackage}.web.api.mapper`,
         entityName: baseEntity,
-        usesPolymorphicMapper: true,
+        usesMappers: [],
         requestMappings,
         responseMappings,
       });
     }
   }
 
+  const helperMappers: PolymorphicHelperMapperContext[] = polymorphicTypes.map(poly => {
+    const mapperName = `${poly.baseType}Mapper`;
+    const helperPackage = `${basePackage}.web.api.mapper`;
+    const subtypeMapperFqcns = new Set<string>();
+    const primitiveMapperFqcn = `${helperPackage}.OpenApiPrimitiveMapper`;
+
+    for (const subtype of poly.subtypes) {
+      if (entityMappersMap.has(subtype.domainSimpleName)) {
+        subtypeMapperFqcns.add(`${helperPackage}.${subtype.domainSimpleName}Mapper`);
+      }
+    }
+
+    for (const variant of poly.variants) {
+      for (const variantSubtype of variant.subtypes) {
+        if (entityMappersMap.has(variantSubtype.domainSimpleName)) {
+          subtypeMapperFqcns.add(`${helperPackage}.${variantSubtype.domainSimpleName}Mapper`);
+        }
+      }
+    }
+
+    subtypeMapperFqcns.add(primitiveMapperFqcn);
+
+    return {
+      mapperName,
+      packageName: helperPackage,
+      baseType: poly.baseType,
+      baseDtoType: poly.baseDtoType,
+      baseDomainType: poly.baseDomainType,
+      subtypes: poly.subtypes,
+      variants: poly.variants,
+      usesMappers: Array.from(subtypeMapperFqcns).sort(),
+    } satisfies PolymorphicHelperMapperContext;
+  });
+
+  const helperMapperClassNames = helperMappers.map(helper => `${helper.packageName}.${helper.mapperName}`);
+  const primitiveMapperFqcn = `${basePackage}.web.api.mapper.OpenApiPrimitiveMapper`;
+
+  const entityMappers = Array.from(entityMappersMap.values()).map(mapper => ({
+    ...mapper,
+    usesMappers: [...helperMapperClassNames, primitiveMapperFqcn],
+  } satisfies EntityMapperContext));
+
   return {
-    polymorphicMapper: {
-      mapperName: 'PolymorphicMapper',
-      packageName: `${basePackage}.web.api.mapper`,
-      polymorphicTypes,
-    },
-    entityMappers: Array.from(entityMappersMap.values()),
+    helperMappers,
+    entityMappers,
   };
 }
