@@ -70,4 +70,41 @@ describe('Hybrid mapper generator', () => {
     const responseTargets = mapper?.responseMappings.map(m => m.targetType) ?? [];
     expect(responseTargets).toEqual(['eu.example.app.service.api.dto.PartyInteraction']);
   });
+
+  it('injects referenced entity mappers so nested payloads are mapped', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/party-interaction-events',
+          method: 'POST',
+          requestBodySchema: 'PartyInteractionCreateEvent',
+          responseSchema: 'PartyInteractionCreateEvent',
+        },
+      ],
+      schemas: {
+        PartyInteractionCreateEvent: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            event: { $ref: '#/components/schemas/PartyInteractionCreateEventPayload' },
+          },
+        },
+        PartyInteractionCreateEventPayload: {
+          type: 'object',
+          properties: {
+            partyInteraction: { type: 'string' },
+          },
+        },
+      },
+    };
+
+    const { entityMappers } = generateHybridMappers(spec, 'eu.example.app');
+    const payloadMapper = entityMappers.find(m => m.entityName === 'PartyInteractionCreateEventPayload');
+    expect(payloadMapper).toBeDefined();
+
+    const mapper = entityMappers.find(m => m.entityName === 'PartyInteractionCreateEvent');
+    expect(mapper?.usesMappers).toContain(
+      'eu.example.app.web.api.mapper.PartyInteractionCreateEventPayloadMapper'
+    );
+  });
 });
