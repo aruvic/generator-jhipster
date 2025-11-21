@@ -4,8 +4,7 @@
 <%
     const requiresMappingImport = baseType === 'PartyOrPartyRole';
     const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
-    const wrapperVariants = variants.filter(variant => !variant.isBase && variant.isWrapper);
-    const bridgeVariants = variants.filter(variant => !variant.isBase && !variant.isWrapper);
+    const requestVariants = variants.filter(variant => !variant.isBase);
 %>
 /**
  * MapStruct helper mapper for the <%- baseType %> polymorphic family.
@@ -33,10 +32,11 @@ public interface <%- mapperName %> {
 <%_ } _%>
     <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
 
-<%_ if (baseType === 'PartyOrPartyRole') { _%>
-    @Mapping(target = "partyRole.paymentMethods", ignore = true)
+<%_ if (baseType === 'EntityRefOrValue') { _%>
+    <%- baseDomainType %> to<%- baseType %>(eu.ars_ict.oda_tmf683.service.api.dto.EntityRef source);
+
+    <%- baseDomainType %> to<%- baseType %>(eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValue source);
 <%_ } _%>
-    <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
 
     @ObjectFactory
     default <%- baseDtoType %> create<%- baseType %>Dto(<%- baseDomainType %> source) {
@@ -51,6 +51,29 @@ public interface <%- mapperName %> {
         return null;
     }
 
+<%_ if (baseType === 'EntityRefOrValue') { _%>
+    @ObjectFactory
+    default <%- baseDomainType %> create<%- baseType %>(Object source) {
+        if (source == null) {
+            return null;
+        }
+        if (source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefFVO
+            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValueFVO
+            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRef
+            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValue
+            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValueMVO) {
+            return new eu.ars_ict.oda_tmf683.domain.EntityRef();
+        }
+        return null;
+    }
+<%_ } _%>
+
+<%_ if (baseType !== 'EntityRefOrValue') { _%>
+  <%_ if (baseType === 'PartyOrPartyRole') { _%>
+    @Mapping(target = "partyRole.paymentMethods", ignore = true)
+  <%_ } _%>
+    <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
+
     @ObjectFactory
     default <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
         if (source == null) {
@@ -63,15 +86,16 @@ public interface <%- mapperName %> {
 <%_ } _%>
         return null;
     }
+<%_ } _%>
 
-<%_ const nonBaseVariants = variants.filter(variant => !variant.isBase && !variant.normalizedName.endsWith('MVO')); _%>
-<%_ for (const variant of nonBaseVariants) { const variantSubtypes = variant.subtypes && variant.subtypes.length > 0 ? variant.subtypes : subtypes; _%>
+<%_ for (const variant of requestVariants) { const variantSubtypes = variant.subtypes && variant.subtypes.length > 0 ? variant.subtypes : subtypes; _%>
 
 <%_ if (baseType === 'PartyOrPartyRole') { _%>
     @Mapping(target = "partyRole.paymentMethods", ignore = true)
 <%_ } _%>
     <%- baseDomainType %> to<%- baseType %>(<%- variant.dtoType %> source);
 
+<%_ if (baseType !== 'EntityRefOrValue') { _%>
     @ObjectFactory
     default <%- baseDomainType %> create<%- baseType %>(<%- variant.dtoType %> source) {
         if (source == null) {
@@ -84,27 +108,7 @@ public interface <%- mapperName %> {
 <%_ } _%>
         return null;
     }
-
 <%_ } _%>
-
-<%_ for (const variant of [...wrapperVariants, ...bridgeVariants]) { _%>
-
-    default <%- variant.dtoType %> to<%- variant.normalizedName %>(<%- baseDomainType %> source) {
-        if (source == null) {
-            return null;
-        }
-        final <%- baseDtoType %> dto = to<%- baseType %>Dto(source);
-        return dto instanceof <%- variant.dtoType %> ? (<%- variant.dtoType %>) dto : null;
-    }
-
-    @ObjectFactory
-    default <%- variant.dtoType %> create<%- variant.normalizedName %>From<%- baseType %>(<%- baseDomainType %> source) {
-        if (source == null) {
-            return null;
-        }
-        final <%- baseDtoType %> dto = create<%- baseType %>Dto(source);
-        return dto instanceof <%- variant.dtoType %> ? (<%- variant.dtoType %>) dto : null;
-    }
 
 <%_ } _%>
 }

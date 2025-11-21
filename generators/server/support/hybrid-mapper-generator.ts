@@ -352,6 +352,11 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
         return diff !== 0 ? diff : normalizedA.localeCompare(normalizedB);
       });
 
+      const hasFvoVariant = variants.some(variantName => normalizeTypeName(variantName).endsWith('FVO'));
+      const hasMvoVariant = variants.some(variantName => normalizeTypeName(variantName).endsWith('MVO'));
+      const hasRequestSpecificVariant = hasFvoVariant || hasMvoVariant;
+      const hasBaseVariant = variants.some(variantName => normalizeTypeName(variantName) === normalizedBase);
+
       for (const variant of variants) {
         const variantDtoType = buildDtoFqcn(variant, basePackage);
         const normalizedVariant = normalizeTypeName(variant);
@@ -359,7 +364,7 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
         const isBaseVariant = normalizedVariant === normalizedBase;
         const isMVO = normalizedVariant.endsWith('MVO');
 
-        if (!isMVO) {
+        if (isFVO || isMVO || (!hasRequestSpecificVariant && isBaseVariant)) {
           requestMappings.push({
             methodName: `to${baseEntity}`,
             sourceType: variantDtoType,
@@ -368,12 +373,14 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
           });
         }
 
-        responseMappings.push({
-          methodName: isBaseVariant ? `to${baseEntity}Dto` : `to${normalizedVariant}`,
-          sourceType: domainType,
-          targetType: variantDtoType,
-          annotations: [],
-        });
+        if (isBaseVariant || (!hasBaseVariant && isFVO)) {
+          responseMappings.push({
+            methodName: `to${baseEntity}Dto`,
+            sourceType: domainType,
+            targetType: variantDtoType,
+            annotations: [],
+          });
+        }
       }
 
       entityMappersMap.set(baseEntity, {
