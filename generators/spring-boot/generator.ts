@@ -42,6 +42,7 @@ import { addJavaImport, generateKeyStore, javaBeanCase } from '../java/support/i
 import { getPomVersionProperties, parseMavenPom } from '../maven/support/index.ts';
 import {
   generateMapStructMappers,
+  generateOpenApiDelegates,
   getJavaValueGeneratorForType,
   getSpecificationBuildForType,
   insertContentIntoApplicationProperties,
@@ -784,6 +785,15 @@ ${classProperties
           await generateMapStructMappers(this, application);
         } catch (err: any) {
           this.log.warn('SpringBoot: generateMapStructMappers failed (postWriting):');
+          this.log.warn(err?.message || err);
+        }
+      },
+      async generateOpenApiDelegates({ application }) {
+        this.log.info('SpringBoot (postWriting): invoking generateOpenApiDelegates');
+        try {
+          await generateOpenApiDelegates(this, application);
+        } catch (err: any) {
+          this.log.warn('SpringBoot: generateOpenApiDelegates failed (postWriting):');
           this.log.warn(err?.message || err);
         }
       },

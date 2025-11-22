@@ -32,6 +32,7 @@ export interface OpenAPIOperation {
   requestBodySchema?: string; // e.g., PartyInteractionFVO
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
+  parameters?: OpenAPIParameter[];
 }
 
 /**
@@ -67,6 +68,13 @@ export interface ParsedOpenAPISpec {
   schemas: Record<string, any>;
   basePath?: string;
   version?: string;
+}
+
+export interface OpenAPIParameter {
+  name: string;
+  in?: string;
+  required?: boolean;
+  schema?: any;
 }
 
 /**
@@ -168,6 +176,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
   if (spec.paths) {
     for (const [path, pathItem] of Object.entries(spec.paths)) {
       const pathObj = pathItem as Record<string, any>;
+      const pathParameters = (pathObj.parameters as any[]) || [];
 
       for (const [method, operation] of Object.entries(pathObj)) {
         if (!['get', 'post', 'put', 'patch', 'delete'].includes(method.toLowerCase())) {
@@ -181,6 +190,25 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           operationId: op.operationId,
           summary: op.summary,
         };
+
+        // Collect parameters (path + operation level)
+        const operationParameters = (op.parameters as any[]) || [];
+        const resolvedParams: OpenAPIParameter[] = [];
+        for (const param of [...pathParameters, ...operationParameters]) {
+          let resolved = param;
+          if (param?.$ref) {
+            resolved = resolveRef(param.$ref);
+          }
+          if (resolved) {
+            resolvedParams.push({
+              name: resolved.name,
+              in: resolved.in,
+              required: resolved.required,
+              schema: resolved.schema,
+            });
+          }
+        }
+        openAPIOperation.parameters = resolvedParams;
 
         // Extract request body schema - handle both direct schema and $ref
         let requestBodySpec = op.requestBody;
@@ -221,9 +249,8 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           }
         }
 
-        if (openAPIOperation.requestBodySchema || openAPIOperation.responseSchema) {
-          operations.push(openAPIOperation);
-        }
+        // Keep all operations, even those without explicit request/response schemas (e.g., deletes returning 204).
+        operations.push(openAPIOperation);
       }
     }
   }

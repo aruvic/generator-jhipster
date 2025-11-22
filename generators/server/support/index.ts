@@ -26,3 +26,4 @@ export * from './relationship.ts';
 export * from './string.ts';
 export * from './templates/field-values.ts';
 export * from './mapstruct-mapper-generator.ts';
+export * from './openapi-delegate-generator.ts';

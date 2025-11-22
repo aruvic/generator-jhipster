@@ -1,0 +1,260 @@
+package <%= packageName %>;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.net.URI;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Service;
+
+import <%= basePackage %>.domain.<%= resourceName %>;
+import <%= basePackage %>.repository.<%= resourceName %>Repository;
+import <%= basePackage %>.web.api.<%= interfaceName %>;
+import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
+<%_ 
+  const importedDtos = new Set(); 
+  operations.forEach(op => {
+    if (op.requestBodyType) importedDtos.add(op.requestBodyType);
+    if (op.responseType) importedDtos.add(op.responseType);
+  });
+  const formatDtoType = dto => dto === resourceName ? `${basePackage}.service.api.dto.${dto}` : dto;
+  importedDtos.forEach(dto => { 
+    if (dto === resourceName) return;
+  _%>
+import <%= basePackage %>.service.api.dto.<%= dto %>;
+<%_ }); _%>
+
+/**
+ * Generated delegate implementation for <%= interfaceName %>.
+ * Uses MapStruct mappers and Spring Data repositories for basic CRUD flows.
+ */
+@Service
+public class <%= className %> implements <%= interfaceName %> {
+
+    private final <%= resourceName %>Repository repository;
+    private final <%= resourceName %>Mapper mapper;
+
+    public <%= className %>(<%= resourceName %>Repository repository, <%= resourceName %>Mapper mapper) {
+        this.repository = repository;
+        this.mapper = mapper;
+    }
+
+<%_ operations.filter(op => op.kind === 'create').forEach(op => { 
+    const pathParams = op.parameters.filter(p => p.in === 'path');
+    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const bodyParam = op.parameters.find(p => p.in === 'body');
+    const responseType = op.responseType || resourceName;
+    const paramSig = [];
+    pathParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+    if (bodyParam) {
+      paramSig.push(`${basePackage}.service.api.dto.${bodyParam.javaType} ${bodyParam.varName}`);
+    }
+    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+%>
+    @Override
+    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+<%_ if (bodyParam) { _%>
+        <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        setTmfIdIfMissing(entity);
+        <%= resourceName %> saved = repository.save(entity);
+        return ResponseEntity.created(buildLocation(saved)).body(mapper.to<%= resourceName %>Dto(saved));
+<%_ } else { _%>
+        return new ResponseEntity<>(HttpStatus.NOT_IMPLEMENTED);
+<%_ } _%>
+    }
+
+<%_ }); _%>
+
+<%_ operations.filter(op => op.kind === 'list').forEach(op => { 
+    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const responseType = op.responseType || resourceName;
+    const paramSig = [];
+    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+%>
+    @Override
+    public ResponseEntity<List<<%= formatDtoType(responseType) %>>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+        List<<%= formatDtoType(responseType) %>> dtos = repository.findAll().stream().map(mapper::to<%= resourceName %>Dto).toList();
+        return ResponseEntity.ok(dtos);
+    }
+
+<%_ }); _%>
+
+<%_ operations.filter(op => op.kind === 'retrieve').forEach(op => { 
+    const pathParams = op.parameters.filter(p => p.in === 'path');
+    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
+    const responseType = op.responseType || resourceName;
+    const paramSig = [];
+    paramSig.push(`${idParam.javaType} ${idParam.varName}`);
+    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+%>
+    @Override
+    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+        }
+        return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(found.get()));
+    }
+
+<%_ }); _%>
+
+<%_ operations.filter(op => op.kind === 'delete').forEach(op => { 
+    const pathParams = op.parameters.filter(p => p.in === 'path');
+    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
+%>
+    @Override
+    public ResponseEntity<Void> <%= op.methodName %>(<%= `${idParam.javaType} ${idParam.varName}` %>) {
+        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+        }
+        repository.delete(found.get());
+        return ResponseEntity.noContent().build();
+    }
+
+<%_ }); _%>
+
+<%_ operations.filter(op => op.kind === 'patch').forEach(op => { 
+    const pathParams = op.parameters.filter(p => p.in === 'path');
+    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const bodyParam = op.parameters.find(p => p.in === 'body');
+    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
+    const responseType = op.responseType || resourceName;
+    const paramSig = [];
+    paramSig.push(`${idParam.javaType} ${idParam.varName}`);
+    if (bodyParam) {
+      paramSig.push(`${basePackage}.service.api.dto.${bodyParam.javaType} ${bodyParam.varName}`);
+    }
+    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+%>
+    @Override
+    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        if (found.isEmpty()) {
+            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+        }
+<%_ if (bodyParam) { _%>
+        <%= resourceName %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        copyNonNull(incoming, found.get());
+        setTmfIdIfMissing(found.get());
+        <%= resourceName %> saved = repository.save(found.get());
+        return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(saved));
+<%_ } else { _%>
+        return new ResponseEntity<>(HttpStatus.NOT_IMPLEMENTED);
+<%_ } _%>
+    }
+
+<%_ }); _%>
+
+    private Optional<<%= resourceName %>> findByIdOrTmfId(String id) {
+        Optional<Long> maybeLong = parseLong(id);
+        if (maybeLong.isPresent()) {
+            Optional<<%= resourceName %>> byId = repository.findById(maybeLong.get());
+            if (byId.isPresent()) {
+                return byId;
+            }
+        }
+        Optional<UUID> maybeUuid = parseUuid(id);
+        if (maybeUuid.isEmpty()) {
+            return Optional.empty();
+        }
+        return repository.findAll().stream().filter(entity -> {
+            UUID current = getTmfId(entity);
+            return current != null && current.equals(maybeUuid.get());
+        }).findFirst();
+    }
+
+    private boolean isParsableId(String id) {
+        return parseLong(id).isPresent() || parseUuid(id).isPresent();
+    }
+
+    private Optional<Long> parseLong(String value) {
+        try {
+            return value != null ? Optional.of(Long.parseLong(value)) : Optional.empty();
+        } catch (NumberFormatException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<UUID> parseUuid(String value) {
+        try {
+            return value != null ? Optional.of(UUID.fromString(value)) : Optional.empty();
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private UUID getTmfId(<%= resourceName %> entity) {
+        try {
+            Method getter = entity.getClass().getMethod("getTmfId");
+            Object value = getter.invoke(entity);
+            return value instanceof UUID ? (UUID) value : null;
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+            return null;
+        }
+    }
+
+    private void setTmfIdIfMissing(<%= resourceName %> entity) {
+        try {
+            Method getter = entity.getClass().getMethod("getTmfId");
+            Object currentValue = getter.invoke(entity);
+            if (Objects.nonNull(currentValue)) {
+                return;
+            }
+            Method setter = entity.getClass().getMethod("setTmfId", getter.getReturnType());
+            if (UUID.class.equals(getter.getReturnType())) {
+                setter.invoke(entity, UUID.randomUUID());
+            }
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+            // Entity has no tmfId or reflection failed; skip seeding.
+        }
+    }
+
+    private void copyNonNull(<%= resourceName %> source, <%= resourceName %> target) {
+        for (Method method : source.getClass().getMethods()) {
+            if (method.getParameterCount() == 0 && (method.getName().startsWith("get") || method.getName().startsWith("is"))) {
+                if ("getClass".equals(method.getName())) {
+                    continue;
+                }
+                Object value;
+                try {
+                    value = method.invoke(source);
+                } catch (IllegalAccessException | InvocationTargetException ignored) {
+                    continue;
+                }
+                if (value == null) {
+                    continue;
+                }
+                String baseName = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
+                String setterName = "set" + baseName;
+                try {
+                    Method setter = target.getClass().getMethod(setterName, method.getReturnType());
+                    setter.invoke(target, value);
+                } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+                    // Skip properties without compatible setters.
+                }
+            }
+        }
+    }
+
+    private URI buildLocation(<%= resourceName %> entity) {
+        UUID tmfId = getTmfId(entity);
+        String identifier = tmfId != null ? tmfId.toString() : Optional.ofNullable(extractId(entity)).map(Object::toString).orElse("");
+        return URI.create(String.format("/%s/%s", "<%= resourceSlug %>", identifier));
+    }
+
+    private Long extractId(<%= resourceName %> entity) {
+        try {
+            Method getter = entity.getClass().getMethod("getId");
+            Object value = getter.invoke(entity);
+            return value instanceof Number ? ((Number) value).longValue() : null;
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+            return null;
+        }
+    }
+}
