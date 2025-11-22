@@ -34,6 +34,7 @@ import { addJavaImport, generateKeyStore, javaBeanCase } from '../java/support/i
 import type { JavaArtifactType } from '../java-simple-application/types.ts';
 import {
   generateMapStructMappers,
+  generateOpenApiDelegates,
   getJavaValueGeneratorForType,
   getSpecificationBuildForType,
   insertContentIntoApplicationProperties,
@@ -950,6 +951,15 @@ if (os.isMacOsX() && !arch.isAmd64()) {
           await generateMapStructMappers(this, application);
         } catch (err: any) {
           this.log.warn('SpringBoot: generateMapStructMappers failed (postWriting):');
+          this.log.warn(err?.message || err);
+        }
+      },
+      async generateOpenApiDelegates({ application }) {
+        this.log.info('SpringBoot (postWriting): invoking generateOpenApiDelegates');
+        try {
+          await generateOpenApiDelegates(this, application);
+        } catch (err: any) {
+          this.log.warn('SpringBoot: generateOpenApiDelegates failed (postWriting):');
           this.log.warn(err?.message || err);
         }
       },
