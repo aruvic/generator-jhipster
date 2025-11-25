@@ -299,8 +299,8 @@ export function extractSchemaRef(schemaObj: any): string | undefined {
  */
 export function normalizeTypeName(name: string): string {
   if (!name) return name;
-  // Remove underscores, hyphens and spaces; preserve casing otherwise
-  return name.replace(/[_\-\s]+/g, '');
+  const segments = name.split(/[^A-Za-z0-9]+/g).filter(Boolean);
+  return segments.map(segment => segment.charAt(0).toUpperCase() + segment.slice(1)).join('');
 }
 
 /**

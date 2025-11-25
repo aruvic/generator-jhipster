@@ -142,6 +142,15 @@ const swaggerFiles = asWriteFilesSection<SpringBootApplication>({
       renameTo: moveToJavaPackageSrcDir,
       templates: ['config/OpenApiConfiguration.java'],
     },
+    {
+      path: `${SERVER_MAIN_SRC_DIR}_package_/`,
+      renameTo: moveToJavaPackageSrcDir,
+      templates: ['validation/EnumSizeValidator.java'],
+    },
+    {
+      path: SERVER_MAIN_RES_DIR,
+      templates: ['META-INF/services/jakarta.validation.ConstraintValidator'],
+    },
   ],
 });
 

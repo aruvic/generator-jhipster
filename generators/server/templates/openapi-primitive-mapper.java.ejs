@@ -4,6 +4,8 @@
 
 package <%- packageName %>;
 
+import java.util.Collections;
+import java.util.List;
 import org.mapstruct.Mapper;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
@@ -25,6 +27,20 @@ public interface OpenApiPrimitiveMapper {
 
     default <T> JsonNullable<T> toJsonNullable(T value) {
         return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    }
+
+    default List<String> toStringList(String value) {
+        if (value == null || value.isBlank()) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(value);
+    }
+
+    default String fromStringList(List<String> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return value.get(0);
     }
 
     @ObjectFactory
