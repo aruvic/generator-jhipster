@@ -25,14 +25,46 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
     const bodySupportsEntity = javaType => [resourceName, `${resourceName}FVO`, `${resourceName}MVO`].includes(javaType);
         const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
         const maybeThrows = op => op.throwsClause ? ` throws ${op.throwsClause}` : '';
+        const camelCase = value => (value ? value.charAt(0).toLowerCase() + value.slice(1) : value);
+        const allExtraTypes = new Map();
+        const extraRequestTypes = new Map();
+        const extraResponseTypes = new Map();
+        const registerExtraType = (target, type) => {
+            if (!type || type === resourceName || target.has(type)) {
+                if (!allExtraTypes.has(type) && target.has(type)) {
+                    allExtraTypes.set(type, target.get(type));
+                }
+                return;
+            }
+            const info = {
+                type,
+                mapperField: `${camelCase(type)}Mapper`,
+                mapperSimpleName: `${type}Mapper`,
+                mapperClass: `${basePackage}.web.api.mapper.${type}Mapper`,
+                domainFqcn: `${basePackage}.domain.${type}`,
+            };
+            target.set(type, info);
+            allExtraTypes.set(type, info);
+        };
+        operations.filter(op => op.kind === 'create').forEach(op => {
+            if (op.requestBodyType) {
+                registerExtraType(extraRequestTypes, op.requestBodyType);
+            }
+            if (op.responseType) {
+                registerExtraType(extraResponseTypes, op.responseType);
+            }
+        });
   importedDtos.forEach(dto => { 
     if (dto === resourceName) return;
   _%>
 import <%= basePackage %>.service.api.dto.<%= dto %>;
 <%_ }); _%>
+import <%= dep.mapperClass %>;
+<%_ }); _%>
 
-/**
- * Generated delegate implementation for <%= interfaceName %>.
+<%_ allExtraTypes.forEach(dep => { _%>
+import <%= dep.mapperClass %>;
+<%_ }); _%>
  * Uses MapStruct mappers and Spring Data repositories for basic CRUD flows.
  */
 @Service
@@ -40,10 +72,16 @@ public class <%= className %> implements <%= interfaceName %> {
 
     private final <%= resourceName %>Repository repository;
     private final <%= resourceName %>Mapper mapper;
+<%_ allExtraTypes.forEach(dep => { _%>
+    private final <%= dep.mapperSimpleName %> <%= dep.mapperField %>;
+<%_ }); _%>
 
-    public <%= className %>(<%= resourceName %>Repository repository, <%= resourceName %>Mapper mapper) {
+    public <%= className %>(<%= resourceName %>Repository repository, <%= resourceName %>Mapper mapper<%_ allExtraTypes.forEach(dep => { _%>, <%= dep.mapperSimpleName %> <%= dep.mapperField %><%_ }); _%>) {
         this.repository = repository;
         this.mapper = mapper;
+<%_ allExtraTypes.forEach(dep => { _%>
+        this.<%= dep.mapperField %> = <%= dep.mapperField %>;
+<%_ }); _%>
     }
 
 <%_ operations.filter(op => op.kind === 'create').forEach(op => { 
@@ -51,7 +89,13 @@ public class <%= className %> implements <%= interfaceName %> {
     const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
     const bodyParam = op.parameters.find(p => p.in === 'body');
     const responseMatchesResource = !op.responseType || op.responseType === resourceName;
-    const canPersist = Boolean(bodyParam && bodySupportsEntity(bodyParam.javaType) && responseMatchesResource);
+    const requestMapper = bodyParam ? extraRequestTypes.get(bodyParam.javaType) : undefined;
+    const responseMapper = op.responseType ? extraResponseTypes.get(op.responseType) : undefined;
+    const canPersist = Boolean(
+    bodyParam &&
+    (bodySupportsEntity(bodyParam.javaType) || requestMapper) &&
+    (responseMatchesResource || responseMapper || !op.responseType)
+    );
     const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
@@ -59,10 +103,20 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!canPersist) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); _%>
-        <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+<%_ if (requestMapper) { _%>
+    <%= resourceName %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
+<%_ } else { _%>
+    <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+<%_ } _%>
         setTmfIdIfMissing(entity);
         <%= resourceName %> saved = repository.save(entity);
-        return ResponseEntity.created(buildLocation(saved)).body(mapper.to<%= resourceName %>Dto(saved));
+<%_ if (!op.responseType) { _%>
+    return ResponseEntity.created(buildLocation(saved)).build();
+<%_ } else if (responseMapper) { _%>
+    return ResponseEntity.created(buildLocation(saved)).body(<%= responseMapper.mapperField %>.to<%= op.responseType %>(saved));
+<%_ } else { _%>
+    return ResponseEntity.created(buildLocation(saved)).body(mapper.to<%= resourceName %>Dto(saved));
+<%_ } _%>
 <%_ } _%>
     }
 
