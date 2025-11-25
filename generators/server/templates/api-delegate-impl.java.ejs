@@ -21,7 +21,10 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
     if (op.requestBodyType) importedDtos.add(op.requestBodyType);
     if (op.responseType) importedDtos.add(op.responseType);
   });
-  const formatDtoType = dto => dto === resourceName ? `${basePackage}.service.api.dto.${dto}` : dto;
+    const formatDtoType = dto => dto === resourceName ? `${basePackage}.service.api.dto.${dto}` : dto;
+    const bodySupportsEntity = javaType => [resourceName, `${resourceName}FVO`, `${resourceName}MVO`].includes(javaType);
+        const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
+        const maybeThrows = op => op.throwsClause ? ` throws ${op.throwsClause}` : '';
   importedDtos.forEach(dto => { 
     if (dto === resourceName) return;
   _%>
@@ -44,108 +47,115 @@ public class <%= className %> implements <%= interfaceName %> {
     }
 
 <%_ operations.filter(op => op.kind === 'create').forEach(op => { 
-    const pathParams = op.parameters.filter(p => p.in === 'path');
-    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
     const bodyParam = op.parameters.find(p => p.in === 'body');
-    const responseType = op.responseType || resourceName;
-    const paramSig = [];
-    pathParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
-    if (bodyParam) {
-      paramSig.push(`${basePackage}.service.api.dto.${bodyParam.javaType} ${bodyParam.varName}`);
-    }
-    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
+    const canPersist = Boolean(bodyParam && bodySupportsEntity(bodyParam.javaType) && responseMatchesResource);
+    const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
-    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
-<%_ if (bodyParam) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canPersist) { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); _%>
         <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
         setTmfIdIfMissing(entity);
         <%= resourceName %> saved = repository.save(entity);
         return ResponseEntity.created(buildLocation(saved)).body(mapper.to<%= resourceName %>Dto(saved));
-<%_ } else { _%>
-        return new ResponseEntity<>(HttpStatus.NOT_IMPLEMENTED);
 <%_ } _%>
     }
 
 <%_ }); _%>
 
 <%_ operations.filter(op => op.kind === 'list').forEach(op => { 
-    const queryParams = op.parameters.filter(p => p.in === 'query');
-    const responseType = op.responseType || resourceName;
-    const paramSig = [];
-    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? `ResponseEntity<List<${formatDtoType(op.responseType || resourceName)}>>`;
+    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
+    const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
-    public ResponseEntity<List<<%= formatDtoType(responseType) %>>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
-        List<<%= formatDtoType(responseType) %>> dtos = repository.findAll().stream().map(mapper::to<%= resourceName %>Dto).toList();
-        return ResponseEntity.ok(dtos);
+    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!responseMatchesResource) { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } else { _%>
+        List<<%= resourceName %>> entities = repository.findAll();
+        return ResponseEntity.ok(entities.stream().map(mapper::to<%= resourceName %>Dto).toList());
+<%_ } _%>
     }
 
 <%_ }); _%>
 
 <%_ operations.filter(op => op.kind === 'retrieve').forEach(op => { 
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
     const pathParams = op.parameters.filter(p => p.in === 'path');
-    const queryParams = op.parameters.filter(p => p.in === 'query');
-    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
-    const responseType = op.responseType || resourceName;
-    const paramSig = [];
-    paramSig.push(`${idParam.javaType} ${idParam.varName}`);
-    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+    const idParam = pathParams[0];
+    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
+    const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
-    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!idParam || !responseMatchesResource) { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } else { _%>
         Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(found.get()));
+<%_ } _%>
     }
 
 <%_ }); _%>
 
 <%_ operations.filter(op => op.kind === 'delete').forEach(op => { 
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
     const pathParams = op.parameters.filter(p => p.in === 'path');
-    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
+    const idParam = pathParams[0];
+    const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
-    public ResponseEntity<Void> <%= op.methodName %>(<%= `${idParam.javaType} ${idParam.varName}` %>) {
+    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!idParam) { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } else { _%>
         Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         repository.delete(found.get());
         return ResponseEntity.noContent().build();
+<%_ } _%>
     }
 
 <%_ }); _%>
 
 <%_ operations.filter(op => op.kind === 'patch').forEach(op => { 
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
     const pathParams = op.parameters.filter(p => p.in === 'path');
-    const queryParams = op.parameters.filter(p => p.in === 'query');
+    const idParam = pathParams[0];
     const bodyParam = op.parameters.find(p => p.in === 'body');
-    const idParam = pathParams[0] || { javaType: 'String', varName: 'id' };
-    const responseType = op.responseType || resourceName;
-    const paramSig = [];
-    paramSig.push(`${idParam.javaType} ${idParam.varName}`);
-    if (bodyParam) {
-      paramSig.push(`${basePackage}.service.api.dto.${bodyParam.javaType} ${bodyParam.varName}`);
-    }
-    queryParams.forEach(p => paramSig.push(`${p.javaType} ${p.varName}`));
+    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
+    const canPatch = Boolean(idParam && bodyParam && bodySupportsEntity(bodyParam.javaType) && responseMatchesResource);
+    const superArgs = op.parameters.map(p => p.varName).join(', ');
 %>
     @Override
-    public ResponseEntity<<%= formatDtoType(responseType) %>> <%= op.methodName %>(<%= paramSig.join(', ') %>) {
+    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canPatch) { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); const idParam = op.parameters.filter(p => p.in === 'path')[0]; _%>
         Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-<%_ if (bodyParam) { _%>
         <%= resourceName %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
         copyNonNull(incoming, found.get());
         setTmfIdIfMissing(found.get());
         <%= resourceName %> saved = repository.save(found.get());
         return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(saved));
-<%_ } else { _%>
-        return new ResponseEntity<>(HttpStatus.NOT_IMPLEMENTED);
 <%_ } _%>
     }
 

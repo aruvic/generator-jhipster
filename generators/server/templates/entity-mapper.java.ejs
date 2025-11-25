@@ -10,6 +10,7 @@ package <%- packageName %>;
 
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
+import org.mapstruct.BeanMapping;
 import org.mapstruct.ReportingPolicy;
 <%_ if (entityName === 'JsonPatch') { _%>
 import org.mapstruct.Named;
@@ -44,6 +45,11 @@ public interface <%- mapperName %> {
 <%_ for (const mapping of responseMappings) { _%>
   <%_ if (entityName === 'JsonPatch') { _%>
     @Mapping(target = "value", qualifiedByName = "wrapJsonPatchValue")
+  <%_ } _%>
+  <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
+    <%_ for (const annotation of mapping.annotations) { _%>
+    <%- annotation %>
+    <%_ } _%>
   <%_ } _%>
   <%_ if (entityName && (entityName === 'Supplier' || entityName === 'BusinessPartner' || entityName === 'Consumer' || entityName === 'Producer')) { _%>
     @Mapping(target = "paymentMethods", ignore = true)

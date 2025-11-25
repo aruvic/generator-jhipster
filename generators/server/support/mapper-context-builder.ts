@@ -286,6 +286,16 @@ function createMappingMethod(
           fieldsToIgnore.add(fieldName);
         }
       }
+      if (
+        fieldSchema.$ref ||
+        fieldSchema.type === 'array' ||
+        fieldSchema.type === 'object' ||
+        fieldSchema.oneOf ||
+        fieldSchema.anyOf ||
+        fieldSchema.allOf
+      ) {
+        fieldsToIgnore.add(fieldName);
+      }
       // Also check for arrays/lists of abstract types
       if (fieldSchema.items && fieldSchema.items.$ref) {
         const itemType = fieldSchema.items.$ref.split('/').pop() || '';

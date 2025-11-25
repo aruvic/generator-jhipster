@@ -122,14 +122,14 @@ import org.hibernate.type.SqlTypes;
 <%_ for (const relationship of relationships) { -%>
 <&_ if (fragment.relationship<%- relationship.relationshipNameCapitalized %>AnnotationSection) { -&>
   <%_ if (relationship.relationshipOneToMany) { -%>
-    @OneToMany(fetch = FetchType.LAZY, mappedBy = "<%- relationship.otherEntityRelationshipName %>")
+    @OneToMany(fetch = FetchType.LAZY, mappedBy = "<%- relationship.otherEntityRelationshipName %>"<%- enableSwaggerCodegen ? ', cascade = CascadeType.ALL' : '' %>)
   <%_ } else if (relationship.relationshipManyToOne) { -%>
-    @ManyToOne(<%- relationship.relationshipRequired ? 'optional = false' : 'fetch = FetchType.LAZY' %>)
+    @ManyToOne(<%- enableSwaggerCodegen ? `cascade = CascadeType.ALL${relationship.relationshipRequired ? ', optional = false' : ', fetch = FetchType.LAZY'}` : relationship.relationshipRequired ? 'optional = false' : 'fetch = FetchType.LAZY' %>)
     <%_ if (relationship.relationshipValidate && relationship.relationshipRequired) { _%>
     @NotNull
     <%_ } _%>
   <%_ } else if (relationship.relationshipManyToMany) { -%>
-    @ManyToMany(fetch = FetchType.LAZY<% if (!relationship.ownerSide) { %>, mappedBy = "<%- relationship.otherRelationship.propertyName %>"<% } %>)
+    @ManyToMany(fetch = FetchType.LAZY<% if (!relationship.ownerSide) { %>, mappedBy = "<%- relationship.otherRelationship.propertyName %>"<% } %><%- enableSwaggerCodegen ? ', cascade = CascadeType.ALL' : '' %>)
     <%_ if (relationship.ownerSide) { _%>
       <%_ if (relationship.relationshipValidate && relationship.relationshipRequired) { _%>
     @NotNull
@@ -155,7 +155,7 @@ import org.hibernate.type.SqlTypes;
     }, allowSetters = true)
     <%_ } _%>
     <%_ if (relationship.ownerSide) { -%>
-    @OneToOne(fetch = FetchType.LAZY<%- relationship.relationshipRequired ? ', optional = false' : '' %>)
+    @OneToOne(fetch = FetchType.LAZY<%- relationship.relationshipRequired ? ', optional = false' : '' %><%- enableSwaggerCodegen ? ', cascade = CascadeType.ALL' : '' %>)
       <%_ if (relationship.relationshipValidate && relationship.relationshipRequired) { _%>
     @NotNull
       <%_ } _%>
@@ -166,7 +166,7 @@ import org.hibernate.type.SqlTypes;
     @JoinColumn(unique = true)
       <%_ } _%>
     <%_ } else { _%>
-    @OneToOne(fetch = FetchType.LAZY, mappedBy = "<%- relationship.otherEntityRelationshipName %>")
+    @OneToOne(fetch = FetchType.LAZY, mappedBy = "<%- relationship.otherEntityRelationshipName %>"<%- enableSwaggerCodegen ? ', cascade = CascadeType.ALL' : '' %>)
     <%_ } -%>
   <%_ } -%>
 <&_ } -&>

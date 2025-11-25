@@ -43,6 +43,11 @@ springdoc:
     enabled: false
 ---
 
+<%_ if (addOpenapiGeneratorPlugin) { _%>
+openapi:
+  <%= dasherizedBaseName %>:
+    base-path: /api
+<%_ } _%>
 <%_ if (serviceDiscoveryEureka) { _%>
 eureka:
   client:

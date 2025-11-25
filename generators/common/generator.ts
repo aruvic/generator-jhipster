@@ -242,9 +242,15 @@ export default class CommonGenerator extends BaseApplicationGenerator<
       addJHipsterDependencies({ application }) {
         if (application.skipJhipsterDependencies) return;
 
+        const jhipsterVersion = application.jhipsterVersion;
+        if (typeof jhipsterVersion === 'string' && /-(alpha|beta|rc)/i.test(jhipsterVersion)) {
+          // Avoid adding devDependency pointing to an unpublished prerelease.
+          return;
+        }
+
         this.packageJson.merge({
           devDependencies: {
-            'generator-jhipster': application.jhipsterVersion,
+            'generator-jhipster': jhipsterVersion,
             ...Object.fromEntries((this.jhipsterConfig.blueprints ?? []).map(blueprint => [blueprint.name, blueprint.version])),
           },
         });

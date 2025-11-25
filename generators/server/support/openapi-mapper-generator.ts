@@ -29,6 +29,7 @@ export interface OpenAPIOperation {
   method: string;
   operationId?: string;
   summary?: string;
+  tags?: string[]; // e.g., ['Booking', 'Notifications']
   requestBodySchema?: string; // e.g., PartyInteractionFVO
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
@@ -189,6 +190,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           method: method.toUpperCase(),
           operationId: op.operationId,
           summary: op.summary,
+          tags: op.tags || [],
         };
 
         // Collect parameters (path + operation level)
@@ -224,8 +226,25 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           }
         }
 
-        // Extract response schema (prefer 200, then 201) - handle both direct and $ref
-        let responseStatus = op.responses?.['200'] || op.responses?.['201'];
+        // Extract response schema preferring successful (2xx) responses - handle both direct and $ref
+        const responses = op.responses ?? {};
+        const prioritizedStatuses = ['200', '201', '202', '204', '206'];
+        let responseStatus: any;
+
+        for (const status of prioritizedStatuses) {
+          if (responses[status]) {
+            responseStatus = responses[status];
+            break;
+          }
+        }
+
+        if (!responseStatus) {
+          const successEntry = Object.entries(responses).find(([code]) => /^2\d\d$/.test(code));
+          if (successEntry) {
+            responseStatus = successEntry[1];
+          }
+        }
+
         if (responseStatus?.$ref) {
           responseStatus = resolveRef(responseStatus.$ref);
         }
