@@ -21,6 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.js';
 import { JavaApplicationGenerator } from '../../generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../support/files.ts';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator {
   async beforeQueue() {
@@ -183,7 +184,7 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
       this.log.info(`Using OpenAPI specification at ${usedPath}`);
     }
     const destination = `${application.srcMainResources}swagger/api.yml`;
-    const finalContents = specContents.endsWith('\n') ? specContents : `${specContents}\n`;
+    const finalContents = sanitizeOpenApiSpec(specContents);
     this.writeDestination(destination, finalContents);
   }
 
@@ -201,5 +202,40 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
     }
     addCandidate(resolvedInputPath);
     return candidates;
+  }
+}
+
+/**
+ * Sanitize and normalize external OpenAPI specs so downstream generators (OpenAPI Generator, MapStruct)
+ * don't choke on overly complex example payloads or inconsistent line endings.
+ *
+ * - Parses YAML/JSON content
+ * - Strips `example`/`examples` blocks (they often contain unescaped quotes/newlines that break Java annotation generation)
+ * - Writes back as YAML with a trailing newline
+ */
+function sanitizeOpenApiSpec(rawContents: string): string {
+  try {
+    const specObject = parseYaml(rawContents);
+    const stripExamples = (node: any) => {
+      if (!node || typeof node !== 'object') return;
+
+      if ('example' in node) {
+        delete node.example;
+      }
+      if ('examples' in node) {
+        delete node.examples;
+      }
+
+      for (const value of Object.values(node)) {
+        stripExamples(value);
+      }
+    };
+
+    stripExamples(specObject);
+    const normalized = stringifyYaml(specObject, { lineWidth: 0 });
+    return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+  } catch (error) {
+    // If parsing fails, fall back to original content but keep newline termination
+    return rawContents.endsWith('\n') ? rawContents : `${rawContents}\n`;
   }
 }

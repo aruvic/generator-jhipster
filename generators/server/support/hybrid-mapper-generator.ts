@@ -184,6 +184,10 @@ function collectReferencedEntities(schema: any, referencedEntities: Set<string>)
     referencedEntities.add(stripDtoSuffix(ref));
   }
 
+  if (schema.type === 'array' && schema.items) {
+    collectReferencedEntities(schema.items, referencedEntities);
+  }
+
   if (schema.properties) {
     for (const propertySchema of Object.values<any>(schema.properties)) {
       collectReferencedEntities(propertySchema, referencedEntities);
@@ -414,7 +418,7 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
             methodName: `to${baseEntity}`,
             sourceType: variantDtoType,
             targetType: domainType,
-            annotations: isFVO ? ['@Mapping(target = "id", ignore = true)'] : [],
+            annotations: [...(isFVO ? ['@Mapping(target = "id", ignore = true)'] : [])],
           });
         }
 
