@@ -1,0 +1,30 @@
+package <%= packageName %>.validation;
+
+import jakarta.validation.ConstraintValidator;
+import jakarta.validation.ConstraintValidatorContext;
+import jakarta.validation.constraints.Size;
+
+/**
+ * Allows {@link Size} constraints to be applied to enums generated from OpenAPI specs.
+ * This keeps bean validation working even when max/min length metadata is present on enum properties.
+ */
+public class EnumSizeValidator implements ConstraintValidator<Size, Enum<?>> {
+
+    private int min;
+    private int max;
+
+    @Override
+    public void initialize(Size constraintAnnotation) {
+        min = constraintAnnotation.min();
+        max = constraintAnnotation.max();
+    }
+
+    @Override
+    public boolean isValid(Enum<?> value, ConstraintValidatorContext context) {
+        if (value == null) {
+            return true;
+        }
+        int length = value.toString().length();
+        return length >= min && length <= max;
+    }
+}

@@ -97,8 +97,7 @@ function isPolymorphic(schema: any, schemaName?: string): boolean {
   if (!schema) return false;
 
   const hasOneOf = Array.isArray(schema.oneOf) && schema.oneOf.length > 0;
-  const hasAnyOf = Array.isArray(schema.anyOf) && schema.anyOf.length > 0;
-  if (hasOneOf || hasAnyOf) {
+  if (hasOneOf) {
     return true;
   }
 
@@ -128,9 +127,25 @@ function isPolymorphic(schema: any, schemaName?: string): boolean {
  */
 function extractSubtypes(schema: any): string[] {
   const refs = schema.oneOf || schema.anyOf || [];
-  return refs
-    .map((ref: any) => extractSchemaRef(ref))
-    .filter((name: string | undefined): name is string => !!name);
+  const subtypeNames = refs
+    .map((ref: any) => {
+      const refName = extractSchemaRef(ref);
+      if (refName) {
+        return refName;
+      }
+      if (ref && typeof ref === 'object') {
+        const candidate = (ref as any).title ?? (ref as any)['x-class-name'];
+        if (candidate) {
+          return normalizeTypeName(candidate as string);
+        }
+      }
+      return undefined;
+    })
+    .filter((name: string | undefined): name is string => !!name)
+    .map((name: string) => stripDtoSuffix(name))
+    .filter((name: string) => name && name !== 'null');
+
+  return Array.from(new Set(subtypeNames));
 }
 
 function isObjectLikeSchema(schema: any): boolean {
@@ -223,18 +238,28 @@ function buildPolymorphicMapping(
   if (!isPolymorphic(schema, schemaName)) return null;
 
   const subtypeNames = extractSubtypes(schema);
-  if (subtypeNames.length === 0) return null;
-
-  // Filter out abstract schemas from subtypes
-  const concreteSubtypes = subtypeNames.filter(name => {
-    const entity = stripDtoSuffix(name);
-    return !ABSTRACT_SCHEMAS.has(entity);
-  });
-
-  if (concreteSubtypes.length === 0) return null;
-
   const baseType = stripDtoSuffix(schemaName);
   const normalizedBase = normalizeTypeName(baseType);
+  if (subtypeNames.length === 0) return null;
+
+  const subtypeInfos: SubtypeInfo[] = subtypeNames
+    .map(subtypeName => {
+      const domainCandidate = schemas[subtypeName] ? stripDtoSuffix(subtypeName) : baseType;
+      if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
+        return undefined;
+      }
+      return {
+        dtoType: buildDtoFqcn(subtypeName, basePackage),
+        domainType: buildDomainFqcn(domainCandidate, basePackage),
+        dtoSimpleName: subtypeName,
+        domainSimpleName: domainCandidate,
+      } satisfies SubtypeInfo;
+    })
+    .filter((info): info is SubtypeInfo => !!info);
+
+  if (subtypeInfos.length === 0) return null;
+
+  const uniqueSubtypeInfos = Array.from(new Map(subtypeInfos.map(info => [info.dtoType, info])).values());
   const variants = Array.from(schemaVariants.get(baseType) ?? new Set<string>([schemaName]));
   variants.sort((a, b) => {
     const normalizedA = normalizeTypeName(a);
@@ -251,37 +276,32 @@ function buildPolymorphicMapping(
     const diff = priority(normalizedA) - priority(normalizedB);
     return diff !== 0 ? diff : normalizedA.localeCompare(normalizedB);
   });
-  
-  const baseSubtypeEntities = new Set(concreteSubtypes.map(subtypeName => stripDtoSuffix(subtypeName)));
+
+  const baseSubtypeEntities = new Set(uniqueSubtypeInfos.map(subtypeInfo => subtypeInfo.domainSimpleName));
 
   return {
     baseType,
     baseDtoType: buildDtoFqcn(schemaName, basePackage),
     baseDomainType: buildDomainFqcn(baseType, basePackage),
-    subtypes: concreteSubtypes.map(subtypeName => {
-      const subEntity = stripDtoSuffix(subtypeName);
-      return {
-        dtoType: buildDtoFqcn(subtypeName, basePackage),
-        domainType: buildDomainFqcn(subEntity, basePackage),
-        dtoSimpleName: subtypeName,
-        domainSimpleName: subEntity,
-      };
-    }),
+    subtypes: uniqueSubtypeInfos,
     variants: variants.map(variantName => {
       const normalized = normalizeTypeName(variantName);
       const variantSchema = schemas[variantName];
       const variantSubtypeNames = extractSubtypes(variantSchema) ?? [];
       const variantSubtypeInfos: SubtypeInfo[] = variantSubtypeNames
-          .map(subtypeName => {
-            const subEntity = stripDtoSuffix(subtypeName);
-            return {
-              dtoType: buildDtoFqcn(subtypeName, basePackage),
-              domainType: buildDomainFqcn(subEntity, basePackage),
-              dtoSimpleName: subtypeName,
-              domainSimpleName: subEntity,
-            } satisfies SubtypeInfo;
-          })
-          .filter(subtypeInfo => !!subtypeInfo.domainSimpleName && !ABSTRACT_SCHEMAS.has(subtypeInfo.domainSimpleName));
+        .map(subtypeName => {
+          const domainCandidate = schemas[subtypeName] ? stripDtoSuffix(subtypeName) : baseType;
+          if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
+            return undefined;
+          }
+          return {
+            dtoType: buildDtoFqcn(subtypeName, basePackage),
+            domainType: buildDomainFqcn(domainCandidate, basePackage),
+            dtoSimpleName: subtypeName,
+            domainSimpleName: domainCandidate,
+          } satisfies SubtypeInfo;
+        })
+        .filter((subtypeInfo): subtypeInfo is SubtypeInfo => !!subtypeInfo);
       return {
         dtoType: buildDtoFqcn(variantName, basePackage),
         dtoSimpleName: variantName,
