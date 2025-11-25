@@ -85,6 +85,10 @@ export interface EntityMapping {
   annotations: string[];
 }
 
+const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
+
+type CrudPrefix = (typeof CRUD_PREFIXES)[number];
+
 /**
  * Schemas that don't have corresponding domain entities
  */
@@ -120,6 +124,50 @@ function isPolymorphic(schema: any, schemaName?: string): boolean {
     .filter(name => name && (!normalizedBase || name !== normalizedBase));
 
   return new Set(referencedTargets).size > 0;
+}
+
+function singularizeName(value: string): string {
+  if (!value) return value;
+  if (value.endsWith('ies') && value.length > 3) {
+    return value.slice(0, -3) + 'y';
+  }
+  if (value.endsWith('ses') && value.length > 3) {
+    return value.slice(0, -2);
+  }
+  if (value.endsWith('s') && !value.endsWith('ss') && value.length > 1) {
+    return value.slice(0, -1);
+  }
+  return value;
+}
+
+function detectCrudOperation(opId: string): { kind: CrudPrefix; resource: string } | undefined {
+  if (!opId) return undefined;
+
+  const prefix = CRUD_PREFIXES.find(p => opId.startsWith(p));
+  if (prefix) {
+    const resource = opId.substring(prefix.length);
+    if (resource) {
+      return { kind: prefix, resource };
+    }
+  }
+
+  const suffixMappings: Record<string, CrudPrefix> = {
+    Delete: 'delete',
+    Create: 'create',
+    Retrieve: 'retrieve',
+    List: 'list',
+    Patch: 'patch',
+  };
+
+  const suffix = Object.keys(suffixMappings).find(s => opId.endsWith(s));
+  if (suffix) {
+    const resource = opId.substring(0, opId.length - suffix.length);
+    if (resource) {
+      return { kind: suffixMappings[suffix], resource };
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -329,6 +377,18 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
   const processedPolyTypes = new Set<string>();
   const variantsByEntity = new Map<string, Set<string>>();
   const schemaVariants = new Map<string, Set<string>>();
+  const requestTargetsBySchema = new Map<string, Set<string>>();
+  const responseSourcesBySchema = new Map<string, Set<string>>();
+
+  const recordUsage = (target: Map<string, Set<string>>, key: string, value: string) => {
+    if (!key || !value) {
+      return;
+    }
+    if (!target.has(key)) {
+      target.set(key, new Set());
+    }
+    target.get(key)!.add(value);
+  };
 
   for (const schemaName of Object.keys(schemas)) {
     const base = stripDtoSuffix(schemaName);
@@ -341,6 +401,17 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
   for (const operation of spec.operations) {
     const requestSchema = operation.requestBodySchema;
     const responseSchema = operation.responseSchema;
+
+    const detection = detectCrudOperation(operation.operationId || '');
+    if (detection) {
+      const resourceEntity = singularizeName(normalizeTypeName(detection.resource));
+      if (requestSchema) {
+        recordUsage(requestTargetsBySchema, stripDtoSuffix(requestSchema), resourceEntity);
+      }
+      if (responseSchema) {
+        recordUsage(responseSourcesBySchema, stripDtoSuffix(responseSchema), resourceEntity);
+      }
+    }
 
     if (requestSchema) {
       const base = stripDtoSuffix(requestSchema);
@@ -399,6 +470,8 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
       const normalizedBase = normalizeTypeName(baseEntity);
       const operationVariants = new Set<string>(variantsByEntity.get(baseEntity) ?? []);
       operationVariants.add(schemaName);
+      const requestTargets = requestTargetsBySchema.get(baseEntity) ?? new Set<string>();
+      const responseSources = responseSourcesBySchema.get(baseEntity) ?? new Set<string>();
 
       const variants = Array.from(operationVariants).sort((a, b) => {
         const normalizedA = normalizeTypeName(a);
@@ -447,6 +520,46 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
             methodName: `to${baseEntity}Dto`,
             sourceType: domainType,
             targetType: variantDtoType,
+            annotations: [],
+          });
+        }
+      }
+
+      for (const targetEntity of requestTargets) {
+        if (targetEntity === baseEntity) {
+          continue;
+        }
+        const sourceType = buildDtoFqcn(baseEntity, basePackage);
+        const targetType = buildDomainFqcn(targetEntity, basePackage);
+        const methodName = `to${targetEntity}`;
+        const alreadyPresent = requestMappings.some(
+          mapping => mapping.methodName === methodName && mapping.sourceType === sourceType && mapping.targetType === targetType
+        );
+        if (!alreadyPresent) {
+          requestMappings.push({
+            methodName,
+            sourceType,
+            targetType,
+            annotations: ['@Mapping(target = "id", ignore = true)'],
+          });
+        }
+      }
+
+      for (const sourceEntity of responseSources) {
+        if (sourceEntity === baseEntity) {
+          continue;
+        }
+        const sourceType = buildDomainFqcn(sourceEntity, basePackage);
+        const targetType = buildDtoFqcn(baseEntity, basePackage);
+        const methodName = `to${baseEntity}`;
+        const alreadyPresent = responseMappings.some(
+          mapping => mapping.methodName === methodName && mapping.sourceType === sourceType && mapping.targetType === targetType
+        );
+        if (!alreadyPresent) {
+          responseMappings.push({
+            methodName,
+            sourceType,
+            targetType,
             annotations: [],
           });
         }

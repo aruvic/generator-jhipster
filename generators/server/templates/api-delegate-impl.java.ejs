@@ -3,9 +3,11 @@ package <%= packageName %>;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URI;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,7 +32,7 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
         const extraRequestTypes = new Map();
         const extraResponseTypes = new Map();
         const registerExtraType = (target, type) => {
-            if (!type || type === resourceName || target.has(type)) {
+            if (!type || type === resourceName || target.has(type) || bodySupportsEntity(type)) {
                 if (!allExtraTypes.has(type) && target.has(type)) {
                     allExtraTypes.set(type, target.get(type));
                 }
@@ -59,12 +61,10 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
   _%>
 import <%= basePackage %>.service.api.dto.<%= dto %>;
 <%_ }); _%>
-import <%= dep.mapperClass %>;
-<%_ }); _%>
-
 <%_ allExtraTypes.forEach(dep => { _%>
 import <%= dep.mapperClass %>;
 <%_ }); _%>
+/**
  * Uses MapStruct mappers and Spring Data repositories for basic CRUD flows.
  */
 @Service
@@ -104,10 +104,12 @@ public class <%= className %> implements <%= interfaceName %> {
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); _%>
 <%_ if (requestMapper) { _%>
-    <%= resourceName %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= resourceName %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
 <%_ } else { _%>
-    <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
 <%_ } _%>
+        copyByNormalizedName(<%= bodyParam.varName %>, entity, true, false);
+        seedDefaults(entity);
         setTmfIdIfMissing(entity);
         <%= resourceName %> saved = repository.save(entity);
 <%_ if (!op.responseType) { _%>
@@ -206,7 +208,7 @@ public class <%= className %> implements <%= interfaceName %> {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         <%= resourceName %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
-        copyNonNull(incoming, found.get());
+        copyByNormalizedName(incoming, found.get(), true, true);
         setTmfIdIfMissing(found.get());
         <%= resourceName %> saved = repository.save(found.get());
         return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(saved));
@@ -263,6 +265,25 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 
+<%_ if (resourceName === 'Booking') { _%>
+    private void seedDefaults(<%= resourceName %> entity) {
+        try {
+            Method getter = entity.getClass().getMethod("getBookingStatus");
+            Object currentValue = getter.invoke(entity);
+            if (currentValue == null) {
+                Method setter = entity.getClass().getMethod("setBookingStatus", getter.getReturnType());
+                setter.invoke(entity, "RECEIVED");
+            }
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+            // Skip default seeding when accessors are unavailable.
+        }
+    }
+<%_ } else { _%>
+    private void seedDefaults(<%= resourceName %> entity) {
+        // No defaults to seed for this resource.
+    }
+<%_ } _%>
+
     private void setTmfIdIfMissing(<%= resourceName %> entity) {
         try {
             Method getter = entity.getClass().getMethod("getTmfId");
@@ -279,31 +300,76 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 
-    private void copyNonNull(<%= resourceName %> source, <%= resourceName %> target) {
-        for (Method method : source.getClass().getMethods()) {
+    private void copyByNormalizedName(Object source, Object target, boolean skipNullValues, boolean overwriteExisting) {
+        Map<String, Method> settersByName = new HashMap<>();
+        Map<String, Method> gettersByName = new HashMap<>();
+
+        for (Method method : target.getClass().getMethods()) {
+            if (method.getParameterCount() == 1 && method.getName().startsWith("set")) {
+                settersByName.put(normalizeName(method.getName().substring(3)), method);
+            }
             if (method.getParameterCount() == 0 && (method.getName().startsWith("get") || method.getName().startsWith("is"))) {
-                if ("getClass".equals(method.getName())) {
-                    continue;
-                }
-                Object value;
-                try {
-                    value = method.invoke(source);
-                } catch (IllegalAccessException | InvocationTargetException ignored) {
-                    continue;
-                }
-                if (value == null) {
-                    continue;
-                }
-                String baseName = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
-                String setterName = "set" + baseName;
-                try {
-                    Method setter = target.getClass().getMethod(setterName, method.getReturnType());
-                    setter.invoke(target, value);
-                } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-                    // Skip properties without compatible setters.
-                }
+                String base = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
+                gettersByName.put(normalizeName(base), method);
             }
         }
+
+        for (Method method : source.getClass().getMethods()) {
+            if (method.getParameterCount() != 0) {
+                continue;
+            }
+            if (!(method.getName().startsWith("get") || method.getName().startsWith("is"))) {
+                continue;
+            }
+            if ("getClass".equals(method.getName())) {
+                continue;
+            }
+
+            Object value;
+            try {
+                value = method.invoke(source);
+            } catch (IllegalAccessException | InvocationTargetException ignored) {
+                continue;
+            }
+            if (skipNullValues && value == null) {
+                continue;
+            }
+
+            String baseName = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
+            String normalized = normalizeName(baseName);
+            Method setter = settersByName.get(normalized);
+            if (setter == null) {
+                continue;
+            }
+
+            if (!overwriteExisting) {
+                Method targetGetter = gettersByName.get(normalized);
+                if (targetGetter != null) {
+                    try {
+                        Object currentValue = targetGetter.invoke(target);
+                        if (currentValue != null) {
+                            continue;
+                        }
+                    } catch (IllegalAccessException | InvocationTargetException ignored) {
+                        // Fall through to attempt copy.
+                    }
+                }
+            }
+
+            Class<?> paramType = setter.getParameterTypes()[0];
+            if (value != null && !paramType.isAssignableFrom(value.getClass()) && !(paramType.isPrimitive())) {
+                continue;
+            }
+            try {
+                setter.invoke(target, value);
+            } catch (IllegalAccessException | InvocationTargetException ignored) {
+                // Skip properties without compatible setters.
+            }
+        }
+    }
+
+    private String normalizeName(String name) {
+        return name == null ? "" : name.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
     }
 
     private URI buildLocation(<%= resourceName %> entity) {
