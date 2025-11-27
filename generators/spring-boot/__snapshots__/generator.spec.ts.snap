@@ -9,6 +9,8 @@ exports[`generator - spring-boot addTestSpringFactory should add a test spring f
 }
 `;
 
+exports[`generator - spring-boot openapi delegate alignment should align delegate methods and types with OpenAPI generator conventions 1`] = `{}`;
+
 exports[`generator - spring-boot source api editJavaFile with springBeans should match file content snapshot 1`] = `
 {
   "src/main/java/com/mycompany/myapp/config/ApplicationProperties.java": {
