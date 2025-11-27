@@ -59,6 +59,7 @@ describe(`generator - ${generator}`, () => {
       expect(runResult.getSnapshot('**/spring.factories')).toMatchSnapshot();
     });
   });
+
   describe('with jwt', () => {
     before(async () => {
       await helpers
@@ -182,6 +183,23 @@ describe(`generator - ${generator}`, () => {
         return servicedChildRepository.findAllWithEagerRelationships();
     }`,
       );
+    });
+  });
+
+  describe('openapi delegate alignment', () => {
+    const openApiSpec = `openapi: 3.0.1\ninfo:\n  title: Pet API\n  version: 1.0.0\npaths:\n  /pets:\n    post:\n      operationId: create-pet-entry\n      tags:\n        - Pet\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              $ref: '#/components/schemas/PetCreate'\n      responses:\n        '201':\n          description: Created\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/Pet'\n    get:\n      operationId: listPets\n      tags:\n        - Pet\n      responses:\n        '200':\n          description: OK\n          content:\n            application/json:\n              schema:\n                type: array\n                items:\n                  $ref: '#/components/schemas/Pet'\n  /pets/{pet-id}:\n    get:\n      summary: Retrieve a pet\n      tags:\n        - Pet\n      parameters:\n        - name: pet-id\n          in: path\n          required: true\n          schema:\n            type: string\n        - name: include-history\n          in: query\n          schema:\n            type: boolean\n        - name: since\n          in: query\n          schema:\n            type: string\n            format: date-time\n      responses:\n        '200':\n          description: OK\n          content:\n            application/json:\n              schema:\n                $ref: '#/components/schemas/Pet'\n    delete:\n      operationId: deletePet\n      tags:\n        - Pet\n      parameters:\n        - name: pet-id\n          in: path\n          required: true\n          schema:\n            type: integer\n            format: int64\n        - name: return\n          in: query\n          schema:\n            type: string\n      responses:\n        '204':\n          description: No Content\n    patch:\n      operationId: patchPet\n      tags:\n        - Pet\n      parameters:\n        - name: pet-id\n          in: path\n          required: true\n          schema:\n            type: string\n      requestBody:\n        required: true\n        content:\n          application/json:\n            schema:\n              type: object\n              additionalProperties:\n                type: string\n      responses:\n        '200':\n          description: OK\n          content:\n            application/json:\n              schema:\n                type: object\n                additionalProperties:\n                  $ref: '#/components/schemas/PetStatus'\ncomponents:\n  schemas:\n    PetCreate:\n      type: object\n      properties:\n        name:\n          type: string\n        birthDate:\n          type: string\n          format: date\n    Pet:\n      type: object\n      properties:\n        id:\n          type: integer\n          format: int64\n        name:\n          type: string\n        registeredAt:\n          type: string\n          format: date-time\n    PetStatus:\n      type: object\n      additionalProperties:\n        type: string\n`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withJHipsterConfig({ baseName: 'petstore', enableSwaggerCodegen: true, skipClient: true })
+        .withMockedSource({ except: ['addTestSpringFactory'] })
+        .withMockedJHipsterGenerators({ filter: filterBasicServerGenerators })
+        .withFiles({ 'src/main/resources/swagger/api.yml': openApiSpec });
+    });
+
+    it('should align delegate methods and types with OpenAPI generator conventions', () => {
+      expect(runResult.getSnapshot('src/main/java/**/web/api/impl/*ApiDelegateImpl.java')).toMatchSnapshot();
     });
   });
 

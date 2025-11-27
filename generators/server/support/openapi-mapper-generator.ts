@@ -31,8 +31,10 @@ export interface OpenAPIOperation {
   summary?: string;
   tags?: string[]; // e.g., ['Booking', 'Notifications']
   requestBodySchema?: string; // e.g., PartyInteractionFVO
+  requestBodySchemaObject?: any; // Raw schema (may include $ref)
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
+  responseSchemaObject?: any; // Raw schema (may include $ref)
   parameters?: OpenAPIParameter[];
 }
 
@@ -220,6 +222,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
 
         if (requestBodySpec?.content?.['application/json']?.schema) {
           const requestSchema = requestBodySpec.content['application/json'].schema;
+          openAPIOperation.requestBodySchemaObject = requestSchema;
           const schemaName = getSchemaName(requestSchema);
           if (schemaName) {
             openAPIOperation.requestBodySchema = schemaName;
@@ -252,6 +255,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
         if (responseStatus?.content?.['application/json']?.schema) {
           const responseSchema = responseStatus.content['application/json'].schema;
           const resolvedSchema = responseSchema.$ref ? resolveRef(responseSchema.$ref) : responseSchema;
+          openAPIOperation.responseSchemaObject = responseSchema;
 
           if (resolvedSchema?.type === 'array' || responseSchema?.type === 'array') {
             openAPIOperation.responseIsArray = true;

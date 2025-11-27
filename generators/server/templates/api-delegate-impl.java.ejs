@@ -4,7 +4,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Map;
@@ -12,6 +11,9 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+<%_ if (imports?.length) { imports.forEach(fqcn => { _%>
+import <%= fqcn %>;
+<%_ }); } _%>
 
 import <%= basePackage %>.domain.<%= resourceName %>;
 import <%= basePackage %>.repository.<%= resourceName %>Repository;
