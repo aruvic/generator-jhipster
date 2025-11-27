@@ -32,6 +32,7 @@ export interface OpenAPIOperation {
   tags?: string[]; // e.g., ['Booking', 'Notifications']
   requestBodySchema?: string; // e.g., PartyInteractionFVO
   requestBodySchemaObject?: any; // Raw schema (may include $ref)
+  requestBodyRequired?: boolean;
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
   responseSchemaObject?: any; // Raw schema (may include $ref)
@@ -227,6 +228,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           if (schemaName) {
             openAPIOperation.requestBodySchema = schemaName;
           }
+          openAPIOperation.requestBodyRequired = Boolean(requestBodySpec?.required);
         }
 
         // Extract response schema preferring successful (2xx) responses - handle both direct and $ref
