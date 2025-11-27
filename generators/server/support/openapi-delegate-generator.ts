@@ -75,6 +75,19 @@ type ParameterContext = {
   resolvedType?: JavaResolvedType;
 };
 
+type DependencyDescriptor = {
+  key: string;
+  fieldName: string;
+  simpleName: string;
+  import: string;
+  order: number;
+};
+
+type EntityInfo = {
+  name: string;
+  fqcn: string;
+};
+
 type OperationContext = {
   kind: CrudPrefix;
   methodName: string;
@@ -87,6 +100,16 @@ type OperationContext = {
   fullSignature?: string; // Full method signature from generated interface
   returnType?: string; // Full return type with generics
   throwsClause?: string;
+  persistenceEntityName?: string;
+  persistenceEntityFqcn?: string;
+  persistenceRepositoryField?: string;
+  willPersist?: boolean;
+  requestMapperField?: string;
+  requestMapperMethod?: string;
+  responseMapperField?: string;
+  responseMapperMethod?: string;
+  responseEntityName?: string;
+  responseEntityFqcn?: string;
 };
 
 type ResourceContext = {
@@ -103,6 +126,11 @@ type ResourceContext = {
   hasDelete: boolean;
   hasPatch: boolean;
   idParamName?: string;
+  repositories: DependencyDescriptor[];
+  mappers: DependencyDescriptor[];
+  injections: DependencyDescriptor[];
+  repositoryMap?: Map<string, DependencyDescriptor>;
+  mapperMap?: Map<string, DependencyDescriptor>;
 };
 
 type CrudOperationMatch = {
@@ -397,6 +425,64 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
   }
 
   const contexts: ResourceContext[] = [];
+  const toDependencyKey = (value: string): string => value.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+
+  const ensureRepositoryDependency = (
+    ctx: ResourceContext,
+    entityName: string,
+    options: { primary?: boolean } = {},
+  ): DependencyDescriptor => {
+    const normalized = entityName || 'Resource';
+    if (!ctx.repositoryMap) {
+      ctx.repositoryMap = new Map();
+    }
+    const key = toDependencyKey(normalized);
+    let dependency = ctx.repositoryMap.get(key);
+    if (!dependency) {
+      const simpleName = `${normalized}Repository`;
+      const fieldName = options.primary ? 'repository' : `${camelize(normalized, { lowerFirst: true })}Repository`;
+      dependency = {
+        key,
+        fieldName,
+        simpleName,
+        import: `${application.packageName}.repository.${simpleName}`,
+        order: ctx.injections.length,
+      } satisfies DependencyDescriptor;
+      ctx.repositoryMap.set(key, dependency);
+      ctx.repositories.push(dependency);
+      ctx.injections.push(dependency);
+    }
+    return dependency;
+  };
+
+  const ensureMapperDependency = (
+    ctx: ResourceContext,
+    typeName: string,
+    options: { primary?: boolean } = {},
+  ): DependencyDescriptor => {
+    const normalized = typeName || 'Resource';
+    if (!ctx.mapperMap) {
+      ctx.mapperMap = new Map();
+    }
+    const key = toDependencyKey(normalized);
+    let dependency = ctx.mapperMap.get(key);
+    if (!dependency) {
+      const simpleName = `${normalized}Mapper`;
+      const fieldName = options.primary ? 'mapper' : `${camelize(normalized, { lowerFirst: true })}Mapper`;
+      dependency = {
+        key,
+        fieldName,
+        simpleName,
+        import: `${application.packageName}.web.api.mapper.${simpleName}`,
+        order: ctx.injections.length,
+      } satisfies DependencyDescriptor;
+      ctx.mapperMap.set(key, dependency);
+      ctx.mappers.push(dependency);
+      ctx.injections.push(dependency);
+    }
+    return dependency;
+  };
+
   const methodNamesByInterface = new Map<string, Set<string>>();
   const methodToInterface = new Map<
     string,
@@ -479,7 +565,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     let context = contexts.find(ctx => ctx.interfaceName === interfaceName);
     if (!context) {
-      context = {
+      const newContext: ResourceContext = {
         className: `${interfaceBase}ApiDelegateImpl`,
         interfaceName,
         resourceName,
@@ -493,13 +579,20 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         hasDelete: false,
         hasPatch: false,
         idParamName: undefined,
+        repositories: [],
+        mappers: [],
+        injections: [],
       };
-      contexts.push(context);
+      contexts.push(newContext);
+      context = newContext;
     } else if (context.resourceName !== resourceName) {
       generator.log.debug(
         `Interface ${interfaceName} already bound to resource ${context.resourceName}, ignoring alternate resource ${resourceName}`,
       );
     }
+
+    ensureRepositoryDependency(context, resourceName, { primary: true });
+    ensureMapperDependency(context, resourceName, { primary: true });
 
     if (descriptor?.matchedEntity?.fqcn) {
       context.domainFqcn = descriptor.matchedEntity.fqcn;
@@ -561,6 +654,56 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     const resolverOptions = dtoPackage ? { dtoPackage } : undefined;
     const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas }, resolverOptions);
+
+    const matchedEntityInfo: EntityInfo | undefined = descriptor?.matchedEntity
+      ? { name: descriptor.matchedEntity.name, fqcn: descriptor.matchedEntity.fqcn }
+      : undefined;
+    const primaryEntity: EntityInfo = matchedEntityInfo ?? {
+      name: resourceName,
+      fqcn: descriptor?.matchedEntity?.fqcn ?? `${application.packageName}.domain.${resourceName}`,
+    };
+
+    const requestEntityInfo: EntityInfo | undefined = descriptor?.requestEntityMatch
+      ? { name: descriptor.requestEntityMatch.name, fqcn: descriptor.requestEntityMatch.fqcn }
+      : undefined;
+    const responseEntityInfo: EntityInfo | undefined = descriptor?.responseEntityMatch
+      ? { name: descriptor.responseEntityMatch.name, fqcn: descriptor.responseEntityMatch.fqcn }
+      : undefined;
+
+    const isMutation = prefix === 'create' || prefix === 'patch';
+    const persistenceEntity = isMutation && requestEntityInfo ? requestEntityInfo : primaryEntity;
+    const persistenceRepository = ensureRepositoryDependency(context, persistenceEntity.name, {
+      primary: persistenceEntity.name === context.resourceName,
+    });
+
+    opContext.persistenceEntityName = persistenceEntity.name;
+    opContext.persistenceEntityFqcn = persistenceEntity.fqcn;
+    opContext.persistenceRepositoryField = persistenceRepository.fieldName;
+
+    const bodyParam = opContext.parameters.find(param => param.in === 'body');
+    if (bodyParam && isMutation) {
+      const requestMapperType = operation.requestBodySchema ?? persistenceEntity.name;
+      const requestMapper = ensureMapperDependency(context, requestMapperType, {
+        primary: requestMapperType === context.resourceName,
+      });
+      opContext.requestMapperField = requestMapper.fieldName;
+      opContext.requestMapperMethod = `to${persistenceEntity.name}`;
+      opContext.willPersist = true;
+    } else {
+      opContext.willPersist = false;
+    }
+
+    if (opContext.responseType) {
+      const responseEntity = responseEntityInfo ?? primaryEntity;
+      const responseMapper = ensureMapperDependency(context, responseEntity.name, {
+        primary: responseEntity.name === context.resourceName,
+      });
+      opContext.responseMapperField = responseMapper.fieldName;
+      opContext.responseEntityName = responseEntity.name;
+      opContext.responseEntityFqcn = responseEntity.fqcn;
+      opContext.responseMapperMethod = responseEntity.name === persistenceEntity.name ? `to${responseEntity.name}Dto` : `to${responseEntity.name}`;
+    }
+
     context.operations.push(opContext);
 
     switch (prefix) {
@@ -596,7 +739,14 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       operation.requestBodyResolvedType?.imports.forEach(fqcn => importSet.add(fqcn));
       operation.responseResolvedType?.imports.forEach(fqcn => importSet.add(fqcn));
     }
+    for (const dependency of context.repositories) {
+      importSet.add(dependency.import);
+    }
+    for (const dependency of context.mappers) {
+      importSet.add(dependency.import);
+    }
     context.imports = [...importSet].filter(fqcn => !BASE_TEMPLATE_IMPORTS.has(fqcn)).sort((a, b) => a.localeCompare(b));
+    context.injections.sort((a, b) => a.order - b.order);
   }
 
   if (contexts.length === 0) {

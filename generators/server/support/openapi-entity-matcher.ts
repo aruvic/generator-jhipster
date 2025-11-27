@@ -51,6 +51,8 @@ export interface OperationDescriptor {
   resourceToken?: string;
   resourceName?: string;
   matchedEntity?: MatchedEntityInfo;
+  requestEntityMatch?: MatchedEntityInfo;
+  responseEntityMatch?: MatchedEntityInfo;
   requestSchemaNames: string[];
   responseSchemaNames: string[];
   pathParameters: OpenAPIParameter[];
@@ -146,6 +148,9 @@ export class OpenApiEntityMatcher {
       matchedEntity = this.matchBySchemas([...requestSchemaNames, ...responseSchemaNames]);
     }
 
+    const requestEntityMatch = this.matchPreferredEntity(requestSchemaNames, matchedEntity);
+    const responseEntityMatch = this.matchPreferredEntity(responseSchemaNames, matchedEntity);
+
     let resourceName = matchedEntity?.name;
     let resourceToken = matchedEntity ? undefined : this.derivePrimaryToken(operation);
 
@@ -181,7 +186,54 @@ export class OpenApiEntityMatcher {
       };
     }
 
+    if (requestEntityMatch) {
+      descriptor.requestEntityMatch = {
+        name: requestEntityMatch.name,
+        fqcn: requestEntityMatch.fqcn,
+        entity: requestEntityMatch.entity,
+      };
+    }
+
+    if (responseEntityMatch) {
+      descriptor.responseEntityMatch = {
+        name: responseEntityMatch.name,
+        fqcn: responseEntityMatch.fqcn,
+        entity: responseEntityMatch.entity,
+      };
+    }
+
     return descriptor;
+  }
+
+  private matchPreferredEntity(schemaNames: string[], fallback?: EntitySummary): EntitySummary | undefined {
+    let directMatch: EntitySummary | undefined;
+    let bestMatch: EntitySummary | undefined;
+
+    for (const schemaName of schemaNames) {
+      const candidate = this.matchEntityBySchema(schemaName);
+      if (!candidate) {
+        continue;
+      }
+      if (!bestMatch) {
+        bestMatch = candidate;
+      }
+
+      const schemaCanonical = this.canonicalize(stripDtoSuffix(normalizeTypeName(schemaName)));
+      if (schemaCanonical && candidate.canonical === schemaCanonical) {
+        directMatch = candidate;
+        break;
+      }
+    }
+
+    if (directMatch) {
+      return directMatch;
+    }
+
+    if (bestMatch && (!fallback || bestMatch.canonical !== fallback.canonical)) {
+      return bestMatch;
+    }
+
+    return undefined;
   }
 
   private registerEntityAliases(summary: EntitySummary, entity: any): void {

@@ -4,9 +4,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -14,122 +14,79 @@ import org.springframework.stereotype.Service;
 <%_ if (imports?.length) { imports.forEach(fqcn => { _%>
 import <%= fqcn %>;
 <%_ }); } _%>
-
-import <%= basePackage %>.repository.<%= resourceName %>Repository;
 import <%= basePackage %>.web.api.<%= interfaceName %>;
-import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
-<%_ 
-    const importedDtos = new Set(); 
-    const shouldImportType = type => Boolean(type) && type !== 'Object' && type !== 'Void';
-    operations.forEach(op => {
-        if (shouldImportType(op.requestBodyType)) importedDtos.add(op.requestBodyType);
-        if (shouldImportType(op.responseType)) importedDtos.add(op.responseType);
-    });
-    const formatDtoType = dto => dto === resourceName ? `${basePackage}.service.api.dto.${dto}` : dto;
-    const bodySupportsEntity = javaType => [resourceName, `${resourceName}FVO`, `${resourceName}MVO`].includes(javaType);
-        const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
-        const maybeThrows = op => op.throwsClause ? ` throws ${op.throwsClause}` : '';
-        const camelCase = value => (value ? value.charAt(0).toLowerCase() + value.slice(1) : value);
-        const domainType = domainFqcn;
-        const allExtraTypes = new Map();
-        const extraRequestTypes = new Map();
-        const extraResponseTypes = new Map();
-        const registerExtraType = (target, type) => {
-                        if (!shouldImportType(type) || type === resourceName || target.has(type) || bodySupportsEntity(type)) {
-                            if (type && !allExtraTypes.has(type) && target.has(type)) {
-                    allExtraTypes.set(type, target.get(type));
-                }
-                return;
-            }
-            const info = {
-                type,
-                mapperField: `${camelCase(type)}Mapper`,
-                mapperSimpleName: `${type}Mapper`,
-                mapperClass: `${basePackage}.web.api.mapper.${type}Mapper`,
-                domainFqcn: `${basePackage}.domain.${type}`,
-            };
-            target.set(type, info);
-            allExtraTypes.set(type, info);
-        };
-        const asIdArg = param => {
-            if (!param) {
-                return 'null';
-            }
-            if (param.javaType === 'String') {
-                return param.varName;
-            }
-            return `String.valueOf(${param.varName})`;
-        };
-        operations.filter(op => op.kind === 'create').forEach(op => {
-            if (op.requestBodyType) {
-                registerExtraType(extraRequestTypes, op.requestBodyType);
-            }
-            if (op.responseType) {
-                registerExtraType(extraResponseTypes, op.responseType);
-            }
-        });
-  importedDtos.forEach(dto => { 
-    if (dto === resourceName) return;
-  _%>
-import <%= basePackage %>.service.api.dto.<%= dto %>;
-<%_ }); _%>
-<%_ allExtraTypes.forEach(dep => { _%>
-import <%= dep.mapperClass %>;
-<%_ }); _%>
-/**
- * Uses MapStruct mappers and Spring Data repositories for basic CRUD flows.
- */
+
+// Generated delegate implementation - do not edit manually.
 @Service
 public class <%= className %> implements <%= interfaceName %> {
 
-    private final <%= resourceName %>Repository repository;
-    private final <%= resourceName %>Mapper mapper;
-<%_ allExtraTypes.forEach(dep => { _%>
-    private final <%= dep.mapperSimpleName %> <%= dep.mapperField %>;
-<%_ }); _%>
+<%_ const domainType = domainFqcn;
+    const hasInjections = Array.isArray(injections) && injections.length > 0;
+    const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
+    const buildSuperArgs = op => op.parameters.map(p => p.varName).join(', ');
+    const maybeThrows = op => (op.throwsClause ? ` throws ${op.throwsClause}` : '');
+    const getBodyParam = op => op.parameters.find(param => param.in === 'body');
+    const getIdParam = op => op.parameters.find(param => param.in === 'path');
+    const asIdArg = param => {
+      if (!param) {
+        return 'null';
+      }
+      if (param.javaType === 'String') {
+        return param.varName;
+      }
+      return `String.valueOf(${param.varName})`;
+    };
+    const responseMapperField = op => op.responseMapperField ?? undefined;
+    const responseMapperMethod = op => op.responseMapperMethod ?? undefined;
+    const repositoryField = op => op.persistenceRepositoryField ?? 'repository';
+    const requestMapperField = op => op.requestMapperField ?? 'mapper';
+    const requestMapperMethod = op => op.requestMapperMethod ?? `to${op.persistenceEntityName ?? resourceName}`;
+    const persistenceType = op => op.persistenceEntityFqcn ?? domainType;
+    const constructorArgs = hasInjections
+      ? `\n${injections.map(dep => `        ${dep.simpleName} ${dep.fieldName}`).join(',\n')}\n    `
+      : '';
+_%>
+<%_ if (hasInjections) { injections.forEach(dep => { _%>
+    private final <%= dep.simpleName %> <%= dep.fieldName %>;
+<%_ }); } else { _%>
+    // No dependencies required for this delegate.
+<%_ } _%>
 
-    public <%= className %>(<%= resourceName %>Repository repository, <%= resourceName %>Mapper mapper<%_ allExtraTypes.forEach(dep => { _%>, <%= dep.mapperSimpleName %> <%= dep.mapperField %><%_ }); _%>) {
-        this.repository = repository;
-        this.mapper = mapper;
-<%_ allExtraTypes.forEach(dep => { _%>
-        this.<%= dep.mapperField %> = <%= dep.mapperField %>;
-<%_ }); _%>
+    public <%= className %>(<%- constructorArgs %>) {
+<%_ if (hasInjections) { injections.forEach(dep => { _%>
+        this.<%= dep.fieldName %> = <%= dep.fieldName %>;
+<%_ }); } _%>
     }
 
 <%_ operations.filter(op => op.kind === 'create').forEach(op => { 
     const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
-    const bodyParam = op.parameters.find(p => p.in === 'body');
-    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
-    const requestMapper = bodyParam ? extraRequestTypes.get(bodyParam.javaType) : undefined;
-    const responseMapper = op.responseType ? extraResponseTypes.get(op.responseType) : undefined;
-    const canPersist = Boolean(
-    bodyParam &&
-    (bodySupportsEntity(bodyParam.javaType) || requestMapper) &&
-    (responseMatchesResource || responseMapper || !op.responseType)
-    );
-    const superArgs = op.parameters.map(p => p.varName).join(', ');
-%>
+    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
+    const bodyParam = getBodyParam(op);
+    const superArgs = buildSuperArgs(op);
+    const repoField = repositoryField(op);
+    const mapperField = requestMapperField(op);
+    const mapperMethod = requestMapperMethod(op);
+    const responseField = responseMapperField(op);
+    const responseMethod = responseMapperMethod(op);
+    const canPersist = Boolean(op.willPersist && bodyParam && repoField && mapperField && mapperMethod);
+    const hasResponseBody = Boolean(op.responseType);
+    const canMapResponse = !hasResponseBody || Boolean(responseField && responseMethod);
+    const persistenceTypeFqcn = persistenceType(op);
+_%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canPersist) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canPersist || !canMapResponse) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); _%>
-<%_ if (requestMapper) { _%>
-        <%= domainType %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
 <%_ } else { _%>
-        <%= domainType %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
-<%_ } _%>
+        <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
         copyByNormalizedName(<%= bodyParam.varName %>, entity, true, false);
         seedDefaults(entity);
         setTmfIdIfMissing(entity);
-        <%= domainType %> saved = repository.save(entity);
-<%_ if (!op.responseType) { _%>
-    return ResponseEntity.created(buildLocation(saved)).build();
-<%_ } else if (responseMapper) { _%>
-    return ResponseEntity.created(buildLocation(saved)).body(<%= responseMapper.mapperField %>.to<%= op.responseType %>(saved));
+        <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);
+<%_ if (!hasResponseBody) { _%>
+        return ResponseEntity.created(buildLocation(saved)).build();
 <%_ } else { _%>
-    return ResponseEntity.created(buildLocation(saved)).body(mapper.to<%= resourceName %>Dto(saved));
+        return ResponseEntity.created(buildLocation(saved)).body(this.<%= responseField %>.<%= responseMethod %>(saved));
 <%_ } _%>
 <%_ } _%>
     }
@@ -138,17 +95,21 @@ public class <%= className %> implements <%= interfaceName %> {
 
 <%_ operations.filter(op => op.kind === 'list').forEach(op => { 
     const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? `ResponseEntity<List<${formatDtoType(op.responseType || resourceName)}>>`;
-    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
-    const superArgs = op.parameters.map(p => p.varName).join(', ');
-%>
+    const methodReturnType = op.returnType ?? 'ResponseEntity<List<Object>>';
+    const superArgs = buildSuperArgs(op);
+    const repoField = repositoryField(op);
+    const responseField = responseMapperField(op);
+    const responseMethod = responseMapperMethod(op);
+    const canHandle = Boolean(repoField && responseField && responseMethod);
+    const persistenceTypeFqcn = persistenceType(op);
+_%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!responseMatchesResource) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        List<<%= domainType %>> entities = repository.findAll();
-        return ResponseEntity.ok(entities.stream().map(mapper::to<%= resourceName %>Dto).toList());
+        java.util.List<<%= persistenceTypeFqcn %>> entities = this.<%= repoField %>.findAll();
+        return ResponseEntity.ok(entities.stream().map(this.<%= responseField %>::<%= responseMethod %>).toList());
 <%_ } _%>
     }
 
@@ -156,22 +117,23 @@ public class <%= className %> implements <%= interfaceName %> {
 
 <%_ operations.filter(op => op.kind === 'retrieve').forEach(op => { 
     const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
-    const pathParams = op.parameters.filter(p => p.in === 'path');
-    const idParam = pathParams[0];
-    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
-    const superArgs = op.parameters.map(p => p.varName).join(', ');
-%>
+    const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
+    const superArgs = buildSuperArgs(op);
+    const idParam = getIdParam(op);
+    const responseField = responseMapperField(op);
+    const responseMethod = responseMapperMethod(op);
+    const canHandle = Boolean(idParam && responseField && responseMethod);
+_%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!idParam || !responseMatchesResource) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
+<%_ } else { const idArg = asIdArg(idParam); _%>
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-        return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(found.get()));
+        return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(found.get()));
 <%_ } _%>
     }
 
@@ -180,20 +142,21 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ operations.filter(op => op.kind === 'delete').forEach(op => { 
     const paramSig = buildParamSignature(op);
     const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
-    const pathParams = op.parameters.filter(p => p.in === 'path');
-    const idParam = pathParams[0];
-    const superArgs = op.parameters.map(p => p.varName).join(', ');
-%>
+    const superArgs = buildSuperArgs(op);
+    const idParam = getIdParam(op);
+    const repoField = repositoryField(op);
+    const canHandle = Boolean(idParam && repoField);
+_%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!idParam) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
+<%_ } else { const idArg = asIdArg(idParam); _%>
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-        repository.delete(found.get());
+        this.<%= repoField %>.delete(found.get());
         return ResponseEntity.noContent().build();
 <%_ } _%>
     }
@@ -202,28 +165,32 @@ public class <%= className %> implements <%= interfaceName %> {
 
 <%_ operations.filter(op => op.kind === 'patch').forEach(op => { 
     const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? `ResponseEntity<${formatDtoType(op.responseType || resourceName)}>`;
-    const pathParams = op.parameters.filter(p => p.in === 'path');
-    const idParam = pathParams[0];
-    const bodyParam = op.parameters.find(p => p.in === 'body');
-    const responseMatchesResource = !op.responseType || op.responseType === resourceName;
-    const canPatch = Boolean(idParam && bodyParam && bodySupportsEntity(bodyParam.javaType) && responseMatchesResource);
-    const superArgs = op.parameters.map(p => p.varName).join(', ');
-%>
+    const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
+    const superArgs = buildSuperArgs(op);
+    const idParam = getIdParam(op);
+    const bodyParam = getBodyParam(op);
+    const repoField = repositoryField(op);
+    const mapperField = requestMapperField(op);
+    const mapperMethod = requestMapperMethod(op);
+    const responseField = responseMapperField(op);
+    const responseMethod = responseMapperMethod(op);
+    const canHandle = Boolean(idParam && bodyParam && repoField && mapperField && mapperMethod && responseField && responseMethod);
+    const persistenceTypeFqcn = persistenceType(op);
+_%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%= paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canPatch) { _%>
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+<%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); const idParam = op.parameters.filter(p => p.in === 'path')[0]; _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
+<%_ } else { const idArg = asIdArg(idParam); _%>
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-        <%= domainType %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= persistenceTypeFqcn %> incoming = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
         copyByNormalizedName(incoming, found.get(), true, true);
         setTmfIdIfMissing(found.get());
-        <%= domainType %> saved = repository.save(found.get());
-        return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(saved));
+        <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(found.get());
+        return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(saved));
 <%_ } _%>
     }
 
@@ -267,7 +234,7 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 
-    private UUID getTmfId(<%= domainType %> entity) {
+    private UUID getTmfId(Object entity) {
         try {
             Method getter = entity.getClass().getMethod("getTmfId");
             Object value = getter.invoke(entity);
@@ -278,7 +245,7 @@ public class <%= className %> implements <%= interfaceName %> {
     }
 
 <%_ if (resourceName === 'Booking') { _%>
-    private void seedDefaults(<%= domainType %> entity) {
+    private void seedDefaults(Object entity) {
         try {
             Method getter = entity.getClass().getMethod("getBookingStatus");
             Object currentValue = getter.invoke(entity);
@@ -291,12 +258,12 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 <%_ } else { _%>
-    private void seedDefaults(<%= domainType %> entity) {
+    private void seedDefaults(Object entity) {
         // No defaults to seed for this resource.
     }
 <%_ } _%>
 
-    private void setTmfIdIfMissing(<%= domainType %> entity) {
+    private void setTmfIdIfMissing(Object entity) {
         try {
             Method getter = entity.getClass().getMethod("getTmfId");
             Object currentValue = getter.invoke(entity);
@@ -384,13 +351,13 @@ public class <%= className %> implements <%= interfaceName %> {
         return name == null ? "" : name.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
     }
 
-    private URI buildLocation(<%= domainType %> entity) {
+    private URI buildLocation(Object entity) {
         UUID tmfId = getTmfId(entity);
         String identifier = tmfId != null ? tmfId.toString() : Optional.ofNullable(extractId(entity)).map(Object::toString).orElse("");
         return URI.create(String.format("/%s/%s", "<%= resourceSlug %>", identifier));
     }
 
-    private Long extractId(<%= domainType %> entity) {
+    private Long extractId(Object entity) {
         try {
             Method getter = entity.getClass().getMethod("getId");
             Object value = getter.invoke(entity);
