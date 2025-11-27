@@ -402,15 +402,6 @@ const createModelType = (modelName: string, dtoPackage?: string): JavaResolvedTy
   return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports });
 };
 
-const ensureDtoImport = (resolved: JavaResolvedType, modelName: string, dtoPackage?: string): JavaResolvedType => {
-  if (!dtoPackage) {
-    return resolved;
-  }
-  const imports = new Set<string>(resolved.imports);
-  addImport(imports, `${dtoPackage}.${modelName}`);
-  return createJavaType({ ...resolved, imports });
-};
-
 const resolveJavaTypeInternal = (
   schema: any,
   { schemas = {} }: JavaTypeResolverContext = {},
@@ -442,10 +433,10 @@ const resolveJavaTypeInternal = (
       const referencedSchema = schemas?.[refName];
       if (referencedSchema) {
         const resolved = resolveJavaTypeInternal(referencedSchema, { schemas }, options, state);
-        if (resolved.rawType === modelName || (!resolved.isContainer && !resolved.isPrimitive)) {
-          return ensureDtoImport(resolved, modelName, dtoPackage);
+        if (resolved.isContainer || resolved.isPrimitive) {
+          return resolved;
         }
-        return resolved;
+        return createModelType(modelName, dtoPackage);
       }
     } finally {
       state.resolvingRefs.delete(refName);
@@ -574,7 +565,14 @@ const resolveJavaTypeInternal = (
         });
       }
       if (schema.properties || schema.title) {
-        const title = schema.title ?? Object.keys(schema.properties ?? {})[0];
+        const currentRef = state.refStack[state.refStack.length - 1];
+        if (currentRef && schemas?.[currentRef] === schema) {
+          const modelName = toModelName(currentRef, { prefix: modelPrefix });
+          return createModelType(modelName, dtoPackage);
+        }
+        const propertyKeys = Object.keys(schema.properties ?? {});
+        const firstNonAnnotationProperty = propertyKeys.find(key => !key.startsWith('@'));
+        const title = schema.title ?? firstNonAnnotationProperty ?? propertyKeys[0];
         if (title) {
           const modelName = toModelName(title, { prefix: modelPrefix });
           return createModelType(modelName, dtoPackage);
