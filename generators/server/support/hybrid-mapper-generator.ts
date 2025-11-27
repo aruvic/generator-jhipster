@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-import type { ParsedOpenAPISpec } from './openapi-mapper-generator.ts';
+import type { OpenAPIOperation, ParsedOpenAPISpec } from './openapi-mapper-generator.ts';
 import {
   buildDomainFqcn,
   buildDtoFqcn,
@@ -26,6 +26,7 @@ import {
   normalizeTypeName,
   stripDtoSuffix,
 } from './openapi-mapper-generator.ts';
+import type { OperationDescriptor } from './openapi-entity-matcher.ts';
 
 /**
  * Polymorphic helper mapper context (per abstract family)
@@ -85,10 +86,6 @@ export interface EntityMapping {
   annotations: string[];
 }
 
-const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
-
-type CrudPrefix = (typeof CRUD_PREFIXES)[number];
-
 /**
  * Schemas that don't have corresponding domain entities
  */
@@ -138,36 +135,6 @@ function singularizeName(value: string): string {
     return value.slice(0, -1);
   }
   return value;
-}
-
-function detectCrudOperation(opId: string): { kind: CrudPrefix; resource: string } | undefined {
-  if (!opId) return undefined;
-
-  const prefix = CRUD_PREFIXES.find(p => opId.startsWith(p));
-  if (prefix) {
-    const resource = opId.substring(prefix.length);
-    if (resource) {
-      return { kind: prefix, resource };
-    }
-  }
-
-  const suffixMappings: Record<string, CrudPrefix> = {
-    Delete: 'delete',
-    Create: 'create',
-    Retrieve: 'retrieve',
-    List: 'list',
-    Patch: 'patch',
-  };
-
-  const suffix = Object.keys(suffixMappings).find(s => opId.endsWith(s));
-  if (suffix) {
-    const resource = opId.substring(0, opId.length - suffix.length);
-    if (resource) {
-      return { kind: suffixMappings[suffix], resource };
-    }
-  }
-
-  return undefined;
 }
 
 /**
@@ -367,7 +334,11 @@ function buildPolymorphicMapping(
  * - Dedicated polymorphic helper mappers per abstract family
  * - Entity mappers referencing those helpers via MapStruct uses
  */
-export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: string): {
+export function generateHybridMappers(
+  spec: ParsedOpenAPISpec,
+  basePackage: string,
+  operationDescriptors?: Map<OpenAPIOperation, OperationDescriptor>,
+): {
   helperMappers: PolymorphicHelperMapperContext[];
   entityMappers: EntityMapperContext[];
 } {
@@ -399,12 +370,18 @@ export function generateHybridMappers(spec: ParsedOpenAPISpec, basePackage: stri
   }
 
   for (const operation of spec.operations) {
+    const descriptor = operationDescriptors?.get(operation);
     const requestSchema = operation.requestBodySchema;
     const responseSchema = operation.responseSchema;
 
-    const detection = detectCrudOperation(operation.operationId || '');
-    if (detection) {
-      const resourceEntity = singularizeName(normalizeTypeName(detection.resource));
+    const resourceCandidate =
+      descriptor?.matchedEntity?.name ??
+      descriptor?.resourceName ??
+      (requestSchema ? stripDtoSuffix(requestSchema) : undefined) ??
+      (responseSchema ? stripDtoSuffix(responseSchema) : undefined);
+    const resourceEntity = resourceCandidate ? singularizeName(normalizeTypeName(resourceCandidate)) : undefined;
+
+    if (resourceEntity) {
       if (requestSchema) {
         recordUsage(requestTargetsBySchema, stripDtoSuffix(requestSchema), resourceEntity);
       }

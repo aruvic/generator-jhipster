@@ -35,9 +35,18 @@ import {
 import type { Application as SpringBootApplication } from '../types.ts';
 
 import { type OpenAPIOperation, type OpenAPIParameter, parseOpenAPISpec } from './openapi-mapper-generator.ts';
+import { OpenApiEntityMatcher, type OperationDescriptor } from './openapi-entity-matcher.ts';
 
 const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
 type CrudPrefix = (typeof CRUD_PREFIXES)[number];
+
+const CRUD_SUFFIX_MAPPINGS: Record<string, CrudPrefix> = {
+  Delete: 'delete',
+  Create: 'create',
+  Retrieve: 'retrieve',
+  List: 'list',
+  Patch: 'patch',
+};
 
 const BASE_TEMPLATE_IMPORTS = new Set([
   'java.lang.reflect.InvocationTargetException',
@@ -52,6 +61,8 @@ const BASE_TEMPLATE_IMPORTS = new Set([
   'org.springframework.http.ResponseEntity',
   'org.springframework.stereotype.Service',
 ]);
+
+const RESOURCE_SUFFIXES_TO_STRIP = new Set(['dto', 'request', 'response', 'payload', 'command', 'input', 'output']);
 
 type ParameterContext = {
   name: string;
@@ -92,6 +103,13 @@ type ResourceContext = {
   hasDelete: boolean;
   hasPatch: boolean;
   idParamName?: string;
+};
+
+type CrudOperationMatch = {
+  operation: OpenAPIOperation;
+  descriptor?: OperationDescriptor;
+  kind: CrudPrefix;
+  operationIdFragment?: string;
 };
 
 /**
@@ -210,6 +228,94 @@ function splitParameters(paramsStr: string): string[] {
   return params;
 }
 
+function classifyCrudOperation(
+  operation: OpenAPIOperation,
+  descriptor?: OperationDescriptor,
+): { kind: CrudPrefix; operationIdFragment?: string } | undefined {
+  const opId = operation.operationId?.trim() ?? '';
+  const lowerOpId = opId.toLowerCase();
+  const method = operation.method?.toUpperCase?.() ?? '';
+  const descriptorHasPathParams = descriptor?.pathParameters?.length ? descriptor.pathParameters.length > 0 : undefined;
+  const operationHasPathParams = (operation.parameters ?? []).some(param => param.in === 'path');
+  const hasPathParams =
+    descriptorHasPathParams === undefined
+      ? operationHasPathParams || Boolean(operation.path && operation.path.includes('{'))
+      : descriptorHasPathParams;
+
+  let kind: CrudPrefix | undefined;
+  let operationIdFragment: string | undefined;
+
+  switch (descriptor?.operationType) {
+    case 'create':
+      kind = 'create';
+      break;
+    case 'delete':
+      kind = 'delete';
+      break;
+    case 'read':
+      kind = hasPathParams ? 'retrieve' : 'list';
+      break;
+    case 'update':
+      if (method === 'PATCH' || lowerOpId.startsWith('patch') || lowerOpId.includes('patch')) {
+        kind = 'patch';
+      } else if (method === 'PUT' || lowerOpId.includes('update')) {
+        kind = 'patch';
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (!kind && opId) {
+    const prefix = CRUD_PREFIXES.find(candidate => lowerOpId.startsWith(candidate));
+    if (prefix) {
+      kind = prefix;
+      operationIdFragment = opId.substring(prefix.length);
+    } else {
+      const suffix = Object.keys(CRUD_SUFFIX_MAPPINGS).find(candidate => opId.endsWith(candidate));
+      if (suffix) {
+        kind = CRUD_SUFFIX_MAPPINGS[suffix];
+        operationIdFragment = opId.substring(0, opId.length - suffix.length);
+      }
+    }
+  }
+
+  if (!kind) {
+    switch (method) {
+      case 'POST':
+        kind = 'create';
+        break;
+      case 'DELETE':
+        kind = 'delete';
+        break;
+      case 'GET':
+        kind = hasPathParams ? 'retrieve' : 'list';
+        break;
+      case 'PATCH':
+        kind = 'patch';
+        break;
+      case 'PUT':
+        kind = 'patch';
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!kind) {
+    return undefined;
+  }
+
+  if (!operationIdFragment && opId) {
+    const matchedPrefix = CRUD_PREFIXES.find(candidate => lowerOpId.startsWith(candidate));
+    if (matchedPrefix) {
+      operationIdFragment = opId.substring(matchedPrefix.length);
+    }
+  }
+
+  return { kind, operationIdFragment: operationIdFragment?.trim() ? operationIdFragment : undefined };
+}
+
 /**
  * Generate ApiDelegate implementations generically for CRUD-style operationIds (create/list/retrieve/delete/patch).
  * This keeps generation aligned with any OAS3 definition using those operationId prefixes.
@@ -236,73 +342,24 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     return;
   }
 
-  function detectCrudOperation(operation: OpenAPIOperation): { kind: CrudPrefix; resource: string } | undefined {
-    const opId = operation.operationId?.trim() ?? '';
+  const entityMatcher = new OpenApiEntityMatcher(generator, application.packageName);
+  const operationDescriptors = entityMatcher.describeOperations(spec);
 
-    if (opId) {
-      const prefix = CRUD_PREFIXES.find(p => opId.startsWith(p));
-      if (prefix) {
-        const resource = opId.substring(prefix.length);
-        if (resource) {
-          return { kind: prefix, resource };
-        }
-      }
-
-      const suffixMappings: Record<string, CrudPrefix> = {
-        Delete: 'delete',
-        Create: 'create',
-        Retrieve: 'retrieve',
-        List: 'list',
-        Patch: 'patch',
-      };
-
-      const suffix = Object.keys(suffixMappings).find(s => opId.endsWith(s));
-      if (suffix) {
-        const resource = opId.substring(0, opId.length - suffix.length);
-        if (resource) {
-          return { kind: suffixMappings[suffix], resource };
-        }
-      }
+  const operations: OpenAPIOperation[] = spec.operations || [];
+  const crudOperations: CrudOperationMatch[] = operations.flatMap(operation => {
+    const descriptor = operationDescriptors.get(operation);
+    const classification = classifyCrudOperation(operation, descriptor);
+    if (!classification) {
+      return [] as CrudOperationMatch[];
     }
-
-    const method = operation.method?.toUpperCase?.() ?? '';
-    let inferredKind: CrudPrefix | undefined;
-
-    switch (method) {
-      case 'POST':
-        inferredKind = 'create';
-        break;
-      case 'GET':
-        inferredKind = operation.path?.includes('{') ? 'retrieve' : 'list';
-        break;
-      case 'DELETE':
-        inferredKind = 'delete';
-        break;
-      case 'PATCH':
-        inferredKind = 'patch';
-        break;
-      default:
-        inferredKind = undefined;
-    }
-
-    if (!inferredKind) {
-      return undefined;
-    }
-
-    const staticSegments = (operation.path || '')
-      .split('/')
-      .map(segment => segment.trim())
-      .filter(segment => segment.length > 0 && !(segment.startsWith('{') && segment.endsWith('}')));
-
-    const pathResource = staticSegments[staticSegments.length - 1] ?? staticSegments[0];
-    const tagResource = operation.tags?.find(tag => !isVersionTag(tag)) ?? operation.tags?.[0];
-    const resource = pathResource ?? tagResource ?? 'Resource';
-
-    return { kind: inferredKind, resource };
-  }
-
-  const operations = spec.operations || [];
-  const crudOperations = operations.filter(operation => detectCrudOperation(operation));
+    const result: CrudOperationMatch = {
+      operation,
+      descriptor,
+      kind: classification.kind,
+      operationIdFragment: classification.operationIdFragment,
+    };
+    return [result];
+  });
 
   if (crudOperations.length === 0) {
     generator.log.debug('No CRUD-style OpenAPI operations found, skipping delegate implementation generation');
@@ -380,11 +437,12 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
   const dtoPackage = application.packageName ? `${application.packageName}.service.api.dto` : undefined;
 
-  for (const operation of crudOperations) {
-    const detection = detectCrudOperation(operation);
-    if (!detection) continue;
-    const { kind: prefix, resource } = detection;
-    const resourceName = deriveResourceName(operation, resource);
+  for (const { operation, descriptor, kind: prefix, operationIdFragment } of crudOperations) {
+    const resourceName = deriveResourceName(operation, descriptor, operationIdFragment);
+    const resourceSlugSource = descriptor?.resourceToken
+      ? sanitizeResourceToken(descriptor.resourceToken)
+      : resourceName;
+    const resourceSlug = toKebabCase(resourceSlugSource || resourceName);
 
     const candidateMethodNames = [
       operation.operationId?.trim(),
@@ -415,7 +473,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     }
 
     const methodBinding = bindingEntry?.binding;
-    const fallbackInterfaceBase = deriveInterfaceBase(operation, resourceName);
+    const fallbackInterfaceBase = deriveInterfaceBase(operation, resourceName, descriptor);
     const interfaceName = methodBinding?.interfaceName ?? `${fallbackInterfaceBase}ApiDelegate`;
     const interfaceBase = methodBinding?.interfaceBase ?? fallbackInterfaceBase;
 
@@ -425,8 +483,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         className: `${interfaceBase}ApiDelegateImpl`,
         interfaceName,
         resourceName,
-        resourceSlug: toKebabCase(resourceName),
-        domainFqcn: `${application.packageName}.domain.${resourceName}`,
+        resourceSlug,
+        domainFqcn: descriptor?.matchedEntity?.fqcn ?? `${application.packageName}.domain.${resourceName}`,
         operations: [],
         imports: [],
         hasCreate: false,
@@ -441,6 +499,18 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       generator.log.debug(
         `Interface ${interfaceName} already bound to resource ${context.resourceName}, ignoring alternate resource ${resourceName}`,
       );
+    }
+
+    if (descriptor?.matchedEntity?.fqcn) {
+      context.domainFqcn = descriptor.matchedEntity.fqcn;
+    }
+
+    if (!context.idParamName && descriptor?.pathParameters?.length) {
+      context.idParamName = descriptor.pathParameters[0]?.name;
+    }
+
+    if (resourceSlug && context.resourceSlug !== resourceSlug) {
+      context.resourceSlug = resourceSlug;
     }
 
     const interfaceMethodNames = methodNamesByInterface.get(interfaceName) ?? new Set<string>();
@@ -511,7 +581,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         break;
     }
 
-    const idParam = operation.parameters?.find(param => param.in === 'path');
+    const idParam = operation.parameters?.find((param: OpenAPIParameter) => param.in === 'path');
     if (idParam?.name) {
       context.idParamName = idParam.name;
     }
@@ -591,18 +661,66 @@ function toKebabCase(value: string): string {
     .toLowerCase();
 }
 
-function deriveResourceName(operation: OpenAPIOperation, resource: string): string {
-  const sanitizedResource = sanitizeResourceToken(resource);
+function deriveResourceName(
+  operation: OpenAPIOperation,
+  descriptor: OperationDescriptor | undefined,
+  operationIdFragment?: string,
+): string {
+  if (descriptor?.matchedEntity?.name) {
+    return descriptor.matchedEntity.name;
+  }
+  if (descriptor?.resourceName) {
+    return descriptor.resourceName;
+  }
+
+  const descriptorToken = sanitizeResourceToken(descriptor?.resourceToken);
+  if (descriptorToken) {
+    return singularize(capitalizeFirst(descriptorToken));
+  }
+
+  const schemaCandidate = descriptor?.requestSchemaNames?.[0] ?? descriptor?.responseSchemaNames?.[0];
+  const sanitizedSchema = sanitizeResourceToken(schemaCandidate);
+  if (sanitizedSchema) {
+    return singularize(capitalizeFirst(sanitizedSchema));
+  }
+
+  const sanitizedFragment = sanitizeResourceToken(operationIdFragment);
+  if (sanitizedFragment) {
+    return singularize(capitalizeFirst(sanitizedFragment));
+  }
+
   const tagCandidate = operation.tags?.find(tag => !isVersionTag(tag)) ?? operation.tags?.[0];
   const sanitizedTag = sanitizeResourceToken(tagCandidate);
+  if (sanitizedTag) {
+    return singularize(capitalizeFirst(sanitizedTag));
+  }
 
-  const baseToken = sanitizedResource || sanitizedTag || resource || tagCandidate || '';
-  const capitalized = capitalizeFirst(baseToken);
-  return singularize(capitalized);
+  const staticSegments = getStaticPathSegments(operation.path);
+  if (staticSegments.length > 0) {
+    const pathToken = sanitizeResourceToken(staticSegments[staticSegments.length - 1]);
+    if (pathToken) {
+      return singularize(capitalizeFirst(pathToken));
+    }
+  }
+
+  if (operationIdFragment?.trim()) {
+    return singularize(capitalizeFirst(operationIdFragment.trim()));
+  }
+
+  return 'Resource';
 }
 
-function deriveInterfaceBase(operation: OpenAPIOperation, resourceName: string): string {
-  const segments = operation.path?.split('/')?.filter(segment => segment.length > 0) ?? [];
+function deriveInterfaceBase(
+  operation: OpenAPIOperation,
+  resourceName: string,
+  descriptor?: OperationDescriptor,
+): string {
+  const descriptorToken = sanitizeResourceToken(descriptor?.resourceToken);
+  if (descriptorToken) {
+    return capitalizeFirst(descriptorToken);
+  }
+
+  const segments = getStaticPathSegments(operation.path);
   if (segments.length > 0) {
     const sanitized = sanitizeResourceToken(segments[0]);
     if (sanitized) {
@@ -610,6 +728,16 @@ function deriveInterfaceBase(operation: OpenAPIOperation, resourceName: string):
     }
   }
   return resourceName;
+}
+
+function getStaticPathSegments(path?: string): string[] {
+  if (!path) {
+    return [];
+  }
+  return path
+    .split('/')
+    .map(segment => segment.trim())
+    .filter(segment => segment.length > 0 && !(segment.startsWith('{') && segment.endsWith('}')));
 }
 
 function sanitizeResourceToken(value?: string): string {
@@ -628,7 +756,15 @@ function sanitizeResourceToken(value?: string): string {
     return '';
   }
 
-  return tokens.map(token => token.charAt(0).toUpperCase() + token.slice(1)).join('');
+  const normalizedTokens = [...tokens];
+  while (
+    normalizedTokens.length > 1 &&
+    RESOURCE_SUFFIXES_TO_STRIP.has(normalizedTokens[normalizedTokens.length - 1].toLowerCase())
+  ) {
+    normalizedTokens.pop();
+  }
+
+  return normalizedTokens.map(token => token.charAt(0).toUpperCase() + token.slice(1)).join('');
 }
 
 function isVersionTag(tag?: string): boolean {
