@@ -34,8 +34,8 @@ import {
 } from '../../type-utils.ts';
 import type { Application as SpringBootApplication } from '../types.ts';
 
-import { type OpenAPIOperation, type OpenAPIParameter, parseOpenAPISpec } from './openapi-mapper-generator.ts';
 import { OpenApiEntityMatcher, type OperationDescriptor } from './openapi-entity-matcher.ts';
+import { type OpenAPIOperation, type OpenAPIParameter, parseOpenAPISpec } from './openapi-mapper-generator.ts';
 
 const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
 type CrudPrefix = (typeof CRUD_PREFIXES)[number];
@@ -73,6 +73,8 @@ type ParameterContext = {
   signatureFragment?: string; // Original declaration with annotations, modifiers, etc.
   annotations?: string[];
   resolvedType?: JavaResolvedType;
+  required?: boolean;
+  orderIndex?: number;
 };
 
 type DependencyDescriptor = {
@@ -455,11 +457,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     return dependency;
   };
 
-  const ensureMapperDependency = (
-    ctx: ResourceContext,
-    typeName: string,
-    options: { primary?: boolean } = {},
-  ): DependencyDescriptor => {
+  const ensureMapperDependency = (ctx: ResourceContext, typeName: string, options: { primary?: boolean } = {}): DependencyDescriptor => {
     const normalized = typeName || 'Resource';
     if (!ctx.mapperMap) {
       ctx.mapperMap = new Map();
@@ -525,9 +523,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
   for (const { operation, descriptor, kind: prefix, operationIdFragment } of crudOperations) {
     const resourceName = deriveResourceName(operation, descriptor, operationIdFragment);
-    const resourceSlugSource = descriptor?.resourceToken
-      ? sanitizeResourceToken(descriptor.resourceToken)
-      : resourceName;
+    const resourceSlugSource = descriptor?.resourceToken ? sanitizeResourceToken(descriptor.resourceToken) : resourceName;
     const resourceSlug = toKebabCase(resourceSlugSource || resourceName);
 
     const candidateMethodNames = [
@@ -591,18 +587,21 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       );
     }
 
-    ensureRepositoryDependency(context, resourceName, { primary: true });
-    ensureMapperDependency(context, resourceName, { primary: true });
+    const isPrimaryResource = resourceName === context.resourceName;
+    ensureRepositoryDependency(context, resourceName, { primary: isPrimaryResource });
+    ensureMapperDependency(context, resourceName, { primary: isPrimaryResource });
 
     if (descriptor?.matchedEntity?.fqcn) {
-      context.domainFqcn = descriptor.matchedEntity.fqcn;
+      if (!context.domainFqcn || descriptor.matchedEntity.name === context.resourceName) {
+        context.domainFqcn = descriptor.matchedEntity.fqcn;
+      }
     }
 
     if (!context.idParamName && descriptor?.pathParameters?.length) {
       context.idParamName = descriptor.pathParameters[0]?.name;
     }
 
-    if (resourceSlug && context.resourceSlug !== resourceSlug) {
+    if (resourceSlug && (!context.resourceSlug || resourceName === context.resourceName)) {
       context.resourceSlug = resourceSlug;
     }
 
@@ -638,6 +637,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     }
 
     let methodName = parsedSignature?.methodName ?? bindingEntry?.methodName;
+    if (!methodName && operation.operationId?.trim()) {
+      methodName = operation.operationId.trim();
+    }
     if (methodName) {
       if (interfaceMethodNames.has(methodName)) {
         methodName = toJavaOperationName(operation.operationId, operation.method, operation.path, {
@@ -695,13 +697,16 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     if (opContext.responseType) {
       const responseEntity = responseEntityInfo ?? primaryEntity;
-      const responseMapper = ensureMapperDependency(context, responseEntity.name, {
-        primary: responseEntity.name === context.resourceName,
-      });
-      opContext.responseMapperField = responseMapper.fieldName;
-      opContext.responseEntityName = responseEntity.name;
-      opContext.responseEntityFqcn = responseEntity.fqcn;
-      opContext.responseMapperMethod = responseEntity.name === persistenceEntity.name ? `to${responseEntity.name}Dto` : `to${responseEntity.name}`;
+      const canMapResponse = Boolean(opContext.persistenceEntityName && responseEntity.name === opContext.persistenceEntityName);
+      if (canMapResponse) {
+        const responseMapper = ensureMapperDependency(context, responseEntity.name, {
+          primary: responseEntity.name === context.resourceName,
+        });
+        opContext.responseMapperField = responseMapper.fieldName;
+        opContext.responseEntityName = responseEntity.name;
+        opContext.responseEntityFqcn = responseEntity.fqcn;
+        opContext.responseMapperMethod = `to${responseEntity.name}Dto`;
+      }
     }
 
     context.operations.push(opContext);
@@ -860,11 +865,7 @@ function deriveResourceName(
   return 'Resource';
 }
 
-function deriveInterfaceBase(
-  operation: OpenAPIOperation,
-  resourceName: string,
-  descriptor?: OperationDescriptor,
-): string {
+function deriveInterfaceBase(operation: OpenAPIOperation, resourceName: string, descriptor?: OperationDescriptor): string {
   const descriptorToken = sanitizeResourceToken(descriptor?.resourceToken);
   if (descriptorToken) {
     return capitalizeFirst(descriptorToken);
@@ -907,10 +908,7 @@ function sanitizeResourceToken(value?: string): string {
   }
 
   const normalizedTokens = [...tokens];
-  while (
-    normalizedTokens.length > 1 &&
-    RESOURCE_SUFFIXES_TO_STRIP.has(normalizedTokens[normalizedTokens.length - 1].toLowerCase())
-  ) {
+  while (normalizedTokens.length > 1 && RESOURCE_SUFFIXES_TO_STRIP.has(normalizedTokens[normalizedTokens.length - 1].toLowerCase())) {
     normalizedTokens.pop();
   }
 
@@ -946,6 +944,7 @@ function buildOperationContext(
 
   const paramNameSet = new Set<string>();
   const parameterContexts: ParameterContext[] = [];
+  let paramOrder = 0;
   const returnType = parsedSignature?.returnType;
   const throwsClause = parsedSignature?.throwsClause;
 
@@ -961,6 +960,7 @@ function buildOperationContext(
       const sanitizedVarName = toJavaParamName(param.name ?? 'param', { usedNames: paramNameSet });
       const resolvedType = specParam?.schema ? resolveJavaType(specParam.schema, resolverContext, resolverOptions) : undefined;
       const javaType = resolvedType?.baseType ?? extractBaseTypeFromTypeString(cleanedType);
+      const required = specParam?.required ?? specParam?.in === 'path';
       parameterContexts.push({
         name: param.name,
         varName: sanitizedVarName,
@@ -970,6 +970,8 @@ function buildOperationContext(
         signatureFragment: replaceVarNameInDeclaration(param.declaration, sanitizedVarName),
         annotations: param.annotations,
         resolvedType,
+        required,
+        orderIndex: paramOrder++,
       });
     }
   } else {
@@ -979,6 +981,7 @@ function buildOperationContext(
     for (const param of [...pathParams, ...otherParams]) {
       const sanitizedVarName = toJavaParamName(param.name ?? 'param', { usedNames: paramNameSet });
       const resolvedType = param.schema ? resolveJavaType(param.schema, resolverContext, resolverOptions) : undefined;
+      const required = param.required ?? param.in === 'path';
       parameterContexts.push({
         name: param.name,
         varName: sanitizedVarName,
@@ -986,6 +989,8 @@ function buildOperationContext(
         fullType: resolvedType?.fullType ?? 'Object',
         in: param.in,
         resolvedType,
+        required,
+        orderIndex: paramOrder++,
       });
     }
 
@@ -999,12 +1004,23 @@ function buildOperationContext(
         fullType: bodyType.fullType,
         in: 'body',
         resolvedType: bodyType,
+        required: operation.requestBodyRequired,
+        orderIndex: paramOrder++,
       });
     }
   }
 
+  const resolvedRequestBodyType = operation.requestBodySchemaObject
+    ? resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions)
+    : undefined;
+  tagRequestBodyParameter(parameterContexts, operation, resolvedRequestBodyType);
+
+  if (!parsedSignature) {
+    sortParameterContexts(parameterContexts);
+  }
+
   const bodyParam = parameterContexts.find(param => param.in === 'body');
-  const requestBodyResolvedType = bodyParam?.resolvedType;
+  const requestBodyResolvedType = resolvedRequestBodyType ?? bodyParam?.resolvedType;
   const requestBodyType = requestBodyResolvedType?.baseType;
 
   const responseSchema = operation.responseSchemaObject;
@@ -1078,4 +1094,87 @@ function replaceVarNameInDeclaration(declaration: string, newName: string): stri
     return newName;
   }
   return `${trimmed.substring(0, lastSpace + 1)}${newName}`;
+}
+
+const PARAMETER_LOCATION_ORDER: Record<string, number> = {
+  path: 0,
+  query: 1,
+  header: 2,
+  cookie: 3,
+  body: 4,
+  form: 5,
+  unknown: 6,
+};
+
+function sortParameterContexts(parameters: ParameterContext[]): void {
+  parameters.sort((left, right) => {
+    const requiredRank = (value?: boolean): number => (value ? 0 : 1);
+    const leftRequired = requiredRank(left.required);
+    const rightRequired = requiredRank(right.required);
+    if (leftRequired !== rightRequired) {
+      return leftRequired - rightRequired;
+    }
+
+    const locationRank = (value?: string): number => {
+      if (!value) {
+        return PARAMETER_LOCATION_ORDER.unknown;
+      }
+      return PARAMETER_LOCATION_ORDER[value] ?? PARAMETER_LOCATION_ORDER.unknown;
+    };
+
+    const leftLocation = locationRank(left.in);
+    const rightLocation = locationRank(right.in);
+    if (leftLocation !== rightLocation) {
+      return leftLocation - rightLocation;
+    }
+
+    return (left.orderIndex ?? 0) - (right.orderIndex ?? 0);
+  });
+}
+
+function tagRequestBodyParameter(parameters: ParameterContext[], operation: OpenAPIOperation, resolvedType?: JavaResolvedType): void {
+  const hasRequestBody = Boolean(operation.requestBodySchemaObject || operation.requestBodySchema);
+  if (!hasRequestBody) {
+    return;
+  }
+
+  const existingBody = parameters.find(param => param.in === 'body');
+  if (existingBody) {
+    if (resolvedType && !existingBody.resolvedType) {
+      existingBody.resolvedType = resolvedType;
+      existingBody.fullType = existingBody.fullType ?? resolvedType.fullType;
+      existingBody.javaType = existingBody.javaType ?? resolvedType.baseType;
+    }
+    if (operation.requestBodyRequired !== undefined) {
+      existingBody.required = operation.requestBodyRequired;
+    }
+    return;
+  }
+
+  const targetSimpleType = resolvedType?.baseType?.toLowerCase() ?? operation.requestBodySchema?.toLowerCase();
+  const fallbackName = operation.requestBodySchema?.toLowerCase();
+
+  const candidate = parameters.find(param => {
+    const javaSimple = param.javaType?.split('.').pop()?.toLowerCase();
+    if (targetSimpleType && javaSimple === targetSimpleType) {
+      return true;
+    }
+    if (fallbackName && javaSimple === fallbackName) {
+      return true;
+    }
+    const paramName = (param.name ?? param.varName)?.toLowerCase();
+    return Boolean(fallbackName && paramName === fallbackName);
+  });
+
+  if (candidate) {
+    candidate.in = 'body';
+    if (operation.requestBodyRequired !== undefined) {
+      candidate.required = operation.requestBodyRequired;
+    }
+    if (resolvedType) {
+      candidate.resolvedType = resolvedType;
+      candidate.fullType = candidate.fullType ?? resolvedType.fullType;
+      candidate.javaType = candidate.javaType ?? resolvedType.baseType;
+    }
+  }
 }
