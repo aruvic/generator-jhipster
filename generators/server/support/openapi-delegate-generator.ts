@@ -82,6 +82,7 @@ type ResourceContext = {
   interfaceName: string;
   resourceName: string;
   resourceSlug: string;
+  domainFqcn: string;
   operations: OperationContext[];
   imports: string[];
   hasCreate: boolean;
@@ -422,6 +423,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         interfaceName,
         resourceName,
         resourceSlug: toKebabCase(resourceName),
+        domainFqcn: `${application.packageName}.domain.${resourceName}`,
         operations: [],
         imports: [],
         hasCreate: false,
