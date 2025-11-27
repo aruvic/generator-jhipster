@@ -4,8 +4,14 @@
 
 package <%- packageName %>;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.mapstruct.Mapper;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
@@ -14,7 +20,13 @@ import org.openapitools.jackson.nullable.JsonNullable;
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface OpenApiPrimitiveMapper {
     default String map(Object value) {
-        return value != null ? value.toString() : null;
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Map || value instanceof List) {
+            return JsonMappingSupport.writeValueAsString(value);
+        }
+        return value.toString();
     }
 
     default String map(JsonNullable<?> value) {
@@ -22,7 +34,41 @@ public interface OpenApiPrimitiveMapper {
             return null;
         }
         final Object resolved = value.orElse(null);
-        return resolved != null ? resolved.toString() : null;
+        if (resolved == null) {
+            return null;
+        }
+        if (resolved instanceof Map || resolved instanceof List) {
+            return JsonMappingSupport.writeValueAsString(resolved);
+        }
+        return resolved.toString();
+    }
+
+    default JsonNullable<Map<String, Object>> mapJsonStringToJsonNullableMap(String value) {
+        if (value == null || value.isBlank()) {
+            return JsonNullable.undefined();
+        }
+        return JsonNullable.of(JsonMappingSupport.readMap(value));
+    }
+
+    default JsonNullable<List<String>> mapJsonStringToJsonNullableStringList(String value) {
+        if (value == null || value.isBlank()) {
+            return JsonNullable.undefined();
+        }
+        return JsonNullable.of(JsonMappingSupport.readStringList(value));
+    }
+
+    default String mapJsonNullableMapToString(JsonNullable<Map<String, Object>> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value.orElse(null));
+    }
+
+    default String mapJsonNullableStringListToString(JsonNullable<List<String>> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value.orElse(null));
     }
 
     default <T> JsonNullable<T> toJsonNullable(T value) {
@@ -46,5 +92,43 @@ public interface OpenApiPrimitiveMapper {
     @ObjectFactory
     default JsonNullable<Object> mapToJsonNullable(Object value) {
         return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    }
+
+    final class JsonMappingSupport {
+        private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+
+        private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+        private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
+
+        private JsonMappingSupport() {}
+
+        static Map<String, Object> readMap(String value) {
+            try {
+                return OBJECT_MAPPER.readValue(value, MAP_TYPE);
+            } catch (JsonProcessingException ex) {
+                throw new IllegalArgumentException("Unable to deserialize JSON to Map", ex);
+            }
+        }
+
+        static List<String> readStringList(String value) {
+            try {
+                return OBJECT_MAPPER.readValue(value, STRING_LIST_TYPE);
+            } catch (JsonProcessingException ex) {
+                throw new IllegalArgumentException("Unable to deserialize JSON to List", ex);
+            }
+        }
+
+        static String writeValueAsString(Object value) {
+            if (value == null) {
+                return null;
+            }
+            try {
+                return OBJECT_MAPPER.writeValueAsString(value);
+            } catch (JsonProcessingException ex) {
+                throw new IllegalArgumentException("Unable to serialize value to JSON", ex);
+            }
+        }
     }
 }
