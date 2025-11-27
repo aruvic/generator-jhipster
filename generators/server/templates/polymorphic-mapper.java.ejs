@@ -143,6 +143,22 @@ public interface <%- mapperName %> {
         }
 
         /**
+         * Object factory assisting variant <%- variant.dtoSimpleName %> -> <%- poly.baseType %>
+         */
+        @ObjectFactory
+        default <%- poly.baseDomainType %> create<%- poly.baseType %>From<%- variant.normalizedName %>(<%- variant.dtoType %> source) {
+            if (source == null) {
+                return null;
+            }
+    <%_ for (const subtype of variant.subtypes) { _%>
+            if (source instanceof <%- subtype.dtoType %>) {
+                return new <%- subtype.domainType %>();
+            }
+    <%_ } _%>
+            return null;
+        }
+
+        /**
          * Bridge mapping for <%- poly.baseType %> -> variant <%- variant.dtoSimpleName %>
          */
         @SuppressWarnings("unchecked")
