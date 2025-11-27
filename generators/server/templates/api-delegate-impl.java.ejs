@@ -15,7 +15,6 @@ import org.springframework.stereotype.Service;
 import <%= fqcn %>;
 <%_ }); } _%>
 
-import <%= basePackage %>.domain.<%= resourceName %>;
 import <%= basePackage %>.repository.<%= resourceName %>Repository;
 import <%= basePackage %>.web.api.<%= interfaceName %>;
 import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
@@ -30,6 +29,7 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
         const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
         const maybeThrows = op => op.throwsClause ? ` throws ${op.throwsClause}` : '';
         const camelCase = value => (value ? value.charAt(0).toLowerCase() + value.slice(1) : value);
+        const domainType = domainFqcn;
         const allExtraTypes = new Map();
         const extraRequestTypes = new Map();
         const extraResponseTypes = new Map();
@@ -106,14 +106,14 @@ public class <%= className %> implements <%= interfaceName %> {
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); _%>
 <%_ if (requestMapper) { _%>
-        <%= resourceName %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= domainType %> entity = <%= requestMapper.mapperField %>.to<%= resourceName %>(<%= bodyParam.varName %>);
 <%_ } else { _%>
-        <%= resourceName %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= domainType %> entity = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
 <%_ } _%>
         copyByNormalizedName(<%= bodyParam.varName %>, entity, true, false);
         seedDefaults(entity);
         setTmfIdIfMissing(entity);
-        <%= resourceName %> saved = repository.save(entity);
+        <%= domainType %> saved = repository.save(entity);
 <%_ if (!op.responseType) { _%>
     return ResponseEntity.created(buildLocation(saved)).build();
 <%_ } else if (responseMapper) { _%>
@@ -137,7 +137,7 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!responseMatchesResource) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        List<<%= resourceName %>> entities = repository.findAll();
+        List<<%= domainType %>> entities = repository.findAll();
         return ResponseEntity.ok(entities.stream().map(mapper::to<%= resourceName %>Dto).toList());
 <%_ } _%>
     }
@@ -157,7 +157,7 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!idParam || !responseMatchesResource) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
@@ -179,7 +179,7 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!idParam) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
@@ -205,24 +205,24 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!canPatch) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); const idParam = op.parameters.filter(p => p.in === 'path')[0]; _%>
-        Optional<<%= resourceName %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
         if (found.isEmpty()) {
             return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-        <%= resourceName %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
+        <%= domainType %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
         copyByNormalizedName(incoming, found.get(), true, true);
         setTmfIdIfMissing(found.get());
-        <%= resourceName %> saved = repository.save(found.get());
+        <%= domainType %> saved = repository.save(found.get());
         return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(saved));
 <%_ } _%>
     }
 
 <%_ }); _%>
 
-    private Optional<<%= resourceName %>> findByIdOrTmfId(String id) {
+    private Optional<<%= domainType %>> findByIdOrTmfId(String id) {
         Optional<Long> maybeLong = parseLong(id);
         if (maybeLong.isPresent()) {
-            Optional<<%= resourceName %>> byId = repository.findById(maybeLong.get());
+            Optional<<%= domainType %>> byId = repository.findById(maybeLong.get());
             if (byId.isPresent()) {
                 return byId;
             }
@@ -257,7 +257,7 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 
-    private UUID getTmfId(<%= resourceName %> entity) {
+    private UUID getTmfId(<%= domainType %> entity) {
         try {
             Method getter = entity.getClass().getMethod("getTmfId");
             Object value = getter.invoke(entity);
@@ -268,7 +268,7 @@ public class <%= className %> implements <%= interfaceName %> {
     }
 
 <%_ if (resourceName === 'Booking') { _%>
-    private void seedDefaults(<%= resourceName %> entity) {
+    private void seedDefaults(<%= domainType %> entity) {
         try {
             Method getter = entity.getClass().getMethod("getBookingStatus");
             Object currentValue = getter.invoke(entity);
@@ -281,12 +281,12 @@ public class <%= className %> implements <%= interfaceName %> {
         }
     }
 <%_ } else { _%>
-    private void seedDefaults(<%= resourceName %> entity) {
+    private void seedDefaults(<%= domainType %> entity) {
         // No defaults to seed for this resource.
     }
 <%_ } _%>
 
-    private void setTmfIdIfMissing(<%= resourceName %> entity) {
+    private void setTmfIdIfMissing(<%= domainType %> entity) {
         try {
             Method getter = entity.getClass().getMethod("getTmfId");
             Object currentValue = getter.invoke(entity);
@@ -374,13 +374,13 @@ public class <%= className %> implements <%= interfaceName %> {
         return name == null ? "" : name.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
     }
 
-    private URI buildLocation(<%= resourceName %> entity) {
+    private URI buildLocation(<%= domainType %> entity) {
         UUID tmfId = getTmfId(entity);
         String identifier = tmfId != null ? tmfId.toString() : Optional.ofNullable(extractId(entity)).map(Object::toString).orElse("");
         return URI.create(String.format("/%s/%s", "<%= resourceSlug %>", identifier));
     }
 
-    private Long extractId(<%= resourceName %> entity) {
+    private Long extractId(<%= domainType %> entity) {
         try {
             Method getter = entity.getClass().getMethod("getId");
             Object value = getter.invoke(entity);
