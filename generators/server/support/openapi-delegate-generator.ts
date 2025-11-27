@@ -25,6 +25,7 @@ import ejs from 'ejs';
 import {
   type JavaResolvedType,
   type JavaTypeResolverContext,
+  type JavaTypeResolverOptions,
   camelize,
   resolveJavaType,
   singularize,
@@ -377,6 +378,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     }
   }
 
+  const dtoPackage = application.packageName ? `${application.packageName}.service.api.dto` : undefined;
+
   for (const operation of crudOperations) {
     const detection = detectCrudOperation(operation);
     if (!detection) continue;
@@ -486,7 +489,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       });
     }
 
-    const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas });
+    const resolverOptions = dtoPackage ? { dtoPackage } : undefined;
+    const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas }, resolverOptions);
     context.operations.push(opContext);
 
     switch (prefix) {
@@ -602,7 +606,7 @@ function deriveInterfaceBase(operation: OpenAPIOperation, resourceName: string):
   if (segments.length > 0) {
     const sanitized = sanitizeResourceToken(segments[0]);
     if (sanitized) {
-      return singularize(capitalizeFirst(sanitized));
+      return capitalizeFirst(sanitized);
     }
   }
   return resourceName;
@@ -644,6 +648,7 @@ function buildOperationContext(
   methodName: string,
   parsedSignature: ParsedMethodSignature | undefined,
   resolverContext: JavaTypeResolverContext,
+  resolverOptions?: JavaTypeResolverOptions,
 ): OperationContext {
   const parameters = operation.parameters || [];
   const specParametersByName = new Map<string, OpenAPIParameter>();
@@ -668,7 +673,7 @@ function buildOperationContext(
         location = specParam?.in ?? 'unknown';
       }
       const sanitizedVarName = toJavaParamName(param.name ?? 'param', { usedNames: paramNameSet });
-      const resolvedType = specParam?.schema ? resolveJavaType(specParam.schema, resolverContext) : undefined;
+      const resolvedType = specParam?.schema ? resolveJavaType(specParam.schema, resolverContext, resolverOptions) : undefined;
       const javaType = resolvedType?.baseType ?? extractBaseTypeFromTypeString(cleanedType);
       parameterContexts.push({
         name: param.name,
@@ -687,7 +692,7 @@ function buildOperationContext(
 
     for (const param of [...pathParams, ...otherParams]) {
       const sanitizedVarName = toJavaParamName(param.name ?? 'param', { usedNames: paramNameSet });
-      const resolvedType = param.schema ? resolveJavaType(param.schema, resolverContext) : undefined;
+      const resolvedType = param.schema ? resolveJavaType(param.schema, resolverContext, resolverOptions) : undefined;
       parameterContexts.push({
         name: param.name,
         varName: sanitizedVarName,
@@ -699,7 +704,7 @@ function buildOperationContext(
     }
 
     if (operation.requestBodySchemaObject) {
-      const bodyType = resolveJavaType(operation.requestBodySchemaObject, resolverContext);
+      const bodyType = resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions);
       const bodyVarName = toJavaParamName(operation.requestBodySchema ?? 'body', { usedNames: paramNameSet, fallback: 'body' });
       parameterContexts.push({
         name: operation.requestBodySchema ?? 'body',
@@ -717,7 +722,7 @@ function buildOperationContext(
   const requestBodyType = requestBodyResolvedType?.baseType;
 
   const responseSchema = operation.responseSchemaObject;
-  const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext) : undefined;
+  const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext, resolverOptions) : undefined;
   const responseType = responseResolvedType?.baseType;
 
   const defaultReturnType = responseResolvedType ? `ResponseEntity<${responseResolvedType.fullType}>` : 'ResponseEntity<Void>';

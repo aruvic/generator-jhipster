@@ -19,11 +19,12 @@ import <%= basePackage %>.repository.<%= resourceName %>Repository;
 import <%= basePackage %>.web.api.<%= interfaceName %>;
 import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
 <%_ 
-  const importedDtos = new Set(); 
-  operations.forEach(op => {
-    if (op.requestBodyType) importedDtos.add(op.requestBodyType);
-    if (op.responseType) importedDtos.add(op.responseType);
-  });
+    const importedDtos = new Set(); 
+    const shouldImportType = type => Boolean(type) && type !== 'Object' && type !== 'Void';
+    operations.forEach(op => {
+        if (shouldImportType(op.requestBodyType)) importedDtos.add(op.requestBodyType);
+        if (shouldImportType(op.responseType)) importedDtos.add(op.responseType);
+    });
     const formatDtoType = dto => dto === resourceName ? `${basePackage}.service.api.dto.${dto}` : dto;
     const bodySupportsEntity = javaType => [resourceName, `${resourceName}FVO`, `${resourceName}MVO`].includes(javaType);
         const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
@@ -34,8 +35,8 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
         const extraRequestTypes = new Map();
         const extraResponseTypes = new Map();
         const registerExtraType = (target, type) => {
-            if (!type || type === resourceName || target.has(type) || bodySupportsEntity(type)) {
-                if (!allExtraTypes.has(type) && target.has(type)) {
+                        if (!shouldImportType(type) || type === resourceName || target.has(type) || bodySupportsEntity(type)) {
+                            if (type && !allExtraTypes.has(type) && target.has(type)) {
                     allExtraTypes.set(type, target.get(type));
                 }
                 return;
@@ -49,6 +50,15 @@ import <%= basePackage %>.web.api.mapper.<%= resourceName %>Mapper;
             };
             target.set(type, info);
             allExtraTypes.set(type, info);
+        };
+        const asIdArg = param => {
+            if (!param) {
+                return 'null';
+            }
+            if (param.javaType === 'String') {
+                return param.varName;
+            }
+            return `String.valueOf(${param.varName})`;
         };
         operations.filter(op => op.kind === 'create').forEach(op => {
             if (op.requestBodyType) {
@@ -157,9 +167,9 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!idParam || !responseMatchesResource) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         return ResponseEntity.ok(mapper.to<%= resourceName %>Dto(found.get()));
 <%_ } _%>
@@ -179,9 +189,9 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!idParam) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         repository.delete(found.get());
         return ResponseEntity.noContent().build();
@@ -205,9 +215,9 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ if (!canPatch) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const bodyParam = op.parameters.find(p => p.in === 'body'); const idParam = op.parameters.filter(p => p.in === 'path')[0]; _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idParam.varName %>);
+        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= asIdArg(idParam) %>);
         if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= idParam.varName %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            return ResponseEntity.status(isParsableId(<%= asIdArg(idParam) %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
         <%= domainType %> incoming = mapper.to<%= resourceName %>(<%= bodyParam.varName %>);
         copyByNormalizedName(incoming, found.get(), true, true);

@@ -356,6 +356,7 @@ export interface JavaTypeResolverOptions {
   mapType?: string;
   mapFqcn?: string;
   modelPrefix?: string;
+  dtoPackage?: string;
 }
 
 const createJavaType = ({
@@ -390,17 +391,38 @@ const resolveRefName = (schema: any): string | undefined => {
   }
   return undefined;
 };
+type JavaTypeResolverState = {
+  resolvingRefs: Set<string>;
+  refStack: string[];
+};
 
-export const resolveJavaType = (
+const createModelType = (modelName: string, dtoPackage?: string): JavaResolvedType => {
+  const imports = new Set<string>();
+  addImport(imports, dtoPackage ? `${dtoPackage}.${modelName}` : undefined);
+  return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports });
+};
+
+const ensureDtoImport = (resolved: JavaResolvedType, modelName: string, dtoPackage?: string): JavaResolvedType => {
+  if (!dtoPackage) {
+    return resolved;
+  }
+  const imports = new Set<string>(resolved.imports);
+  addImport(imports, `${dtoPackage}.${modelName}`);
+  return createJavaType({ ...resolved, imports });
+};
+
+const resolveJavaTypeInternal = (
   schema: any,
   { schemas = {} }: JavaTypeResolverContext = {},
   options: JavaTypeResolverOptions = {},
+  state: JavaTypeResolverState,
 ): JavaResolvedType => {
   const collectionType = options.collectionType ?? DEFAULT_COLLECTION_TYPE.simple;
   const collectionFqcn = options.collectionFqcn ?? DEFAULT_COLLECTION_TYPE.fqcn;
   const mapType = options.mapType ?? DEFAULT_MAP_TYPE.simple;
   const mapFqcn = options.mapFqcn ?? DEFAULT_MAP_TYPE.fqcn;
   const modelPrefix = options.modelPrefix ?? 'Model';
+  const dtoPackage = options.dtoPackage;
 
   if (!schema) {
     return createJavaType({ fullType: 'Void', baseType: 'Void', rawType: 'Void', isPrimitive: true });
@@ -409,15 +431,65 @@ export const resolveJavaType = (
   if (schema.$ref) {
     const refName = resolveRefName(schema) ?? modelPrefix;
     const modelName = toModelName(refName, { prefix: modelPrefix });
-    return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports: new Set() });
+
+    if (state.resolvingRefs.has(refName)) {
+      return createModelType(modelName, dtoPackage);
+    }
+
+    state.resolvingRefs.add(refName);
+    state.refStack.push(refName);
+    try {
+      const referencedSchema = schemas?.[refName];
+      if (referencedSchema) {
+        const resolved = resolveJavaTypeInternal(referencedSchema, { schemas }, options, state);
+        if (resolved.rawType === modelName || (!resolved.isContainer && !resolved.isPrimitive)) {
+          return ensureDtoImport(resolved, modelName, dtoPackage);
+        }
+        return resolved;
+      }
+    } finally {
+      state.resolvingRefs.delete(refName);
+      state.refStack.pop();
+    }
+
+    return createModelType(modelName, dtoPackage);
   }
 
   if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
     const refItem = schema.allOf.find((item: any) => item.$ref) ?? schema.allOf[0];
-    return resolveJavaType(refItem, { schemas }, options);
+    return resolveJavaTypeInternal(refItem, { schemas }, options, state);
   }
 
   if (Array.isArray(schema.oneOf) || Array.isArray(schema.anyOf)) {
+    const composites = [...(schema.oneOf ?? []), ...(schema.anyOf ?? [])];
+    const currentRef = state.refStack[state.refStack.length - 1];
+
+    const inferModelName = (): string | undefined => {
+      if (currentRef) {
+        return currentRef;
+      }
+      if (schema.title) {
+        return schema.title;
+      }
+      const entry = Object.entries(schemas ?? {}).find(([, candidate]) => candidate === schema);
+      if (entry) {
+        return entry[0];
+      }
+      for (const composite of composites) {
+        const refName = resolveRefName(composite);
+        if (refName) {
+          return refName;
+        }
+      }
+      return undefined;
+    };
+
+    const modelTarget = inferModelName();
+    if (modelTarget) {
+      const modelName = toModelName(modelTarget, { prefix: modelPrefix });
+      return createModelType(modelName, dtoPackage);
+    }
+
     return createJavaType({ fullType: 'Object', baseType: 'Object', rawType: 'Object', imports: new Set() });
   }
 
@@ -474,7 +546,7 @@ export const resolveJavaType = (
     }
     case 'array': {
       const itemsSchema = schema.items ?? {};
-      const componentType = resolveJavaType(itemsSchema, { schemas }, options);
+      const componentType = resolveJavaTypeInternal(itemsSchema, { schemas }, options, state);
       const imports = mergeImports(componentType.imports, new Set([collectionFqcn]));
       return createJavaType({
         fullType: `${collectionType}<${componentType.fullType}>`,
@@ -489,7 +561,7 @@ export const resolveJavaType = (
     case 'object': {
       if (schema.additionalProperties !== undefined) {
         const additional = schema.additionalProperties === true ? {} : schema.additionalProperties;
-        const valueType = resolveJavaType(additional, { schemas }, options);
+        const valueType = resolveJavaTypeInternal(additional, { schemas }, options, state);
         const imports = mergeImports(valueType.imports, new Set([mapFqcn]));
         return createJavaType({
           fullType: `${mapType}<String, ${valueType.fullType}>`,
@@ -505,7 +577,7 @@ export const resolveJavaType = (
         const title = schema.title ?? Object.keys(schema.properties ?? {})[0];
         if (title) {
           const modelName = toModelName(title, { prefix: modelPrefix });
-          return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports: new Set() });
+          return createModelType(modelName, dtoPackage);
         }
       }
       return createJavaType({ fullType: 'Object', baseType: 'Object', rawType: 'Object', imports: new Set() });
@@ -517,14 +589,20 @@ export const resolveJavaType = (
       if (schema.$ref) {
         const refName = resolveRefName(schema) ?? modelPrefix;
         const modelName = toModelName(refName, { prefix: modelPrefix });
-        return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports: new Set() });
+        return createModelType(modelName, dtoPackage);
       }
       const inlineRef = resolveRefName(schema.schema);
       if (inlineRef) {
         const modelName = toModelName(inlineRef, { prefix: modelPrefix });
-        return createJavaType({ fullType: modelName, baseType: modelName, rawType: modelName, imports: new Set() });
+        return createModelType(modelName, dtoPackage);
       }
       return createJavaType({ fullType: 'Object', baseType: 'Object', rawType: 'Object', imports: new Set() });
     }
   }
 };
+
+export const resolveJavaType = (
+  schema: any,
+  context: JavaTypeResolverContext = {},
+  options: JavaTypeResolverOptions = {},
+): JavaResolvedType => resolveJavaTypeInternal(schema, context, options, { resolvingRefs: new Set(), refStack: [] });
