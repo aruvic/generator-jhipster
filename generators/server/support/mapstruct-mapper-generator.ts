@@ -27,6 +27,7 @@ import type { Application as SpringBootApplication } from '../types.ts';
 import { collectImports, generateMapperContexts } from './mapper-context-builder.ts';
 import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 import { generateHybridMappers } from './hybrid-mapper-generator.ts';
+import { OpenApiEntityMatcher } from './openapi-entity-matcher.ts';
 import { parseOpenAPISpec } from './openapi-mapper-generator.ts';
 
 /**
@@ -59,6 +60,9 @@ export async function generateMapStructMappers(generator: any, application: Spri
     // Parse OpenAPI spec
     const spec = parseOpenAPISpec(swaggerContent, { isFilePath: false });
 
+    const entityMatcher = new OpenApiEntityMatcher(generator, application.packageName);
+    const operationDescriptors = entityMatcher.describeOperations(spec);
+
     if (!spec.operations || spec.operations.length === 0) {
       generator.log.info('MapStruct: no operations found in OpenAPI spec');
       return;
@@ -77,7 +81,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     if (strategy === 'hybrid') {
       generator.log.info('MapStruct: using hybrid mapper strategy (polymorphic helpers + per-entity)');
-      const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!);
+      const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!, operationDescriptors);
 
       mapperContexts = [];
 
