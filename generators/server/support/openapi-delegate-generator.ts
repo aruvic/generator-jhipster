@@ -35,7 +35,13 @@ import {
 import type { Application as SpringBootApplication } from '../types.ts';
 
 import { OpenApiEntityMatcher, type OperationDescriptor } from './openapi-entity-matcher.ts';
-import { type OpenAPIOperation, type OpenAPIParameter, parseOpenAPISpec } from './openapi-mapper-generator.ts';
+import {
+  type OpenAPIOperation,
+  type OpenAPIParameter,
+  normalizeTypeName,
+  parseOpenAPISpec,
+  stripDtoSuffix,
+} from './openapi-mapper-generator.ts';
 
 const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
 type CrudPrefix = (typeof CRUD_PREFIXES)[number];
@@ -141,6 +147,38 @@ type CrudOperationMatch = {
   kind: CrudPrefix;
   operationIdFragment?: string;
 };
+
+const dependencyKey = (value: string): string => value.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+
+export function ensureMapperDependency(
+  ctx: ResourceContext,
+  typeName: string,
+  basePackage: string,
+  options: { primary?: boolean } = {},
+): DependencyDescriptor {
+  const stripped = stripDtoSuffix(typeName ?? '') ?? '';
+  const normalized = normalizeTypeName(stripped) || 'Resource';
+  if (!ctx.mapperMap) {
+    ctx.mapperMap = new Map();
+  }
+  const key = dependencyKey(normalized);
+  let dependency = ctx.mapperMap.get(key);
+  if (!dependency) {
+    const simpleName = `${normalized}Mapper`;
+    const fieldName = options.primary ? 'mapper' : `${camelize(normalized, { lowerFirst: true })}Mapper`;
+    dependency = {
+      key,
+      fieldName,
+      simpleName,
+      import: `${basePackage}.web.api.mapper.${simpleName}`,
+      order: ctx.injections.length,
+    } satisfies DependencyDescriptor;
+    ctx.mapperMap.set(key, dependency);
+    ctx.mappers.push(dependency);
+    ctx.injections.push(dependency);
+  }
+  return dependency;
+}
 
 /**
  * Parsed method signature from generated API interface
@@ -372,7 +410,13 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     return;
   }
 
-  const entityMatcher = new OpenApiEntityMatcher(generator, application.packageName);
+  if (!application.packageName) {
+    generator.log.warn('Application package name missing, skipping delegate implementation generation');
+    return;
+  }
+  const basePackage = application.packageName;
+
+  const entityMatcher = new OpenApiEntityMatcher(generator, basePackage);
   const operationDescriptors = entityMatcher.describeOperations(spec);
 
   const operations: OpenAPIOperation[] = spec.operations || [];
@@ -427,8 +471,6 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
   }
 
   const contexts: ResourceContext[] = [];
-  const toDependencyKey = (value: string): string => value.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
-
   const ensureRepositoryDependency = (
     ctx: ResourceContext,
     entityName: string,
@@ -438,7 +480,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     if (!ctx.repositoryMap) {
       ctx.repositoryMap = new Map();
     }
-    const key = toDependencyKey(normalized);
+    const key = dependencyKey(normalized);
     let dependency = ctx.repositoryMap.get(key);
     if (!dependency) {
       const simpleName = `${normalized}Repository`;
@@ -447,7 +489,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         key,
         fieldName,
         simpleName,
-        import: `${application.packageName}.repository.${simpleName}`,
+        import: `${basePackage}.repository.${simpleName}`,
         order: ctx.injections.length,
       } satisfies DependencyDescriptor;
       ctx.repositoryMap.set(key, dependency);
@@ -457,29 +499,11 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     return dependency;
   };
 
-  const ensureMapperDependency = (ctx: ResourceContext, typeName: string, options: { primary?: boolean } = {}): DependencyDescriptor => {
-    const normalized = typeName || 'Resource';
-    if (!ctx.mapperMap) {
-      ctx.mapperMap = new Map();
-    }
-    const key = toDependencyKey(normalized);
-    let dependency = ctx.mapperMap.get(key);
-    if (!dependency) {
-      const simpleName = `${normalized}Mapper`;
-      const fieldName = options.primary ? 'mapper' : `${camelize(normalized, { lowerFirst: true })}Mapper`;
-      dependency = {
-        key,
-        fieldName,
-        simpleName,
-        import: `${application.packageName}.web.api.mapper.${simpleName}`,
-        order: ctx.injections.length,
-      } satisfies DependencyDescriptor;
-      ctx.mapperMap.set(key, dependency);
-      ctx.mappers.push(dependency);
-      ctx.injections.push(dependency);
-    }
-    return dependency;
-  };
+  const ensureMapperDependencyContext = (
+    ctx: ResourceContext,
+    typeName: string,
+    options: { primary?: boolean } = {},
+  ): DependencyDescriptor => ensureMapperDependency(ctx, typeName, basePackage, options);
 
   const methodNamesByInterface = new Map<string, Set<string>>();
   const methodToInterface = new Map<
@@ -519,7 +543,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     }
   }
 
-  const dtoPackage = application.packageName ? `${application.packageName}.service.api.dto` : undefined;
+  const dtoPackage = `${basePackage}.service.api.dto`;
 
   for (const { operation, descriptor, kind: prefix, operationIdFragment } of crudOperations) {
     const resourceName = deriveResourceName(operation, descriptor, operationIdFragment);
@@ -566,7 +590,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         interfaceName,
         resourceName,
         resourceSlug,
-        domainFqcn: descriptor?.matchedEntity?.fqcn ?? `${application.packageName}.domain.${resourceName}`,
+        domainFqcn: descriptor?.matchedEntity?.fqcn ?? `${basePackage}.domain.${resourceName}`,
         operations: [],
         imports: [],
         hasCreate: false,
@@ -589,7 +613,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     const isPrimaryResource = resourceName === context.resourceName;
     ensureRepositoryDependency(context, resourceName, { primary: isPrimaryResource });
-    ensureMapperDependency(context, resourceName, { primary: isPrimaryResource });
+    ensureMapperDependencyContext(context, resourceName, { primary: isPrimaryResource });
 
     if (descriptor?.matchedEntity?.fqcn) {
       if (!context.domainFqcn || descriptor.matchedEntity.name === context.resourceName) {
@@ -662,7 +686,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       : undefined;
     const primaryEntity: EntityInfo = matchedEntityInfo ?? {
       name: resourceName,
-      fqcn: descriptor?.matchedEntity?.fqcn ?? `${application.packageName}.domain.${resourceName}`,
+      fqcn: descriptor?.matchedEntity?.fqcn ?? `${basePackage}.domain.${resourceName}`,
     };
 
     const requestEntityInfo: EntityInfo | undefined = descriptor?.requestEntityMatch
@@ -685,7 +709,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     const bodyParam = opContext.parameters.find(param => param.in === 'body');
     if (bodyParam && isMutation) {
       const requestMapperType = operation.requestBodySchema ?? persistenceEntity.name;
-      const requestMapper = ensureMapperDependency(context, requestMapperType, {
+      const requestMapper = ensureMapperDependencyContext(context, requestMapperType, {
         primary: requestMapperType === context.resourceName,
       });
       opContext.requestMapperField = requestMapper.fieldName;
@@ -699,7 +723,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       const responseEntity = responseEntityInfo ?? primaryEntity;
       const canMapResponse = Boolean(opContext.persistenceEntityName && responseEntity.name === opContext.persistenceEntityName);
       if (canMapResponse) {
-        const responseMapper = ensureMapperDependency(context, responseEntity.name, {
+        const responseMapper = ensureMapperDependencyContext(context, responseEntity.name, {
           primary: responseEntity.name === context.resourceName,
         });
         opContext.responseMapperField = responseMapper.fieldName;
@@ -799,8 +823,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
   for (const context of contexts) {
     const rendered = ejs.render(templateContent, {
-      packageName: `${application.packageName}.web.api.impl`,
-      basePackage: application.packageName,
+      packageName: `${basePackage}.web.api.impl`,
+      basePackage,
       ...context,
     });
 

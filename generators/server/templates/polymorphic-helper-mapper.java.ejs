@@ -2,10 +2,9 @@
  Copyright 2013-2025 the original author or authors from the JHipster project.
 -%>
 <%
-    const requiresMappingImport = baseType === 'PartyOrPartyRole';
     const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
     const requestVariants = variants.filter(variant => !variant.isBase);
-%>
+-%>
 /**
  * MapStruct helper mapper for the <%- baseType %> polymorphic family.
  * Provides @ObjectFactory hooks so MapStruct can instantiate concrete subtypes when resolving abstract references.
@@ -14,9 +13,7 @@
 package <%- packageName %>;
 
 import org.mapstruct.Mapper;
-<%_ if (requiresMappingImport) { _%>
-import org.mapstruct.Mapping;
-<%_ } _%>
+import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 
@@ -26,52 +23,30 @@ import org.mapstruct.ReportingPolicy;
     uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public interface <%- mapperName %> {
-
-<%_ if (baseType === 'PartyOrPartyRole') { _%>
-    @Mapping(target = "partyRole.paymentMethods", ignore = true)
-<%_ } _%>
     <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
-
-<%_ if (baseType === 'EntityRefOrValue') { _%>
-    <%- baseDomainType %> to<%- baseType %>(eu.ars_ict.oda_tmf683.service.api.dto.EntityRef source);
-
-    <%- baseDomainType %> to<%- baseType %>(eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValue source);
-<%_ } _%>
 
     @ObjectFactory
     default <%- baseDtoType %> create<%- baseType %>Dto(<%- baseDomainType %> source) {
         if (source == null) {
             return null;
         }
-<%_ for (const subtype of subtypes) { _%>
+ <%_ for (const subtype of subtypes) { _%>
         if (source instanceof <%- subtype.domainType %>) {
             return new <%- subtype.dtoType %>();
         }
-<%_ } _%>
+ <%_ } _%>
+ <%_ if (isAbstract) { _%>
         return null;
+ <%_ } else { _%>
+        return new <%- baseDtoType %>();
+ <%_ } _%>
     }
 
-<%_ if (baseType === 'EntityRefOrValue') { _%>
-    @ObjectFactory
-    default <%- baseDomainType %> create<%- baseType %>(Object source) {
-        if (source == null) {
-            return null;
-        }
-        if (source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefFVO
-            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValueFVO
-            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRef
-            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValue
-            || source instanceof eu.ars_ict.oda_tmf683.service.api.dto.EntityRefOrValueMVO) {
-            return new eu.ars_ict.oda_tmf683.domain.EntityRef();
-        }
-        return null;
-    }
+<%_ if (locals.baseMethodAnnotations) { _%>
+<%_ for (const annotation of baseMethodAnnotations) { _%>
+    <%- annotation %>
 <%_ } _%>
-
-<%_ if (baseType !== 'EntityRefOrValue') { _%>
-  <%_ if (baseType === 'PartyOrPartyRole') { _%>
-    @Mapping(target = "partyRole.paymentMethods", ignore = true)
-  <%_ } _%>
+<%_ } _%>
     <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
 
     @ObjectFactory
@@ -79,36 +54,53 @@ public interface <%- mapperName %> {
         if (source == null) {
             return null;
         }
-<%_ for (const subtype of subtypes) { _%>
+ <%_ for (const subtype of subtypes) { _%>
         if (source instanceof <%- subtype.dtoType %>) {
             return new <%- subtype.domainType %>();
         }
-<%_ } _%>
+ <%_ } _%>
+ <%_ if (isAbstract) { _%>
         return null;
+ <%_ } else { _%>
+        return new <%- baseDomainType %>();
+ <%_ } _%>
     }
+
+<%_ for (const variant of requestVariants) { const targetDomainType = variant.targetDomainType || baseDomainType; _%>
+<%_ if (variant.annotations) { _%>
+<%_ for (const annotation of variant.annotations) { _%>
+    <%- annotation %>
 <%_ } _%>
-
-<%_ for (const variant of requestVariants) { const variantSubtypes = variant.subtypes && variant.subtypes.length > 0 ? variant.subtypes : subtypes; _%>
-
-<%_ if (baseType === 'PartyOrPartyRole') { _%>
-    @Mapping(target = "partyRole.paymentMethods", ignore = true)
 <%_ } _%>
-    <%- baseDomainType %> to<%- baseType %>(<%- variant.dtoType %> source);
+    <%- targetDomainType %> <%- variant.mappingMethodName || `to${baseType}From${variant.dtoSimpleName}` %>(<%- variant.dtoType %> source);
 
-<%_ if (baseType !== 'EntityRefOrValue') { _%>
     @ObjectFactory
-    default <%- baseDomainType %> create<%- baseType %>(<%- variant.dtoType %> source) {
+    default <%- targetDomainType %> instantiate<%- baseType %>From<%- variant.dtoSimpleName %>(<%- variant.dtoType %> source) {
         if (source == null) {
             return null;
         }
-<%_ for (const subtype of variantSubtypes) { _%>
-        if (source instanceof <%- subtype.dtoType %>) {
+<%_ 
+        const effectiveSubtypes = (variant.subtypes && variant.subtypes.length > 0) ? variant.subtypes : subtypes;
+        for (const subtype of effectiveSubtypes) {
+            let subtypeDtoType = subtype.dtoType;
+            if (!variant.subtypes || variant.subtypes.length === 0) {
+                const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
+                if (variantSuffix) {
+                    const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
+                    const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
+                    subtypeDtoType = `${packagePart}.${subtypeBase}${variantSuffix}`;
+                }
+            }
+_%>
+        if (source instanceof <%- subtypeDtoType %>) {
             return new <%- subtype.domainType %>();
         }
-<%_ } _%>
+<%_     } _%>
+<%_     if (targetDomainType === baseDomainType && isAbstract) { _%>
         return null;
+<%_     } else { _%>
+        return new <%- targetDomainType %>();
+<%_     } _%>
     }
-<%_ } _%>
-
 <%_ } _%>
 }

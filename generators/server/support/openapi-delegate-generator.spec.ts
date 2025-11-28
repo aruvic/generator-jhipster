@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'esmocha';
 
-import { generateOpenApiDelegates } from './openapi-delegate-generator.ts';
+import { ensureMapperDependency, generateOpenApiDelegates } from './openapi-delegate-generator.ts';
 
 describe('OpenAPI delegate generator', () => {
   it('uses schema-level matches to select repositories and mappers per operation while avoiding duplicate primaries', async () => {
@@ -165,10 +165,7 @@ describe('OpenAPI delegate generator', () => {
 
       await generateOpenApiDelegates(generator, application as any);
 
-      const outputPath = join(
-        tempDir,
-        'src/main/java/com/example/web/api/impl/BookingApiDelegateImpl.java',
-      );
+      const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/BookingApiDelegateImpl.java');
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final BookingRepository repository;');
       expect(output).toContain('private final BookingMapper mapper;');
@@ -300,16 +297,13 @@ describe('OpenAPI delegate generator', () => {
 
       await generateOpenApiDelegates(generator, application as any);
 
-      const outputPath = join(
-        tempDir,
-        'src/main/java/com/example/web/api/impl/ReferenceApiDelegateImpl.java',
-      );
+      const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/ReferenceApiDelegateImpl.java');
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final ReferenceRepository repository;');
       expect(output).toContain('private final ReferenceMapper mapper;');
-      expect(output).toContain('Reference entity = this.mapper.toReferenceEntity(reference);');
+      expect(output).toContain('Reference entity = this.mapper.toReference(reference);');
       expect(output).toContain('return ResponseEntity.created(buildLocation(saved)).body(this.mapper.toReferenceDto(saved));');
-      expect(output).toContain('this.mapper.toReferenceEntity(reference)');
+      expect(output).toContain('this.mapper.toReference(reference)');
       expect(output).toContain('return ResponseEntity.ok(this.mapper.toReferenceDto(saved));');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -396,5 +390,44 @@ describe('OpenAPI delegate generator', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('ensureMapperDependency helper', () => {
+  const baseContext = (): any => ({
+    className: 'TestApiDelegateImpl',
+    interfaceName: 'TestApiDelegate',
+    resourceName: 'Test',
+    resourceSlug: 'test',
+    domainFqcn: 'com.example.domain.Test',
+    operations: [],
+    imports: [],
+    hasCreate: false,
+    hasList: false,
+    hasRetrieve: false,
+    hasDelete: false,
+    hasPatch: false,
+    repositories: [],
+    mappers: [],
+    injections: [],
+  });
+
+  it('normalizes DTO suffixes when registering mapper dependencies', () => {
+    const context = baseContext();
+    const dependency = ensureMapperDependency(context, 'HubFVO', 'com.example', {});
+    expect(dependency.simpleName).toBe('HubMapper');
+    expect(dependency.fieldName).toBe('hubMapper');
+    expect(dependency.import).toBe('com.example.web.api.mapper.HubMapper');
+    expect(context.mappers).toHaveLength(1);
+    expect(context.injections[0]).toBe(dependency);
+  });
+
+  it('reuses mapper dependencies for subsequent lookups and honors primary flag', () => {
+    const context = baseContext();
+    const primary = ensureMapperDependency(context, 'PartyInteraction', 'com.example', { primary: true });
+    const secondary = ensureMapperDependency(context, 'PartyInteractionDTO', 'com.example', {});
+    expect(primary).toBe(secondary);
+    expect(primary.fieldName).toBe('mapper');
+    expect(context.mappers).toHaveLength(1);
   });
 });

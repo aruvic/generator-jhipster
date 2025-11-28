@@ -242,6 +242,71 @@ describe('Mapper Context Builder', () => {
       expect(createMapper?.polymorphicTypes).toBeDefined();
       expect(createMapper?.polymorphicTypes?.length).toBeGreaterThan(0);
     });
+
+    it('should ignore abstract properties inherited through allOf fragments', () => {
+      const spec: ParsedOpenAPISpec = {
+        operations: [
+          {
+            path: '/parties',
+            method: 'POST',
+            operationId: 'createParty',
+            requestBodySchema: 'PartyFVO',
+            responseSchema: 'Party',
+          },
+        ],
+        schemas: {
+          PartyFVO: {
+            type: 'object',
+            properties: {
+              taxExemptionCertificates: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/TaxExemptionCertificateFVO' },
+              },
+            },
+          },
+          TaxExemptionCertificateFVO: {
+            allOf: [
+              { $ref: '#/components/schemas/BaseTaxCertificateFVO' },
+              {
+                type: 'object',
+                properties: {
+                  certificateId: { type: 'string' },
+                },
+              },
+            ],
+          },
+          BaseTaxCertificateFVO: {
+            type: 'object',
+            properties: {
+              attachment: { $ref: '#/components/schemas/AttachmentRefOrValue' },
+            },
+          },
+          AttachmentRefOrValue: {
+            oneOf: [{ $ref: '#/components/schemas/AttachmentRef' }],
+          },
+          AttachmentRef: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+            },
+          },
+          Party: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+            },
+          },
+        },
+      };
+
+      const contexts = generateMapperContexts(spec, 'eu.example.app');
+      const taxCertificateMethod = contexts
+        .flatMap(c => c.methods)
+        .find(m => m.methodName === 'toTaxExemptionCertificateEntity');
+
+      expect(taxCertificateMethod).toBeDefined();
+      expect(taxCertificateMethod?.annotations).toContain('@Mapping(target = "attachment", ignore = true)');
+    });
   });
 
   describe('collectImports', () => {
