@@ -129,11 +129,9 @@ _%>
 <%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const idArg = asIdArg(idParam); _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
-        if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
-        }
-        return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(found.get()));
+        return findByIdOrTmfId(<%= idArg %>)
+            .map(found -> ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(found)))
+            .orElseGet(() -> ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build());
 <%_ } _%>
     }
 
@@ -152,12 +150,13 @@ _%>
 <%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const idArg = asIdArg(idParam); _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
-        if (found.isEmpty()) {
+        Optional<<%= persistenceType(op) %>> maybeEntity = findByIdOrTmfId(<%= idArg %>);
+        if (maybeEntity.isPresent()) {
+            this.<%= repoField %>.delete(maybeEntity.orElseThrow());
+            return ResponseEntity.noContent().build();
+        } else {
             return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
         }
-        this.<%= repoField %>.delete(found.get());
-        return ResponseEntity.noContent().build();
 <%_ } _%>
     }
 
@@ -182,15 +181,15 @@ _%>
 <%_ if (!canHandle) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { const idArg = asIdArg(idParam); _%>
-        Optional<<%= domainType %>> found = findByIdOrTmfId(<%= idArg %>);
-        if (found.isEmpty()) {
-            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
-        }
-        <%= persistenceTypeFqcn %> incoming = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
-        copyByNormalizedName(incoming, found.get(), true, true);
-        setTmfIdIfMissing(found.get());
-        <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(found.get());
-        return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(saved));
+        return findByIdOrTmfId(<%= idArg %>)
+            .map(found -> {
+                <%= persistenceTypeFqcn %> incoming = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
+                copyByNormalizedName(incoming, found, true, true);
+                setTmfIdIfMissing(found);
+                <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(found);
+                return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(saved));
+            })
+            .orElseGet(() -> ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build());
 <%_ } _%>
     }
 
@@ -199,7 +198,7 @@ _%>
     private Optional<<%= domainType %>> findByIdOrTmfId(String id) {
         Optional<Long> maybeLong = parseLong(id);
         if (maybeLong.isPresent()) {
-            Optional<<%= domainType %>> byId = repository.findById(maybeLong.get());
+            Optional<<%= domainType %>> byId = repository.findById(maybeLong.orElseThrow());
             if (byId.isPresent()) {
                 return byId;
             }
@@ -210,7 +209,7 @@ _%>
         }
         return repository.findAll().stream().filter(entity -> {
             UUID current = getTmfId(entity);
-            return current != null && current.equals(maybeUuid.get());
+            return current != null && current.equals(maybeUuid.orElseThrow());
         }).findFirst();
     }
 

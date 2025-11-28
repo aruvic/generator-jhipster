@@ -12,6 +12,9 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.BeanMapping;
 import org.mapstruct.ReportingPolicy;
+<%_ if (objectFactories && objectFactories.length > 0) { _%>
+import org.mapstruct.ObjectFactory;
+<%_ } _%>
 <%_ if (entityName === 'JsonPatch') { _%>
 import org.mapstruct.Named;
 import org.openapitools.jackson.nullable.JsonNullable;
@@ -58,19 +61,48 @@ public interface <%- mapperName %> {
 
 <%_ } _%>
 
-<%_ if (entityName === 'JsonPatch') { _%>
-    @Named("unwrapJsonPatchValue")
-    default String unwrapJsonPatchValue(JsonNullable<Object> value) {
-        if (value == null || !value.isPresent()) {
-            return null;
-        }
-        final Object resolved = value.orElse(null);
-        return resolved != null ? resolved.toString() : null;
-    }
+<%_ if (objectFactories && objectFactories.length > 0) { _%>
+<%_   for (const factory of objectFactories) { _%>
 
-    @Named("wrapJsonPatchValue")
-    default JsonNullable<Object> wrapJsonPatchValue(Object value) {
-        return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+  @ObjectFactory
+  default <%- factory.returnType %> <%- factory.methodName %>(<%- factory.sourceType %> source) {
+    if (source == null) {
+      return null;
     }
+<%_     if (factory.discriminatorAccessor) { _%>
+    final String rawDiscriminator = <%- factory.discriminatorAccessor %>;
+    final String discriminator = rawDiscriminator != null ? rawDiscriminator : <%- factory.fallbackAccessor %>;
+<%_     } else { _%>
+    final String discriminator = <%- factory.fallbackAccessor %>;
+<%_     } _%>
+    if (discriminator == null) {
+      return new <%- factory.defaultVariant.instantiationType %>();
+    }
+    switch (discriminator) {
+<%_     for (const variant of factory.variants) { _%>
+    case <%- variant.discriminatorLiteral %>:
+      return new <%- variant.instantiationType %>();
+<%_     } _%>
+    default:
+      return new <%- factory.defaultVariant.instantiationType %>();
+    }
+  }
+<%_   } _%>
+<%_ } _%>
+
+<%_ if (entityName === 'JsonPatch') { _%>
+  @Named("unwrapJsonPatchValue")
+  default String unwrapJsonPatchValue(JsonNullable<Object> value) {
+    if (value == null || !value.isPresent()) {
+      return null;
+    }
+    final Object resolved = value.orElse(null);
+    return resolved != null ? resolved.toString() : null;
+  }
+
+  @Named("wrapJsonPatchValue")
+  default JsonNullable<Object> wrapJsonPatchValue(Object value) {
+    return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+  }
 <%_ } _%>
 }

@@ -13,6 +13,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import org.mapstruct.Mapper;
+import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 import org.openapitools.jackson.nullable.JsonNullable;
@@ -43,32 +44,68 @@ public interface OpenApiPrimitiveMapper {
         return resolved.toString();
     }
 
-    default JsonNullable<Map<String, Object>> mapJsonStringToJsonNullableMap(String value) {
+    @Named("jsonStringToJsonNullableMap")
+    default JsonNullable<Map<String, Object>> jsonStringToJsonNullableMap(String value) {
         if (value == null || value.isBlank()) {
             return JsonNullable.undefined();
         }
         return JsonNullable.of(JsonMappingSupport.readMap(value));
     }
 
-    default JsonNullable<List<String>> mapJsonStringToJsonNullableStringList(String value) {
+    @Named("jsonStringToJsonNullableStringList")
+    default JsonNullable<List<String>> jsonStringToJsonNullableStringList(String value) {
         if (value == null || value.isBlank()) {
             return JsonNullable.undefined();
         }
         return JsonNullable.of(JsonMappingSupport.readStringList(value));
     }
 
-    default String mapJsonNullableMapToString(JsonNullable<Map<String, Object>> value) {
+    @Named("jsonNullableMapToString")
+    default String jsonNullableMapToString(JsonNullable<Map<String, Object>> value) {
         if (value == null || !value.isPresent()) {
             return null;
         }
         return JsonMappingSupport.writeValueAsString(value.orElse(null));
     }
 
-    default String mapJsonNullableStringListToString(JsonNullable<List<String>> value) {
+    @Named("jsonNullableStringListToString")
+    default String jsonNullableStringListToString(JsonNullable<List<String>> value) {
         if (value == null || !value.isPresent()) {
             return null;
         }
         return JsonMappingSupport.writeValueAsString(value.orElse(null));
+    }
+
+    @Named("jsonStringToMap")
+    default Map<String, Object> jsonStringToMap(String value) {
+        if (value == null || value.isBlank()) {
+            return Collections.emptyMap();
+        }
+        return JsonMappingSupport.readMap(value);
+    }
+
+    @Named("mapToJsonString")
+    default String mapToJsonString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value);
+    }
+
+    @Named("jsonStringToStringList")
+    default List<String> jsonStringToStringList(String value) {
+        if (value == null || value.isBlank()) {
+            return Collections.emptyList();
+        }
+        return JsonMappingSupport.readStringList(value);
+    }
+
+    @Named("stringListToJsonString")
+    default String stringListToJsonString(List<String> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value);
     }
 
     default <T> JsonNullable<T> toJsonNullable(T value) {

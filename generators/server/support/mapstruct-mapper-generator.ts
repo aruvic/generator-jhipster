@@ -28,7 +28,7 @@ import { collectImports, generateMapperContexts } from './mapper-context-builder
 import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 import { generateHybridMappers } from './hybrid-mapper-generator.ts';
 import { OpenApiEntityMatcher } from './openapi-entity-matcher.ts';
-import { parseOpenAPISpec } from './openapi-mapper-generator.ts';
+import { normalizeTypeName, parseOpenAPISpec } from './openapi-mapper-generator.ts';
 
 /**
  * Generate MapStruct mappers from OpenAPI spec
@@ -70,6 +70,14 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     generator.log.info(`MapStruct: found ${spec.operations.length} operations in OpenAPI spec`);
 
+    const javaPackageDir =
+      application.javaPackageSrcDir ??
+      (application.srcMainJava && application.packageNameWithSlashes
+        ? join(application.srcMainJava, application.packageNameWithSlashes)
+        : undefined);
+
+    const domainInspector = javaPackageDir ? (entityName: string) => inspectDomainClass(generator, javaPackageDir, entityName) : undefined;
+
     // Determine which mapper generation strategy to use
     // Hybrid: polymorphic helper mappers + per-entity mappers (RECOMMENDED for complex APIs)
     // Unified: 2 large Request/Response mappers (good for simple APIs)
@@ -81,7 +89,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
     if (strategy === 'hybrid') {
       generator.log.info('MapStruct: using hybrid mapper strategy (polymorphic helpers + per-entity)');
-      const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!, operationDescriptors);
+      const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!, operationDescriptors, domainInspector);
 
       mapperContexts = [];
 
@@ -124,12 +132,6 @@ export async function generateMapStructMappers(generator: any, application: Spri
     generator.log.info(`MapStruct: generated ${mapperContexts.length} mapper contexts`);
 
     // Determine the Java package source directory
-    const javaPackageDir =
-      application.javaPackageSrcDir ??
-      (application.srcMainJava && application.packageNameWithSlashes
-        ? join(application.srcMainJava, application.packageNameWithSlashes)
-        : undefined);
-
     if (!javaPackageDir) {
       generator.log.warn('MapStruct: unable to resolve Java package directory, skipping mapper generation');
       return;
@@ -157,10 +159,10 @@ export async function generateMapStructMappers(generator: any, application: Spri
       // Get the appropriate template for this mapper
       const templateFileName = templateFiles.get(context.mapperName) || 'mapper.java.ejs';
       const relativeTemplatePath = join('server', 'templates', templateFileName);
-      
+
       // Try to load template (blueprint first, then bundled)
       let templatePath: string | undefined;
-      
+
       // Try blueprint generators
       if (generator.blueprintGenerators) {
         for (const bp of generator.blueprintGenerators) {
@@ -173,7 +175,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
           }
         }
       }
-      
+
       // If not found in blueprint, use bundled template
       if (!templatePath) {
         const bundledPath = generator.fetchFromInstalledJHipster(relativeTemplatePath);
@@ -181,12 +183,12 @@ export async function generateMapStructMappers(generator: any, application: Spri
           templatePath = bundledPath;
         }
       }
-      
+
       if (!templatePath) {
         generator.log.warn(`MapStruct: could not resolve template at ${relativeTemplatePath}, skipping ${context.mapperName}`);
         continue;
       }
-      
+
       const templateContent = readFileSync(templatePath, 'utf-8');
       let mapperContent: string;
 
@@ -200,7 +202,11 @@ export async function generateMapStructMappers(generator: any, application: Spri
           simpleNameCount[simple] = (simpleNameCount[simple] || 0) + 1;
         }
 
-        const collidingNames = new Set<string>(Object.entries(simpleNameCount).filter(([, c]) => c > 1).map(([n]) => n));
+        const collidingNames = new Set<string>(
+          Object.entries(simpleNameCount)
+            .filter(([, c]) => c > 1)
+            .map(([n]) => n),
+        );
 
         const importsForTemplate = collectedImports.filter(imp => !collidingNames.has(imp.split('.').pop() || ''));
 
@@ -238,4 +244,22 @@ export async function generateMapStructMappers(generator: any, application: Spri
     generator.log.debug(error.stack);
     // Continue with normal generation - don't fail the entire process
   }
+}
+
+function inspectDomainClass(generator: any, javaPackageDir: string, entityName: string): { isAbstract?: boolean } | undefined {
+  const normalized = normalizeTypeName(entityName);
+  const domainPath = generator.destinationPath(join(javaPackageDir, 'domain', `${normalized}.java`));
+  if (!existsSync(domainPath)) {
+    return undefined;
+  }
+  try {
+    const contents = readFileSync(domainPath, 'utf-8');
+    const abstractRegex = new RegExp(`\\babstract\\s+class\\s+${normalized}\\b`);
+    if (abstractRegex.test(contents)) {
+      return { isAbstract: true };
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

@@ -37,16 +37,6 @@ import {
 const ABSTRACT_SCHEMAS = new Set(['Entity', 'Extensible', 'Addressable']);
 
 /**
- * Field patterns that indicate abstract/polymorphic types that MapStruct can't auto-map
- * These patterns are used to generate @Mapping(target = "...", ignore = true) annotations
- */
-const ABSTRACT_TYPE_PATTERNS = [
-  /RefOrValue$/,          // e.g., EntityRefOrValue, AttachmentRefOrValue
-  /OrPartyRole$/,         // e.g., PartyOrPartyRole, PartyRefOrPartyRoleRef
-  /^event$/,              // Generic Object/Any types that vary by schema
-];
-
-/**
  * Check if a schema should be skipped (no domain entity exists)
  */
 function shouldSkipSchema(schemaBaseName: string): boolean {
@@ -54,13 +44,36 @@ function shouldSkipSchema(schemaBaseName: string): boolean {
 }
 
 /**
- * Check if a field name/type indicates an abstract/polymorphic type
- * Strips _FVO, _MVO, _DTO suffixes before checking
+ * Collect all properties declared directly or through allOf chains
  */
-function isAbstractTypeField(typeName: string): boolean {
-  // Strip common DTO suffixes
-  const baseName = typeName.replace(/_(FVO|MVO|DTO)$/, '');
-  return ABSTRACT_TYPE_PATTERNS.some(pattern => pattern.test(baseName));
+function collectSchemaProperties(
+  schemaName: string,
+  schema: any,
+  allSchemas: Record<string, any>,
+  visited = new Set<string>(),
+): Record<string, any> {
+  if (!schema || visited.has(schemaName)) {
+    return {};
+  }
+
+  visited.add(schemaName);
+
+  const properties: Record<string, any> = { ...(schema.properties ?? {}) };
+
+  if (Array.isArray(schema.allOf)) {
+    for (const fragment of schema.allOf) {
+      if (fragment.$ref) {
+        const refName = extractSchemaRef(fragment);
+        if (refName) {
+          Object.assign(properties, collectSchemaProperties(refName, allSchemas[refName], allSchemas, visited));
+        }
+      } else if (fragment.properties) {
+        Object.assign(properties, fragment.properties);
+      }
+    }
+  }
+
+  return properties;
 }
 
 /**
@@ -156,7 +169,7 @@ function createInputMapper(
     }
 
     const baseName = stripDtoSuffix(schemaName);
-    
+
     // Skip abstract schemas that don't have domain entities
     if (shouldSkipSchema(baseName)) {
       return;
@@ -165,7 +178,18 @@ function createInputMapper(
     const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const domainFqcn = buildDomainFqcn(baseName, basePackage);
 
-    const method = createMappingMethod(baseName, dtoFqcn, domainFqcn, 'dto-to-domain', opType === 'create', opType === 'update', schema);
+    const schemaProperties = collectSchemaProperties(schemaName, schema, allSchemas);
+
+    const method = createMappingMethod(
+      baseName,
+      dtoFqcn,
+      domainFqcn,
+      'dto-to-domain',
+      opType === 'create',
+      opType === 'update',
+      schemaProperties,
+      allSchemas,
+    );
 
     methods.push(method);
 
@@ -217,7 +241,7 @@ function createOutputMapper(
     }
 
     const baseName = stripDtoSuffix(schemaName);
-    
+
     // Skip abstract schemas that don't have domain entities
     if (shouldSkipSchema(baseName)) {
       return;
@@ -226,7 +250,18 @@ function createOutputMapper(
     const dtoFqcn = buildDtoFqcn(schemaName, basePackage);
     const domainFqcn = buildDomainFqcn(baseName, basePackage);
 
-    const method = createMappingMethod(baseName, domainFqcn, dtoFqcn, 'domain-to-dto', false, false, schema);
+    const schemaProperties = collectSchemaProperties(schemaName, schema, allSchemas);
+
+    const method = createMappingMethod(
+      baseName,
+      domainFqcn,
+      dtoFqcn,
+      'domain-to-dto',
+      false,
+      false,
+      schemaProperties,
+      allSchemas,
+    );
 
     methods.push(method);
 
@@ -250,6 +285,31 @@ function createOutputMapper(
 }
 
 /**
+ * Check if a field schema corresponds to an abstract/polymorphic type
+ */
+function isFieldAbstract(fieldSchema: any, allSchemas: Record<string, any>): boolean {
+  if (!fieldSchema) return false;
+
+  if (fieldSchema.oneOf || fieldSchema.anyOf) return true;
+
+  if (fieldSchema.$ref) {
+    const refName = extractSchemaRef(fieldSchema);
+    if (refName && allSchemas[refName]) {
+      const schema = allSchemas[refName];
+      if (isPolymorphicSchema(schema)) return true;
+      // Also check for discriminator without oneOf (some specs do this)
+      if (schema.discriminator) return true;
+    }
+  }
+
+  if (fieldSchema.type === 'array' && fieldSchema.items) {
+    return isFieldAbstract(fieldSchema.items, allSchemas);
+  }
+
+  return false;
+}
+
+/**
  * Create a single mapping method
  */
 function createMappingMethod(
@@ -259,7 +319,8 @@ function createMappingMethod(
   direction: 'dto-to-domain' | 'domain-to-dto',
   isCreate: boolean,
   isUpdate: boolean,
-  schema?: any,
+  schemaProperties?: Record<string, any>,
+  allSchemas?: Record<string, any>,
 ): MapperMethod {
   const annotations: string[] = [];
 
@@ -274,38 +335,16 @@ function createMappingMethod(
   // Ignore fields with abstract/polymorphic types that MapStruct can't handle
   // Only add ignore annotations for fields that actually exist in the schema and match abstract type patterns
   const fieldsToIgnore = new Set<string>();
-  
+
   // Schema-based detection - only if schema is provided
-  if (schema && schema.properties) {
-    for (const [fieldName, fieldSchema] of Object.entries<any>(schema.properties)) {
-      const fieldType = fieldSchema.$ref || fieldSchema.type;
-      if (fieldType && typeof fieldType === 'string') {
-        const typeBaseName = fieldType.split('/').pop() || '';
-        // Check if field type matches abstract type patterns
-        if (isAbstractTypeField(typeBaseName)) {
-          fieldsToIgnore.add(fieldName);
-        }
-      }
-      if (
-        fieldSchema.$ref ||
-        fieldSchema.type === 'array' ||
-        fieldSchema.type === 'object' ||
-        fieldSchema.oneOf ||
-        fieldSchema.anyOf ||
-        fieldSchema.allOf
-      ) {
+  if (schemaProperties && allSchemas) {
+    for (const [fieldName, fieldSchema] of Object.entries<any>(schemaProperties)) {
+      if (isFieldAbstract(fieldSchema, allSchemas)) {
         fieldsToIgnore.add(fieldName);
-      }
-      // Also check for arrays/lists of abstract types
-      if (fieldSchema.items && fieldSchema.items.$ref) {
-        const itemType = fieldSchema.items.$ref.split('/').pop() || '';
-        if (isAbstractTypeField(itemType)) {
-          fieldsToIgnore.add(fieldName);
-        }
       }
     }
   }
-  
+
   // Generate @Mapping ignore annotations for all identified fields
   fieldsToIgnore.forEach(field => {
     annotations.push(`@Mapping(target = "${field}", ignore = true)`);
