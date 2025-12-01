@@ -485,7 +485,112 @@ describe('Hybrid mapper generator', () => {
     expect(responseMapping?.annotations).toContain('@Mapping(target = "attachment", ignore = true)');
   });
 
-    it('generates helper variants for schemas extending polymorphic bases through allOf', () => {
+  it('adds helper dependencies for entity mappers that touch abstract targets', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [],
+      schemas: {
+        PartyRole: {
+          type: 'object',
+          properties: {
+            paymentMethods: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/PaymentMethodRef' },
+            },
+            engagedParty: { $ref: '#/components/schemas/PartyRef' },
+          },
+        },
+        PaymentMethodRef: {
+          allOf: [
+            { $ref: '#/components/schemas/EntityRefOrValue' },
+            { type: 'object', properties: { name: { type: 'string' } } },
+          ],
+        },
+        EntityRefOrValue: {
+          type: 'object',
+          discriminator: {
+            propertyName: '@type',
+            mapping: {
+              payment: '#/components/schemas/PaymentMethodRef',
+            },
+          },
+          oneOf: [{ $ref: '#/components/schemas/EntityRef' }],
+        },
+        EntityRef: {
+          type: 'object',
+          properties: { tmfId: { type: 'string' } },
+        },
+        PartyRef: {
+          allOf: [
+            { $ref: '#/components/schemas/PartyRefOrPartyRoleRef' },
+            { type: 'object', properties: { id: { type: 'string' } } },
+          ],
+        },
+        PartyRoleRef: {
+          allOf: [
+            { $ref: '#/components/schemas/PartyRefOrPartyRoleRef' },
+            { type: 'object', properties: { role: { type: 'string' } } },
+          ],
+        },
+        PartyRefOrPartyRoleRef: {
+          type: 'object',
+          discriminator: {
+            propertyName: '@type',
+            mapping: {
+              party: '#/components/schemas/PartyRef',
+              partyRole: '#/components/schemas/PartyRoleRef',
+            },
+          },
+          oneOf: [{ $ref: '#/components/schemas/PartyRef' }, { $ref: '#/components/schemas/PartyRoleRef' }],
+        },
+      },
+    };
+
+    const { entityMappers } = generateHybridMappers(spec, 'com.example');
+    const partyRoleMapper = entityMappers.find(entry => entry.entityName === 'PartyRole');
+    expect(partyRoleMapper).toBeDefined();
+    expect(partyRoleMapper?.usesMappers).toEqual(
+      expect.arrayContaining([
+        'com.example.web.api.mapper.EntityRefOrValueMapper',
+        'com.example.web.api.mapper.PartyRefOrPartyRoleRefMapper',
+      ]),
+    );
+  });
+
+  it('treats bases with only allOf-derived variants as polymorphic for helper generation', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [],
+      schemas: {
+        EntityRefOrValue: {
+          type: 'object',
+          properties: {
+            tmfId: { type: 'string' },
+          },
+        },
+        PaymentMethodRef: {
+          allOf: [
+            { $ref: '#/components/schemas/EntityRefOrValue' },
+            { type: 'object', properties: { name: { type: 'string' } } },
+          ],
+        },
+        PaymentMethodRefFVO: {
+          allOf: [
+            { $ref: '#/components/schemas/PaymentMethodRef' },
+            { type: 'object', properties: { id: { type: 'string' } } },
+          ],
+        },
+      },
+    };
+
+    const { helperMappers } = generateHybridMappers(spec, 'com.example');
+    const helper = helperMappers.find(entry => entry.baseType === 'EntityRefOrValue');
+    expect(helper).toBeDefined();
+    expect(helper?.subtypes.map(sub => sub.domainSimpleName)).toEqual(expect.arrayContaining(['PaymentMethodRef']));
+    expect(helper?.variants.map(variant => variant.dtoSimpleName)).toEqual(
+      expect.arrayContaining(['PaymentMethodRef', 'PaymentMethodRefFVO']),
+    );
+  });
+
+  it('generates helper variants for schemas extending polymorphic bases through allOf', () => {
       const spec: ParsedOpenAPISpec = {
         operations: [],
         schemas: {

@@ -99,6 +99,7 @@ export interface EntityMapping {
   annotations: string[];
   sourceSchemaName?: string;
   targetSchemaName?: string;
+  excludedTargets?: Set<string>;
 }
 
 export interface ObjectFactoryVariantContext {
@@ -133,6 +134,14 @@ interface EntityMetadata {
   }>;
   discriminatorValues?: Record<string, string>;
 }
+
+interface AbstractFieldMappingResult {
+  annotations: string[];
+  abstractTargets: Set<string>;
+}
+
+let derivedSchemasCache: Map<string, Set<string>> | undefined;
+let derivedAncestorsCache: Map<string, Set<string>> | undefined;
 
 type DomainMetadataResolver = (entityName: string) => Partial<EntityMetadata> | undefined;
 
@@ -283,34 +292,55 @@ function collectReferencedEntities(
   referencedEntities: Set<string>,
   schemas: Record<string, any>,
   visited: Set<string> = new Set(),
+  derivedByBase?: Map<string, Set<string>>,
+  ancestorCache?: Map<string, Set<string>>,
 ): void {
   if (!schema) {
     return;
   }
 
   if (schema.type === 'array' && schema.items) {
-    collectReferencedEntities(schema.items, referencedEntities, schemas, visited);
+    collectReferencedEntities(schema.items, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
   }
 
   const ref = extractSchemaRef(schema);
   if (ref) {
-    referencedEntities.add(stripDtoSuffix(ref));
+    const refName = stripDtoSuffix(ref);
+    referencedEntities.add(refName);
+    if (derivedByBase) {
+      const derivedSchemas = resolveDerivedSchemas(refName, derivedByBase);
+      derivedSchemas.forEach(derivedSchema => {
+        const normalizedDerived = stripDtoSuffix(derivedSchema);
+        if (normalizedDerived) {
+          referencedEntities.add(normalizedDerived);
+        }
+      });
+    }
+    if (derivedByBase && ancestorCache) {
+      const ancestors = resolveDerivedAncestors(refName, derivedByBase, ancestorCache);
+      ancestors.forEach(ancestor => referencedEntities.add(ancestor));
+    }
+    if (!visited.has(ref) && schemas[ref]) {
+      visited.add(ref);
+      collectReferencedEntities(schemas[ref], referencedEntities, schemas, visited, derivedByBase, ancestorCache);
+      visited.delete(ref);
+    }
   }
 
   if (schema.properties) {
     for (const propertySchema of Object.values<any>(schema.properties)) {
-      collectReferencedEntities(propertySchema, referencedEntities, schemas, visited);
+      collectReferencedEntities(propertySchema, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
     }
   }
 
   if (Array.isArray(schema.allOf)) {
     for (const item of schema.allOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited);
+      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
 
       const refName = extractSchemaRef(item);
       if (refName && schemas[refName] && !visited.has(refName)) {
         visited.add(refName);
-        collectReferencedEntities(schemas[refName], referencedEntities, schemas, visited);
+        collectReferencedEntities(schemas[refName], referencedEntities, schemas, visited, derivedByBase, ancestorCache);
         visited.delete(refName);
       }
     }
@@ -318,13 +348,13 @@ function collectReferencedEntities(
 
   if (Array.isArray(schema.oneOf)) {
     for (const item of schema.oneOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited);
+      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
     }
   }
 
   if (Array.isArray(schema.anyOf)) {
     for (const item of schema.anyOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited);
+      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
     }
   }
 }
@@ -375,8 +405,39 @@ function normalizeEntityKey(name?: string): string | undefined {
   return normalizeTypeName(stripDtoSuffix(name));
 }
 
+function isSubtypeInstantiationCompatible(
+  baseType: string,
+  domainCandidate: string | undefined,
+  metadata?: EntityMetadata,
+): boolean {
+  if (!domainCandidate) {
+    return false;
+  }
+  if (baseType === domainCandidate) {
+    return true;
+  }
+  const normalizedCandidate = normalizeEntityKey(domainCandidate);
+  if (!normalizedCandidate) {
+    return false;
+  }
+  const matchedChild = metadata?.childEntities?.find(
+    child => normalizeEntityKey(child.name) === normalizedCandidate,
+  );
+  if (matchedChild) {
+    return !matchedChild.abstract;
+  }
+  const hasChildMetadata = (metadata?.childEntities?.length ?? 0) > 0;
+  // When no metadata is available (common for imported specs), optimistically allow instantiation
+  // so MapStruct can create concrete subtypes instead of returning null factories.
+  if (!metadata || !hasChildMetadata) {
+    return true;
+  }
+  return false;
+}
+
 function collectAllOfDerivedSchemas(schemas: Record<string, any>): Map<string, Set<string>> {
   const derivedByBase = new Map<string, Set<string>>();
+  const normalizedToOriginal = new Map<string, Set<string>>();
 
   const register = (baseName?: string, derivedName?: string) => {
     if (!baseName || !derivedName) {
@@ -386,22 +447,73 @@ function collectAllOfDerivedSchemas(schemas: Record<string, any>): Map<string, S
     if (!normalizedBase) {
       return;
     }
+    if (!normalizedToOriginal.has(normalizedBase)) {
+      normalizedToOriginal.set(normalizedBase, new Set());
+    }
+    normalizedToOriginal.get(normalizedBase)!.add(baseName);
     if (!derivedByBase.has(normalizedBase)) {
       derivedByBase.set(normalizedBase, new Set());
     }
     derivedByBase.get(normalizedBase)!.add(derivedName);
   };
 
-  for (const [schemaName, schema] of Object.entries(schemas)) {
-    if (!Array.isArray(schema?.allOf)) {
-      continue;
+  const registerCompositeRefs = (base: string, refs?: any[]) => {
+    if (!Array.isArray(refs)) {
+      return;
     }
-    for (const fragment of schema.allOf) {
+    for (const fragment of refs) {
       const refName = extractSchemaRef(fragment);
       if (!refName) {
         continue;
       }
-      register(refName, schemaName);
+      register(base, refName);
+    }
+  };
+
+  const registerDiscriminatorMappings = (base: string, mapping?: Record<string, string>) => {
+    if (!mapping) {
+      return;
+    }
+    for (const target of Object.values(mapping)) {
+      if (!target) {
+        continue;
+      }
+      const refName = target.includes('/') ? target.split('/').pop() : target;
+      register(base, refName);
+    }
+  };
+
+  for (const [schemaName, schema] of Object.entries(schemas)) {
+    if (Array.isArray(schema?.allOf)) {
+      for (const fragment of schema.allOf) {
+        const refName = extractSchemaRef(fragment);
+        if (!refName) {
+          continue;
+        }
+        register(refName, schemaName);
+      }
+    }
+
+    registerCompositeRefs(schemaName, schema?.oneOf);
+    registerCompositeRefs(schemaName, schema?.anyOf);
+    registerDiscriminatorMappings(schemaName, schema?.discriminator?.mapping);
+  }
+
+  // Ensure normalized base names also register the variants of the same stripped name
+  for (const [normalizedBase, originalNames] of normalizedToOriginal.entries()) {
+    const derivedSet = derivedByBase.get(normalizedBase);
+    if (!derivedSet) {
+      continue;
+    }
+    for (const original of originalNames) {
+      const normalizedOriginal = stripDtoSuffix(original);
+      if (normalizedOriginal && normalizedOriginal !== normalizedBase) {
+        if (!derivedByBase.has(normalizedOriginal)) {
+          derivedByBase.set(normalizedOriginal, new Set(derivedSet));
+        } else {
+          derivedSet.forEach(value => derivedByBase.get(normalizedOriginal)!.add(value));
+        }
+      }
     }
   }
 
@@ -435,6 +547,43 @@ function resolveDerivedSchemas(baseType: string, derivedByBase: Map<string, Set<
   }
 
   return resolved;
+}
+
+function resolveDerivedAncestors(
+  derivedType: string,
+  derivedByBase: Map<string, Set<string>>,
+  ancestorCache: Map<string, Set<string>>,
+  visiting: Set<string> = new Set(),
+): Set<string> {
+  const normalizedDerived = normalizeTypeName(stripDtoSuffix(derivedType));
+  if (!normalizedDerived) {
+    return new Set();
+  }
+  if (ancestorCache.has(normalizedDerived)) {
+    return ancestorCache.get(normalizedDerived)!;
+  }
+
+  if (visiting.has(normalizedDerived)) {
+    return new Set();
+  }
+
+  visiting.add(normalizedDerived);
+
+  const ancestors = new Set<string>();
+  for (const [base, derivedSet] of derivedByBase.entries()) {
+    if (!derivedSet) {
+      continue;
+    }
+    if (derivedSet.has(derivedType) || derivedSet.has(normalizedDerived)) {
+      ancestors.add(base);
+      const ancestorAncestors = resolveDerivedAncestors(base, derivedByBase, ancestorCache, visiting);
+      ancestorAncestors.forEach(a => ancestors.add(a));
+    }
+  }
+
+  visiting.delete(normalizedDerived);
+  ancestorCache.set(normalizedDerived, ancestors);
+  return ancestors;
 }
 
 function normalizeNameForComparison(name?: string): string | undefined {
@@ -727,6 +876,16 @@ function matchesAbstractType(candidate: string | undefined, schemas: Record<stri
   if (schema && isPolymorphic(schema, candidate)) {
     return true;
   }
+  const derivedMatches = normalized ? derivedSchemasCache?.get(normalized) : undefined;
+  if (derivedMatches && derivedMatches.size > 0) {
+    return true;
+  }
+  if (normalized && derivedAncestorsCache) {
+    const ancestors = derivedAncestorsCache.get(normalized);
+    if (ancestors && ancestors.size > 0) {
+      return true;
+    }
+  }
   
   // Also check if it matches known abstract schemas (if we must keep this list, but user said no hardcoding)
   // For now, let's rely on isPolymorphic. 
@@ -734,57 +893,55 @@ function matchesAbstractType(candidate: string | undefined, schemas: Record<stri
   return false;
 }
 
-function schemaContainsAbstractReference(schema: any, schemas: Record<string, any>, visited = new Set<string>()): boolean {
+function collectAbstractSchemaMatches(
+  schema: any,
+  schemas: Record<string, any>,
+  matches: Set<string> = new Set<string>(),
+  visited = new Set<string>(),
+): Set<string> {
   if (!schema) {
-    return false;
+    return matches;
   }
+
+  const registerMatch = (candidate?: string) => {
+    if (!candidate) {
+      return;
+    }
+    const normalized = normalizeTypeName(stripDtoSuffix(candidate));
+    if (normalized) {
+      matches.add(normalized);
+    }
+  };
 
   const refName = extractSchemaRef(schema);
   if (matchesAbstractType(refName, schemas)) {
-    return true;
+    registerMatch(refName);
   }
   if (refName && schemas[refName] && !visited.has(refName)) {
     visited.add(refName);
-    if (schemaContainsAbstractReference(schemas[refName], schemas, visited)) {
-      return true;
-    }
+    collectAbstractSchemaMatches(schemas[refName], schemas, matches, visited);
     visited.delete(refName);
   }
 
   if (schema.type === 'array' && schema.items) {
-    if (schemaContainsAbstractReference(schema.items, schemas, visited)) {
-      return true;
-    }
+    collectAbstractSchemaMatches(schema.items, schemas, matches, visited);
   }
 
   const composites = [schema.oneOf, schema.anyOf, schema.allOf];
   for (const branch of composites) {
     if (Array.isArray(branch)) {
       for (const fragment of branch) {
-        if (schemaContainsAbstractReference(fragment, schemas, visited)) {
-          return true;
-        }
+        collectAbstractSchemaMatches(fragment, schemas, matches, visited);
       }
     }
   }
 
   if (schema.additionalProperties) {
-    if (schemaContainsAbstractReference(schema.additionalProperties, schemas, visited)) {
-      return true;
-    }
+    collectAbstractSchemaMatches(schema.additionalProperties, schemas, matches, visited);
   }
 
-  const inlineName = schema.title ?? schema['x-class-name'];
-  if (matchesAbstractType(inlineName, schemas)) {
-    return true;
-  }
-
-  return false;
-}
-
-function shouldIgnoreAbstractField(_fieldName: string, fieldSchema: any, schemas: Record<string, any>): boolean {
-  // Remove name-based check, rely on schema analysis
-  return schemaContainsAbstractReference(fieldSchema, schemas);
+  registerMatch(schema.title ?? schema['x-class-name']);
+  return matches;
 }
 
 function buildAbstractFieldMappingAnnotations(
@@ -793,15 +950,16 @@ function buildAbstractFieldMappingAnnotations(
   cache: Map<string, SchemaProperties>,
   direction: 'request' | 'response',
   excludedFields: Set<string> = new Set()
-): string[] {
+): AbstractFieldMappingResult {
   if (!schemaName) {
-    return [];
+    return { annotations: [], abstractTargets: new Set<string>() };
   }
   const properties = collectSchemaProperties(schemaName, schemas, cache);
   if (!properties || Object.keys(properties).length === 0) {
-    return [];
+    return { annotations: [], abstractTargets: new Set<string>() };
   }
   const targets = new Set<string>();
+  const abstractTargets = new Set<string>();
   for (const [fieldName, fieldSchema] of Object.entries<any>(properties)) {
     if (!fieldSchema) {
       continue;
@@ -812,11 +970,16 @@ function buildAbstractFieldMappingAnnotations(
       continue;
     }
 
-    if (shouldIgnoreAbstractField(fieldName, fieldSchema, schemas)) {
+    const matches = collectAbstractSchemaMatches(fieldSchema, schemas);
+    if (matches.size > 0) {
       targets.add(targetField);
+      matches.forEach(match => abstractTargets.add(match));
     }
   }
-  return Array.from(targets).map(field => `@Mapping(target = "${field}", ignore = true)`);
+  return {
+    annotations: Array.from(targets).map(field => `@Mapping(target = "${field}", ignore = true)`),
+    abstractTargets,
+  };
 }
 
 function buildDiscriminatorAccessorExpression(propertyName: string, sourceAccessor = 'source'): string {
@@ -1151,7 +1314,7 @@ function buildPolymorphicMapping(
       }
 
       const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
-      const isCompatible = baseType === domainCandidate || baseMetadata?.childEntities.some(child => normalizeEntityKey(child.name) === normalizeEntityKey(domainCandidate));
+      const isCompatible = isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata);
 
       return {
         dtoType: buildDtoFqcn(subtypeName, basePackage),
@@ -1196,7 +1359,7 @@ function buildPolymorphicMapping(
           }
 
           const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
-          const isCompatible = baseType === domainCandidate || baseMetadata?.childEntities.some(child => normalizeEntityKey(child.name) === normalizeEntityKey(domainCandidate));
+          const isCompatible = isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata);
 
           return {
             dtoType: buildDtoFqcn(subtypeName, basePackage),
@@ -1264,7 +1427,14 @@ export function generateHybridMappers(
   const schemaPropertiesCache = new Map<string, SchemaProperties>();
   const polymorphicFactoryFallbacks = new Map<string, PolymorphicFallbackFactoryMetadata>();
   const derivedByBase = collectAllOfDerivedSchemas(schemas);
+  derivedSchemasCache = derivedByBase;
+  const ancestorCache = new Map<string, Set<string>>();
+  derivedAncestorsCache = ancestorCache;
+  for (const base of derivedByBase.keys()) {
+    resolveDerivedAncestors(base, derivedByBase, ancestorCache);
+  }
 
+  try {
   const recordUsage = (target: Map<string, Set<string>>, key: string, value: string) => {
     if (!key || !value) {
       return;
@@ -1331,7 +1501,14 @@ export function generateHybridMappers(
     if (!helperReferencedEntities.has(helperName)) {
       helperReferencedEntities.set(helperName, new Set());
     }
-    collectReferencedEntities(schemas[schemaName], helperReferencedEntities.get(helperName)!, schemas);
+    collectReferencedEntities(
+      schemas[schemaName],
+      helperReferencedEntities.get(helperName)!,
+      schemas,
+      undefined,
+      derivedByBase,
+      ancestorCache,
+    );
   };
 
   for (const [schemaName, schema] of Object.entries(schemas)) {
@@ -1345,7 +1522,8 @@ export function generateHybridMappers(
     if (ABSTRACT_SCHEMAS.has(baseEntity)) continue;
 
     // Only process each base polymorphic type once (skip DTO/FVO/MVO variants)
-    if (isPolymorphic(schema, schemaName) && !processedPolyTypes.has(baseEntity)) {
+    const hasDerivedPolymorphism = resolveDerivedSchemas(baseEntity, derivedByBase).size > 0;
+    if ((isPolymorphic(schema, schemaName) || hasDerivedPolymorphism) && !processedPolyTypes.has(baseEntity)) {
       if (schemaName === 'Party') {
           try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party identified as polymorphic\n'); } catch (e) {}
       }
@@ -1432,6 +1610,11 @@ export function generateHybridMappers(
       const requestTargets = requestTargetsBySchema.get(baseEntity) ?? new Set<string>();
       const responseSources = responseSourcesBySchema.get(baseEntity) ?? new Set<string>();
 
+      const siblingVariants = Object.keys(schemas).filter(schemaKey => stripDtoSuffix(schemaKey) === baseEntity);
+      for (const siblingVariant of siblingVariants) {
+        operationVariants.add(siblingVariant);
+      }
+
       const variants = Array.from(operationVariants).sort((a, b) => {
         const normalizedA = normalizeTypeName(a);
         const normalizedB = normalizeTypeName(b);
@@ -1453,9 +1636,24 @@ export function generateHybridMappers(
       // const hasRequestSpecificVariant = hasFvoVariant || hasMvoVariant;
       const hasBaseVariant = variants.some(variantName => normalizeTypeName(variantName) === normalizedBase);
       const referencedEntities = new Set<string>();
+      const registerReferencedEntity = (entityName?: string) => {
+        if (!entityName) {
+          return;
+        }
+        referencedEntities.add(entityName);
+        if (derivedByBase) {
+          const derivedSchemas = resolveDerivedSchemas(entityName, derivedByBase);
+          derivedSchemas.forEach(derivedSchema => {
+            const normalizedDerived = stripDtoSuffix(derivedSchema);
+            if (normalizedDerived) {
+              referencedEntities.add(normalizedDerived);
+            }
+          });
+        }
+      };
 
       for (const variant of variants) {
-        collectReferencedEntities(schemas[variant], referencedEntities, schemas);
+        collectReferencedEntities(schemas[variant], referencedEntities, schemas, undefined, derivedByBase, ancestorCache);
       }
 
       for (const variant of variants) {
@@ -1467,8 +1665,16 @@ export function generateHybridMappers(
         const variantJsonMetadata = collectSchemaJsonMetadata(variant, schemas, schemaJsonMetadataCache);
         const { annotations: requestJsonAnnotations, mappedFields: requestMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'request');
         const { annotations: responseJsonAnnotations, mappedFields: responseMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'response');
-        const requestAbstractAnnotations = buildAbstractFieldMappingAnnotations(variant, schemas, schemaPropertiesCache, 'request', requestMappedFields);
-        const responseAbstractAnnotations = buildAbstractFieldMappingAnnotations(variant, schemas, schemaPropertiesCache, 'response', responseMappedFields);
+        const {
+          annotations: requestAbstractAnnotations,
+          abstractTargets: requestAbstractTargets,
+        } = buildAbstractFieldMappingAnnotations(variant, schemas, schemaPropertiesCache, 'request', requestMappedFields);
+        const {
+          annotations: responseAbstractAnnotations,
+          abstractTargets: responseAbstractTargets,
+        } = buildAbstractFieldMappingAnnotations(variant, schemas, schemaPropertiesCache, 'response', responseMappedFields);
+        requestAbstractTargets.forEach(target => registerReferencedEntity(target));
+        responseAbstractTargets.forEach(target => registerReferencedEntity(target));
 
         if (isFVO || isMVO || isBaseVariant) {
           const annotations = [
@@ -1509,7 +1715,11 @@ export function generateHybridMappers(
           mapping => mapping.methodName === methodName && mapping.sourceType === sourceType && mapping.targetType === targetType,
         );
         if (!alreadyPresent) {
-          const fallbackAbstractAnnotations = buildAbstractFieldMappingAnnotations(baseEntity, schemas, schemaPropertiesCache, 'request');
+          const {
+            annotations: fallbackAbstractAnnotations,
+            abstractTargets: fallbackRequestTargets,
+          } = buildAbstractFieldMappingAnnotations(baseEntity, schemas, schemaPropertiesCache, 'request');
+          fallbackRequestTargets.forEach(target => registerReferencedEntity(target));
           addRequestMapping({
             methodName,
             sourceType,
@@ -1531,7 +1741,11 @@ export function generateHybridMappers(
           mapping => mapping.methodName === methodName && mapping.sourceType === sourceType && mapping.targetType === targetType,
         );
         if (!alreadyPresent) {
-          const fallbackAbstractAnnotations = buildAbstractFieldMappingAnnotations(baseEntity, schemas, schemaPropertiesCache, 'response');
+          const {
+            annotations: fallbackAbstractAnnotations,
+            abstractTargets: fallbackResponseTargets,
+          } = buildAbstractFieldMappingAnnotations(baseEntity, schemas, schemaPropertiesCache, 'response');
+          fallbackResponseTargets.forEach(target => registerReferencedEntity(target));
           addResponseMapping({
             methodName,
             sourceType,
@@ -1699,4 +1913,8 @@ export function generateHybridMappers(
     helperMappers,
     entityMappers,
   };
+  } finally {
+    derivedSchemasCache = undefined;
+    derivedAncestorsCache = undefined;
+  }
 }

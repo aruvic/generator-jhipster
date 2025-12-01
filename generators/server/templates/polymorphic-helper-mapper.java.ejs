@@ -1,10 +1,11 @@
-<%#
- Copyright 2013-2025 the original author or authors from the JHipster project.
--%>
 <%
     const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
     const requestVariants = variants.filter(variant => !variant.isBase);
--%>
+    const basePackage = packageName.replace('.web.api.mapper', '');
+    const dtoPackage = `${basePackage}.service.api.dto`;
+    const domainPackage = `${basePackage}.domain`;
+    const isPartyRoleHelper = baseType === 'PartyRole';
+%>
 /**
  * MapStruct helper mapper for the <%- baseType %> polymorphic family.
  * Provides @ObjectFactory hooks so MapStruct can instantiate concrete subtypes when resolving abstract references.
@@ -13,6 +14,9 @@
 package <%- packageName %>;
 
 import org.mapstruct.Mapper;
+<%_ if (isPartyRoleHelper) { _%>
+import org.mapstruct.Mapping;
+<%_ } _%>
 import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
@@ -73,8 +77,19 @@ public interface <%- mapperName %> {
     }
 
 <%_ for (const variant of requestVariants) { const targetDomainType = variant.targetDomainType || baseDomainType; _%>
-<%_ if (variant.annotations) { _%>
-<%_ for (const annotation of variant.annotations) { _%>
+<%
+    const variantAnnotations = [...(variant.annotations ?? [])];
+    const isFvoVariant = isPartyRoleHelper && variant.dtoType?.endsWith('FVO');
+    const isMvoVariant = isPartyRoleHelper && variant.dtoType?.endsWith('MVO');
+    if (isFvoVariant) {
+        variantAnnotations.push('@Mapping(target = "paymentMethods", qualifiedByName = "mapPaymentMethodRefFvoListToEntityRefOrValueList")');
+    }
+    if (isMvoVariant) {
+        variantAnnotations.push('@Mapping(target = "paymentMethods", qualifiedByName = "mapPaymentMethodRefMvoListToEntityRefOrValueList")');
+    }
+%>
+<%_ if (variantAnnotations.length > 0) { _%>
+<%_ for (const annotation of variantAnnotations) { _%>
     <%- annotation %>
 <%_ } _%>
 <%_ } _%>
@@ -110,5 +125,75 @@ _%>
         return new <%- targetDomainType %>();
 <%_     } _%>
     }
+<%_ } _%>
+
+<%_ if (isPartyRoleHelper) { _%>
+
+    @Named("mapPaymentMethodRefFvoListToEntityRefOrValueList")
+    default java.util.List<<%- domainPackage %>.EntityRefOrValue> mapPaymentMethodRefFvoListToEntityRefOrValueList(
+        java.util.List<<%- dtoPackage %>.PaymentMethodRefFVO> source
+    ) {
+        if (source == null) {
+            return null;
+        }
+        java.util.List<<%- domainPackage %>.EntityRefOrValue> targets = new java.util.ArrayList<>(source.size());
+        for (<%- dtoPackage %>.PaymentMethodRefFVO item : source) {
+            <%- domainPackage %>.PaymentMethodRef mapped = mapPaymentMethodRefFvo(item);
+            if (mapped != null) {
+                targets.add(mapped);
+            }
+        }
+        return targets;
+    }
+
+    default <%- domainPackage %>.PaymentMethodRef mapPaymentMethodRefFvo(<%- dtoPackage %>.PaymentMethodRefFVO source) {
+        if (source == null) {
+            return null;
+        }
+        <%- domainPackage %>.PaymentMethodRef target = new <%- domainPackage %>.PaymentMethodRef();
+        target.setId(source.getId());
+        target.setAtType(source.getAtType());
+        target.setAtBaseType(source.getAtBaseType());
+        target.setAtSchemaLocation(source.getAtSchemaLocation());
+        target.setHref(source.getHref());
+        target.setTmfId(source.getTmfId());
+        target.setName(source.getName());
+        target.setAtReferredType(source.getAtReferredType());
+        return target;
+    }
+
+    @Named("mapPaymentMethodRefMvoListToEntityRefOrValueList")
+    default java.util.List<<%- domainPackage %>.EntityRefOrValue> mapPaymentMethodRefMvoListToEntityRefOrValueList(
+        java.util.List<<%- dtoPackage %>.PaymentMethodRefMVO> source
+    ) {
+        if (source == null) {
+            return null;
+        }
+        java.util.List<<%- domainPackage %>.EntityRefOrValue> targets = new java.util.ArrayList<>(source.size());
+        for (<%- dtoPackage %>.PaymentMethodRefMVO item : source) {
+            <%- domainPackage %>.PaymentMethodRef mapped = mapPaymentMethodRefMvo(item);
+            if (mapped != null) {
+                targets.add(mapped);
+            }
+        }
+        return targets;
+    }
+
+    default <%- domainPackage %>.PaymentMethodRef mapPaymentMethodRefMvo(<%- dtoPackage %>.PaymentMethodRefMVO source) {
+        if (source == null) {
+            return null;
+        }
+        <%- domainPackage %>.PaymentMethodRef target = new <%- domainPackage %>.PaymentMethodRef();
+        target.setId(source.getId());
+        target.setAtType(source.getAtType());
+        target.setAtBaseType(source.getAtBaseType());
+        target.setAtSchemaLocation(source.getAtSchemaLocation());
+        target.setHref(source.getHref());
+        target.setTmfId(source.getTmfId());
+        target.setName(source.getName());
+        target.setAtReferredType(source.getAtReferredType());
+        return target;
+    }
+
 <%_ } _%>
 }

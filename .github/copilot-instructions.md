@@ -4,70 +4,48 @@ This document provides essential guidance for AI coding agents working on the JH
 
 ## Project Overview
 
-**generator-jhipster** is a Yeoman-based code generator that scaffolds full-stack Java/JavaScript applications with Spring Boot, Angular/React/Vue, and various cloud/deployment configurations. The project uses TypeScript and relies on a sophisticated priority-based generator architecture.
+**generator-jhipster** is a Yeoman-based code generator that scaffolds full-stack Java/JavaScript applications. It uses a sophisticated priority-based architecture to manage complex generation flows.
 
 ## Architecture & Core Concepts
 
 ### Yeoman Generator Pattern
 
-JHipster wraps Yeoman with custom priority queues. All generators extend base classes from `generators/base-*`:
-- **BaseGenerator** (`generators/base/`): Core blueprint support with state management
-- **BaseApplicationGenerator** (`generators/base-application/`): Multi-priority lifecycle for complex apps
-- **BaseSimpleApplicationGenerator** (`generators/base-simple-application/`): Simpler single-tier generators
+JHipster extends Yeoman with custom priority queues. All generators extend base classes:
+- **BaseGenerator** (`generators/base/`): Core blueprint support, state management.
+- **BaseApplicationGenerator** (`generators/base-application/`): Multi-priority lifecycle for complex apps.
+- **BaseSimpleApplicationGenerator** (`generators/base-simple-application/`): Simpler single-tier generators.
 
 ### Generator Lifecycle Priorities
 
-Generators execute in strict priority order. Use static constants like `BaseGenerator.INITIALIZING`:
-
-```typescript
-get [BaseGenerator.INITIALIZING]() {
-  return this.asInitializingTaskGroup({
-    taskName() { /* logic */ },
-  });
-}
-```
+Generators execute in strict priority order. Use static constants from `generators/base-core/priorities.ts`.
 
 **Key priorities** (in execution order):
-1. `INITIALIZING`: Setup, validation, load constants
-2. `PROMPTING`: User questions (via `asPromptingTaskGroup`)
-3. `CONFIGURING`: Validate/adjust config (`asConfiguringTaskGroup`)
-4. `COMPOSING`: Compose with other generators (`asComposingTaskGroup`)
-5. `COMPOSING_COMPONENT`: Compose sub-generators (used in `spring-boot`, `app`)
-6. `LOADING`: Load application state
-7. `PREPARING`: Transform/normalize data for writing
-8. `DEFAULT`: Default priority (rarely used)
-9. `WRITING`: Write files (`asWritingTaskGroup` + `this.writeFiles()`)
-10. `INSTALL`: Run npm/maven installs
-
-See `generators/base-core/priorities.ts` for complete list.
+1. `INITIALIZING`: Setup, validation, load constants.
+2. `PROMPTING`: User questions.
+3. `CONFIGURING`: Validate/adjust config.
+4. `COMPOSING`: Compose with other generators.
+5. `COMPOSING_COMPONENT`: Compose sub-generators (e.g., `spring-boot`, `client`).
+6. `LOADING`: Load application state.
+7. `PREPARING`: Transform/normalize data for writing.
+8. `POST_PREPARING`: Post-process entity/application data.
+9. `DEFAULT`: Default priority.
+10. `WRITING`: Write files (`this.writeFiles()`).
+11. `MULTISTEP_TRANSFORM`: Transform files after writing.
+12. `POST_WRITING`: Post-writing tasks.
+13. `INSTALL`: Run npm/maven installs.
+14. `POST_INSTALL`: Post-install tasks.
+15. `END`: Cleanup.
 
 ### Blueprint Pattern
 
-Blueprints allow customization by extending generators. Always:
-1. Call `this.composeWithBlueprints()` in `beforeQueue()` if `!this.fromBlueprint`
-2. Delegate priorities to blueprints: `this.delegateTasksToBlueprint(() => this.priorityName)`
-3. Use `this.composeWithJHipster()` to compose generators within same priority
-
-Example from `generators/app/generator.ts`:
-
-```typescript
-async beforeQueue() {
-  if (!this.fromBlueprint) await this.composeWithBlueprints();
-  if (!this.delegateToBlueprint) await this.dependsOnBootstrap('app');
-}
-
-get [BaseApplicationGenerator.COMPOSING_COMPONENT]() {
-  return this.asComposingComponentTaskGroup({
-    async composeCommon() { await this.composeWithJHipster('common'); },
-    async composeServer() { await this.composeWithJHipster('server'); },
-  });
-}
-```
+Blueprints allow customization by extending generators.
+- Call `this.composeWithBlueprints()` in `beforeQueue()` if `!this.fromBlueprint`.
+- Delegate priorities: `this.delegateTasksToBlueprint(() => this.priorityName)`.
+- Use `this.composeWithJHipster()` to compose generators within the same priority.
 
 ## Generator File Structure
 
-Each generator follows this pattern:
-
+Standard generator layout:
 ```
 generators/{name}/
   command.ts          // CLI options/args definition
@@ -78,24 +56,17 @@ generators/{name}/
   types.d.ts         // TypeScript types
   files.ts           // Template metadata
   templates/         // EJS template files
-  support/           // (Optional) helper functions
-```
-
-**files.ts** defines what templates to write:
-
-```typescript
-export const files = {
-  git: [{ templates: ['.gitignore.jhi', '.gitattributes.jhi'] }],
-  global: [{ templates: ['.editorconfig.jhi'] }],
-};
 ```
 
 ## Writing Files
 
-Use `this.writeFiles()` in the WRITING priority with file metadata + context:
+Use `this.writeFiles()` in the `WRITING` priority.
+- Define file mappings in `files.ts`.
+- Templates use EJS syntax.
+- Files ending in `.jhi` are renamed (e.g., `.gitignore.jhi` -> `.gitignore`).
 
 ```typescript
-get writing() {
+get [BaseApplicationGenerator.WRITING]() {
   return this.asWritingTaskGroup({
     async writeFiles({ application }) {
       await this.writeFiles({ sections: files, context: application });
@@ -104,11 +75,12 @@ get writing() {
 }
 ```
 
-Templates use EJS syntax. File names ending in `.jhi` are renamed (e.g., `.gitignore.jhi` → `.gitignore`).
-
 ## Testing Patterns
 
-Tests use **esmocha** + **yeoman-test** helpers. Key imports:
+Tests use **esmocha** + **yeoman-test**.
+- Use `helpers.run(GeneratorClass)` to simulate generator runs.
+- Use `withJHipsterGenerators()` to mock dependent generators.
+- **Snapshot testing** is standard.
 
 ```typescript
 import { describe, it, expect, before } from 'esmocha';
@@ -120,139 +92,36 @@ describe('generator - name', () => {
       .withJHipsterGenerators({ useDefaultMocks: true });
   });
   
-  it('should have generated file', () => {
-    expect(helpers.getFiles()).toContain('path/to/file');
+  it('should match snapshot', () => {
+    expect(helpers.getFiles()).toMatchSnapshot();
   });
 });
-```
-
-**Snapshot testing** is used extensively. Update snapshots with:
-```bash
-npm run update-snapshots  # All snapshots
-npm run update-snapshot -- generators/name  # Specific
 ```
 
 ## Build & Development Workflow
 
-### Commands
-
 | Command | Purpose |
 |---------|---------|
-| `npm run build` | Compile TS → JS, copy files, generate types |
-| `npm test` | Lint + type-check + run all tests |
-| `npm run lint-fix` | Fix ESLint + format with Prettier |
-| `npm run update-snapshots` | Update test snapshots |
+| `npm run build` | Compile TS -> JS, copy files, generate types. |
+| `npm test` | Run all tests (lint + check-types + esmocha). |
+| `npm run lint-fix` | Fix ESLint + format with Prettier. |
+| `npm run update-snapshots` | Update all test snapshots. |
+| `npm run update-snapshot -- generators/name` | Update specific snapshots. |
 
-### Running Development Generator
-
-1. Link package: `npm link` in generator-jhipster root
-2. Run generator with JIT: `./bin/jhipster.cjs` or alias to `jhipster`
-3. Test on generated app: `cd generated-app && npm link generator-jhipster`
-
-### Testing Samples
-
-```bash
-jhipster generate-sample ng-default  # Generate default Angular sample
-npm ci:backend:test  # CI test backend
-npm ci:frontend:test  # CI test frontend
-```
+### Running Locally
+1. `npm link` in root.
+2. `jhipster` (or `./bin/jhipster.cjs`) to run.
+3. `npm link generator-jhipster` in a generated app to test changes.
 
 ## Project Conventions
 
-### Configuration Management
-
-- **jhipsterConfig**: User-provided config, persists via `.yo-rc.json`
-- **jhipsterConfigWithDefaults**: Config merged with defaults from `config.ts`
-- **Config.defaults()**: Set defaults once before prompting
-- **entity**: Entity metadata object containing fields, relationships
-
-### Type System
-
-Strict typing via TypeScript generics in base classes:
-
-```typescript
-export class MyGenerator extends BaseApplicationGenerator<
-  MyEntity,    // Entity type
-  MyApplication, // Application config type
-  MyConfig,    // Config type
-  MyOptions,   // CLI options type
-  MySource     // Data source type
-> {}
-```
-
-### Logging
-
-Use `this.log` (injected logger):
-
-```typescript
-this.log.info('message');
-this.log.warn('warning');
-this.log.error('error');
-```
-
-### State Control
-
-Priority execution can be skipped via `skipPriorities` option:
-
-```typescript
-await this.composeWithJHipster('entity', {
-  generatorOptions: { skipPriorities: ['writing', 'postWriting'] },
-});
-```
-
-## Code Style & Standards
-
-- **TypeScript**: Strict mode, no `any`
-- **Linting**: ESLint config in `eslint.config.ts`, max 5 warnings allowed
-- **Formatting**: Prettier (auto-fix with `lint-fix`)
-- **EJS templates**: Validated with `ejslint`
-- **Tests**: Required for all features; use snapshots for output validation
+- **Configuration**: `jhipsterConfig` (user config), `jhipsterConfigWithDefaults` (merged defaults).
+- **Logging**: Use `this.log.info()`, `this.log.warn()`, `this.log.error()`. **No `console.log`**.
+- **Type System**: Strict TypeScript. No `any`. Use generics in base classes.
+- **Linting**: `eslint.config.ts` enforces rules. `import-x/extensions` requires extensions. `no-console` is error.
 
 ## Common Patterns
 
-### Conditional File Writing
-
-```typescript
-get writing() {
-  return this.asWritingTaskGroup({
-    async writeServerFiles({ application }) {
-      if (application.skipServer) return;
-      await this.writeFiles({ sections: serverFiles, context: application });
-    },
-  });
-}
-```
-
-### Entity Iteration
-
-BaseApplicationGenerator provides entity priorities:
-- `PREPARING_EACH_ENTITY`: Prepare entity for templates
-- `POST_PREPARING_EACH_ENTITY`: Post-process entity
-
-### Composing Sub-generators
-
-Always use `composeWithJHipster()` with qualified names:
-
-```typescript
-await this.composeWithJHipster('jhipster:java:server');  // Compose by namespace
-await this.composeWithJHipster('spring-boot');          // Shorthand (auto-prefixed)
-```
-
-## Where to Find Things
-
-- **Generator lifecycle**: `generators/base-core/priorities.ts` and `ARCHITECTURE.md`
-- **Test helpers**: `lib/testing/index.ts`
-- **CLI argument parsing**: `cli/program.ts`
-- **Type definitions**: `generators/base-application/types.ts`, `generators/common/types.ts`
-- **Blueprint system**: `generators/base/blueprints.spec.ts` has extensive examples
-- **Example generators**: `generators/app/`, `generators/init/`, `generators/spring-boot/`
-
-## When Making Changes
-
-1. **Generator logic**: Update `generator.ts`, test in `generator.spec.ts`
-2. **New priority**: Add to base class, delegate in implementations, document in priorities.ts
-3. **Template changes**: Update `templates/` files and regenerate samples with `generate-sample`
-4. **Type changes**: Update `types.d.ts`, regenerate types with `npm run build`
-5. **Configuration**: Extend `config.ts`, add prompts in `command.ts`, validate in CONFIGURING
-
-Always run `npm test` before submitting changes to catch lint/type errors early.
+- **Conditional Writing**: Check flags in `application` context before writing sections.
+- **Entity Iteration**: Use `PREPARING_EACH_ENTITY` and `POST_PREPARING_EACH_ENTITY`.
+- **Composing**: Always use `composeWithJHipster('namespace')` or `composeWithJHipster('shortname')`.
