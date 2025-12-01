@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 
 import { parse as parseYaml } from 'yaml';
+import { upperFirstCamelCase } from '../../../lib/utils/string.ts';
 
 /**
  * Represents an OpenAPI operation (GET, POST, PUT, DELETE, etc.)
@@ -306,7 +307,18 @@ export function extractSchemaRef(schemaObj: any): string | undefined {
 export function normalizeTypeName(name: string): string {
   if (!name) return name;
   const segments = name.split(/[^A-Za-z0-9]+/g).filter(Boolean);
-  return segments.map(segment => segment.charAt(0).toUpperCase() + segment.slice(1)).join('');
+  return segments.map(segment => upperFirstCamelCase(segment)).join('');
+}
+
+/**
+ * Normalize DTO schema names to follow OpenAPI generator casing rules without collapsing acronyms.
+ */
+export function normalizeDtoTypeName(name: string): string {
+  if (!name) return name;
+  const segments = name.split(/[^A-Za-z0-9]+/g).filter(Boolean);
+  return segments
+    .map(segment => (segment ? segment.charAt(0).toUpperCase() + segment.slice(1) : segment))
+    .join('');
 }
 
 /**
@@ -430,7 +442,7 @@ export function stripDtoSuffix(dtoName: string): string {
  * Build fully-qualified class name for DTO
  */
 export function buildDtoFqcn(dtoName: string, basePackage: string): string {
-  return `${basePackage}.service.api.dto.${normalizeTypeName(dtoName)}`;
+  return `${basePackage}.service.api.dto.${normalizeDtoTypeName(dtoName)}`;
 }
 
 /**

@@ -23,6 +23,10 @@ package <%= entityAbsolutePackage %>.service.mapper;
   const uuidMapMethod = restProperties.some(property => property.relatedField?.fieldTypeUUID);
   const byteMapMethod = restProperties.some(property => property.relatedField?.fieldTypeBytes);
   const dtoRelationships = restProperties.filter(property => property.relationshipName && !property.otherEntity.embedded);
+  // Filter fields that are also relationships to avoid duplicate mappings
+  const relationshipNames = dtoRelationships.map(r => r.propertyName);
+  const fieldsWithExpression = fields.filter(field => field.mapstructExpression && !relationshipNames.includes(field.propertyName));
+
   let otherEntitiesFields = otherEntities
     .filter(otherEntity => dtoRelationships.some(relationship => relationship.otherEntity === otherEntity))
     .map(otherEntity =>
@@ -61,7 +65,29 @@ import java.util.UUID;
  * Mapper for the entity {@link <%= persistClass %>} and its DTO {@link <%= dtoClass %>}.
  */
 @Mapper(componentModel = "spring")
-public interface <%= entityClass %>Mapper extends EntityMapper<<%= dtoClass %>, <%= persistClass %>> {
+public abstract class <%= entityClass %>Mapper implements EntityMapper<<%= dtoClass %>, <%= persistClass %>> {
+
+    @org.springframework.beans.factory.annotation.Autowired
+    protected com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Named("mapToJsonString")
+    public String mapToJsonString(Object object) {
+        try {
+            return objectMapper.writeValueAsString(object);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Named("jsonStringToMap")
+    public java.util.Map<String, Object> jsonStringToMap(String json) {
+        try {
+            return objectMapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
 <%_ if (!embedded) { _%>
   <%_ var renMapAnotEnt = false; /*Render Mapping Annotation during Entity to DTO conversion?*/ _%>
   <%_ for (relationship of dtoRelationships) { _%>
@@ -72,12 +98,12 @@ public interface <%= entityClass %>Mapper extends EntityMapper<<%= dtoClass %>, 
     _%>
     @Mapping(target = "<%= relationship.propertyName %>", source = "<%= relationship.propertyName %>", qualifiedByName="<%= qualifiedByName %>")
   <%_ } _%>
-  <%_ for (const field of fields.filter(field => field.mapstructExpression)) {
+  <%_ for (const field of fieldsWithExpression) {
       renMapAnotEnt = true; _%>
     @Mapping( target = "<%= field.propertyName %>", expression = "<%- field.mapstructExpression %>")
   <%_ } _%>
   <%_ if (renMapAnotEnt) { _%>
-    <%= dtoClass %> toDto(<%= persistClass %> s);
+    public abstract <%= dtoClass %> toDto(<%= persistClass %> s);
   <%_ } _%>
 
   <%_ var renMapAnotDto = false;  /*Render Mapping Annotation during DTO to Entity conversion?*/ _%>
@@ -98,7 +124,7 @@ public interface <%= entityClass %>Mapper extends EntityMapper<<%= dtoClass %>, 
     <%_ } _%>
   <%_ } _%>
   <%_ if (renMapAnotDto) { _%>
-    <%= persistClass %> toEntity(<%= dtoClass %> <%= dtoInstance %>);
+    public abstract <%= persistClass %> toEntity(<%= dtoClass %> <%= dtoInstance %>);
   <%_ } _%>
   <%_ for (const {otherEntity, relatedField, collection} of otherEntitiesFields) { _%>
     <%_ const mapperName = otherEntity.entityInstance + this._.upperFirst(relatedField.propertyName); _%>
@@ -116,28 +142,28 @@ public interface <%= entityClass %>Mapper extends EntityMapper<<%= dtoClass %>, 
       <%_ } _%>
     <%_ } _%>
       <%_ if (relatedField.mapstructExpression) { _%>
-    <%- otherEntity.dtoClass %> toDto<%= this._.upperFirst(mapperName) %>(<%- otherEntity.persistClass %> s);
+    public abstract <%- otherEntity.dtoClass %> toDto<%= this._.upperFirst(mapperName) %>(<%- otherEntity.persistClass %> s);
     <%_ } else { _%>
-    <%- otherEntity.dtoClass %> toDto<%= this._.upperFirst(mapperName) %>(<%- otherEntity.persistClass %> <%= otherEntity.persistInstance %>);
+    public abstract <%- otherEntity.dtoClass %> toDto<%= this._.upperFirst(mapperName) %>(<%- otherEntity.persistClass %> <%= otherEntity.persistInstance %>);
       <%_ } _%>
     <%_ if (collection) { %>
       <%_ const collectionMapperName = otherEntity.entityInstance + this._.upperFirst(relatedField.propertyName) + 'Set'; _%>
 
     @Named("<%= collectionMapperName %>")
-    default Set<<%- otherEntity.dtoClass %>> toDto<%= this._.upperFirst(mapperName) %>Set(Set<<%- otherEntity.persistClass %>> <%= otherEntity.persistInstance %>) {
+    public Set<<%- otherEntity.dtoClass %>> toDto<%= this._.upperFirst(mapperName) %>Set(Set<<%- otherEntity.persistClass %>> <%= otherEntity.persistInstance %>) {
         return <%= otherEntity.persistInstance %>.stream().map(this:: toDto<%= this._.upperFirst(mapperName) %>).collect(Collectors.toSet());
     }
     <%_ } _%>
   <%_ } _%>
   <%_ if (uuidMapMethod) { _%>
 
-    default String map(UUID value) {
+    public String map(UUID value) {
         return Objects.toString(value, null);
     }
   <%_ } _%>
   <%_ if (byteMapMethod) { _%>
 
-    default String map(byte[] value) {
+    public String map(byte[] value) {
         return new String(value);
     }
   <%_ } _%>

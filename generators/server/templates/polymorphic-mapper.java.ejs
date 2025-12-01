@@ -151,9 +151,11 @@ public interface <%- mapperName %> {
                 return null;
             }
     <%_ for (const subtype of variant.subtypes) { _%>
-            if (source instanceof <%- subtype.dtoType %>) {
+      <%_ if (subtype.isCompatible) { _%>
+            if ((Object) source instanceof <%- subtype.dtoType %>) {
                 return new <%- subtype.domainType %>();
             }
+      <%_ } _%>
     <%_ } _%>
             return null;
         }
@@ -192,7 +194,9 @@ public interface <%- mapperName %> {
         default <%- poly.baseDomainType %> create<%- poly.baseType %>From<%- variant.normalizedName %>(<%- variant.dtoType %> source) {
             if (source == null) return null;
     <%_ for (const subtype of variant.subtypes) { _%>
-            if (source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+      <%_ if (subtype.isCompatible) { _%>
+            if ((Object) source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+      <%_ } _%>
     <%_ } _%>
             return null;
         }
@@ -215,7 +219,7 @@ public interface <%- mapperName %> {
         default <%- variant.dtoType %> create<%- variant.normalizedName %>From<%- poly.baseType %>(<%- poly.baseDomainType %> source) {
             if (source == null) return null;
     <%_ for (const subtype of variant.subtypes) { _%>
-            if (source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
+            if ((Object) source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
     <%_ } _%>
             return null;
         }
@@ -230,7 +234,9 @@ public interface <%- mapperName %> {
     default <%- poly.baseDomainType %> create<%- poly.baseType %>(<%- poly.baseDtoType %> source) {
         if (source == null) return null;
   <%_ for (const subtype of poly.subtypes) { _%>
-        if (source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+    <%_ if (subtype.isCompatible) { _%>
+        if ((Object) source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+    <%_ } _%>
   <%_ } _%>
         return null;
     }
@@ -253,7 +259,7 @@ public interface <%- mapperName %> {
     default <%- poly.baseDtoType %> create<%- poly.baseType %>Dto(<%- poly.baseDomainType %> source) {
         if (source == null) return null;
   <%_ for (const subtype of poly.subtypes) { _%>
-        if (source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
+        if ((Object) source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
   <%_ } _%>
         return null;
     }

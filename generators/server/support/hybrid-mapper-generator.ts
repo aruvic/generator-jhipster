@@ -18,6 +18,7 @@
  */
 
 import { upperFirstCamelCase } from '../../../lib/utils/string.ts';
+import { appendFileSync } from 'node:fs';
 
 import type { OperationDescriptor } from './openapi-entity-matcher.ts';
 import {
@@ -75,6 +76,7 @@ export interface SubtypeInfo {
   domainType: string;
   dtoSimpleName: string;
   domainSimpleName: string;
+  isCompatible?: boolean;
 }
 
 export interface PolymorphicVariantInfo {
@@ -143,20 +145,32 @@ const ABSTRACT_SCHEMAS = new Set(['Entity', 'Extensible', 'Addressable']);
  * Check if schema is polymorphic
  */
 function isPolymorphic(schema: any, schemaName?: string): boolean {
+  if (schemaName === 'Party') {
+    try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Checking isPolymorphic for Party\n'); } catch (e) {}
+  }
   if (!schema) return false;
 
   const hasOneOf = Array.isArray(schema.oneOf) && schema.oneOf.length > 0;
   if (hasOneOf) {
+    if (schemaName === 'Party') {
+        try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party has oneOf\n'); } catch (e) {}
+    }
     return true;
   }
 
   const discriminator = schema.discriminator;
   if (!discriminator) {
+    if (schemaName === 'Party') {
+        try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party has no discriminator\n'); } catch (e) {}
+    }
     return false;
   }
 
   const mapping = discriminator.mapping;
   if (!mapping || Object.keys(mapping).length === 0) {
+    if (schemaName === 'Party') {
+        try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party has discriminator but no mapping\n'); } catch (e) {}
+    }
     // Some specs rely on discriminator + oneOf/anyOf, already handled above.
     return false;
   }
@@ -168,7 +182,11 @@ function isPolymorphic(schema: any, schemaName?: string): boolean {
     .map(name => stripDtoSuffix(name))
     .filter(name => name && (!normalizedBase || name !== normalizedBase));
 
-  return new Set(referencedTargets).size > 0;
+  const result = new Set(referencedTargets).size > 0;
+  if (schemaName === 'Party') {
+      try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party isPolymorphic result: ' + result + '\n'); } catch (e) {}
+  }
+  return result;
 }
 
 function singularizeName(value: string): string {
@@ -186,7 +204,7 @@ function singularizeName(value: string): string {
 }
 
 function buildVariantMappingMethodName(baseType: string, _variantSimpleName: string): string {
-  return `to${baseType}`;
+  return `to${baseType}Entity`;
 }
 
 /**
@@ -618,7 +636,7 @@ function toOpenApiPropertyName(fieldName: string): string {
 }
 
 function toJHipsterPropertyName(fieldName: string): string {
-  return lowerFirst(fieldName);
+  return toOpenApiPropertyName(fieldName);
 }
 
 
@@ -886,15 +904,27 @@ function buildObjectFactoryContexts(
   basePackage: string,
   fallback?: PolymorphicFallbackFactoryMetadata,
 ): ObjectFactoryMethodContext[] {
-  if (!metadata?.isAbstract && !fallback) {
+  const childEntityKeys = new Set(
+    (metadata?.childEntities ?? [])
+      .map(child => normalizeEntityKey(child?.name))
+      .filter((key): key is string => Boolean(key)),
+  );
+  const isPolymorphicEntity = Boolean(metadata?.isAbstract || childEntityKeys.size > 0);
+  if (!isPolymorphicEntity) {
     return [];
   }
   const variants = buildObjectFactoryVariants(entityName, metadata, basePackage, fallback?.variants);
-  if (variants.length === 0) {
+  const applicableVariants = childEntityKeys.size > 0
+    ? variants.filter(variant => {
+        const variantEntity = normalizeEntityKey(extractDomainEntityName(variant.instantiationType));
+        return variantEntity ? childEntityKeys.has(variantEntity) : false;
+      })
+    : variants;
+  if (applicableVariants.length === 0) {
     return [];
   }
 
-  const defaultVariant = variants.find(variant => variant.isDefault) ?? variants[0];
+  const defaultVariant = applicableVariants.find(variant => variant.isDefault) ?? applicableVariants[0];
   const seenSources = new Set<string>();
   const factoryContexts: ObjectFactoryMethodContext[] = [];
 
@@ -930,7 +960,7 @@ function buildObjectFactoryContexts(
       sourceType: mapping.sourceType,
       discriminatorAccessor,
       fallbackAccessor: 'source.getClass().getSimpleName()',
-      variants,
+      variants: applicableVariants,
       defaultVariant,
     });
   }
@@ -1067,12 +1097,19 @@ function buildPolymorphicMapping(
   schemaVariants: Map<string, Set<string>>,
   schemas: Record<string, any>,
   derivedByBase: Map<string, Set<string>>,
+  entityMetadata: Map<string, EntityMetadata>,
 ): PolymorphicTypeMapping | null {
+  if (schemaName === 'Party') {
+      try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: buildPolymorphicMapping called for Party\n'); } catch (e) {}
+  }
   if (!isPolymorphic(schema, schemaName)) return null;
 
   const baseType = stripDtoSuffix(schemaName);
   const normalizedBase = normalizeTypeName(baseType);
   const subtypeNames = extractSubtypes(schema);
+  if (schemaName === 'Party') {
+      try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party initial subtypes: ' + subtypeNames.join(', ') + '\n'); } catch (e) {}
+  }
   const derivedSchemas = resolveDerivedSchemas(baseType, derivedByBase);
   for (const derivedSchema of derivedSchemas) {
     const normalizedDerived = stripDtoSuffix(derivedSchema);
@@ -1083,29 +1120,52 @@ function buildPolymorphicMapping(
       subtypeNames.push(normalizedDerived);
     }
   }
-  if (subtypeNames.length === 0) return null;
+  if (subtypeNames.length === 0) {
+    if (schemaName === 'Party') {
+        try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party has no subtypes\n'); } catch (e) {}
+    }
+    return null;
+  }
 
   const baseDtoFqcn = buildDtoFqcn(schemaName, basePackage);
   const baseDomainFqcn = buildDomainFqcn(baseType, basePackage);
   const isAbstract = !!schema.discriminator || !!schema.abstract || !!schema['x-abstract'] || (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) || (Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
 
   const subtypeInfos: SubtypeInfo[] = subtypeNames
-    .map(subtypeName => {
+    .map((subtypeName): SubtypeInfo | undefined => {
+      if (schemaName === 'Party') {
+         try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Processing subtype ${subtypeName} for Party\n`); } catch (e) {}
+      }
       const domainCandidate = schemas[subtypeName] ? stripDtoSuffix(subtypeName) : baseType;
       if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
+        if (schemaName === 'Party') {
+            try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Subtype ${subtypeName} ignored (domainCandidate: ${domainCandidate})\n`); } catch (e) {}
+        }
         return undefined;
       }
       if (isAbstract && domainCandidate === baseType) {
+        if (schemaName === 'Party') {
+            try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Subtype ${subtypeName} ignored (isAbstract and domainCandidate is baseType)\n`); } catch (e) {}
+        }
         return undefined;
       }
+
+      const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
+      const isCompatible = baseType === domainCandidate || baseMetadata?.childEntities.some(child => normalizeEntityKey(child.name) === normalizeEntityKey(domainCandidate));
+
       return {
         dtoType: buildDtoFqcn(subtypeName, basePackage),
         domainType: buildDomainFqcn(domainCandidate, basePackage),
         dtoSimpleName: subtypeName,
         domainSimpleName: domainCandidate,
+        isCompatible,
       } satisfies SubtypeInfo;
     })
     .filter((info): info is SubtypeInfo => !!info);
+
+  if (schemaName === 'Party') {
+      try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Party subtypeInfos length: ${subtypeInfos.length}\n`); } catch (e) {}
+  }
 
   const uniqueSubtypeInfos = Array.from(new Map(subtypeInfos.map(info => [info.domainSimpleName, info])).values());
   const subtypeInfoByName = new Map(uniqueSubtypeInfos.map(info => [normalizeTypeName(info.domainSimpleName)!, info]));
@@ -1126,7 +1186,7 @@ function buildPolymorphicMapping(
       const variantSchema = schemas[variantName];
       const variantSubtypeNames = extractSubtypes(variantSchema) ?? [];
       let variantSubtypeInfos: SubtypeInfo[] = variantSubtypeNames
-        .map(subtypeName => {
+        .map((subtypeName): SubtypeInfo | undefined => {
           const domainCandidate = schemas[subtypeName] ? stripDtoSuffix(subtypeName) : baseType;
           if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
             return undefined;
@@ -1134,11 +1194,16 @@ function buildPolymorphicMapping(
           if (isAbstract && domainCandidate === baseType) {
             return undefined;
           }
+
+          const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
+          const isCompatible = baseType === domainCandidate || baseMetadata?.childEntities.some(child => normalizeEntityKey(child.name) === normalizeEntityKey(domainCandidate));
+
           return {
             dtoType: buildDtoFqcn(subtypeName, basePackage),
             domainType: buildDomainFqcn(domainCandidate, basePackage),
             dtoSimpleName: subtypeName,
             domainSimpleName: domainCandidate,
+            isCompatible,
           } satisfies SubtypeInfo;
         })
         .filter((subtypeInfo): subtypeInfo is SubtypeInfo => !!subtypeInfo);
@@ -1184,7 +1249,9 @@ export function generateHybridMappers(
   helperMappers: PolymorphicHelperMapperContext[];
   entityMappers: EntityMapperContext[];
 } {
+  try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: generateHybridMappers called\n'); } catch (e) {}
   const schemas = spec.schemas;
+  try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: schemas keys: ' + Object.keys(schemas).join(', ') + '\n'); } catch (e) {}
   const polymorphicTypes: PolymorphicTypeMapping[] = [];
   const entityMappersMap = new Map<string, EntityMapperContext>();
   const processedPolyTypes = new Set<string>();
@@ -1268,6 +1335,9 @@ export function generateHybridMappers(
   };
 
   for (const [schemaName, schema] of Object.entries(schemas)) {
+    if (schemaName === 'Party') {
+        try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Processing schema loop for Party\n'); } catch (e) {}
+    }
     if (isEnumSchema(schema)) continue;
     if (!isObjectLikeSchema(schema)) continue;
 
@@ -1276,8 +1346,14 @@ export function generateHybridMappers(
 
     // Only process each base polymorphic type once (skip DTO/FVO/MVO variants)
     if (isPolymorphic(schema, schemaName) && !processedPolyTypes.has(baseEntity)) {
+      if (schemaName === 'Party') {
+          try { appendFileSync('/tmp/jhipster-debug.log', 'DEBUG: Party identified as polymorphic\n'); } catch (e) {}
+      }
       processedPolyTypes.add(baseEntity);
-      const polyMapping = buildPolymorphicMapping(schemaName, schema, basePackage, schemaVariants, schemas, derivedByBase);
+      const polyMapping = buildPolymorphicMapping(schemaName, schema, basePackage, schemaVariants, schemas, derivedByBase, entityMetadata);
+      if (schemaName === 'Party') {
+          try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Party polyMapping result: ${polyMapping ? 'not null' : 'null'}\n`); } catch (e) {}
+      }
       if (polyMapping) {
         polymorphicTypes.push(polyMapping);
         registerHelperReferences(polyMapping.baseType, schemaName);
@@ -1298,17 +1374,33 @@ export function generateHybridMappers(
   // Phase 2: Create entity mappers for concrete entities
 
   for (const [schemaName, schema] of Object.entries(schemas)) {
-    if (isEnumSchema(schema)) continue;
-    if (!isObjectLikeSchema(schema)) continue;
+    if (schemaName === 'Booking') {
+        try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Processing schema loop for Booking\n`); } catch (e) {}
+    }
+    if (isEnumSchema(schema)) {
+        if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking isEnumSchema\n`); } catch (e) {}
+        continue;
+    }
+    if (!isObjectLikeSchema(schema)) {
+        if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking !isObjectLikeSchema\n`); } catch (e) {}
+        continue;
+    }
 
     const baseEntity = stripDtoSuffix(schemaName);
-    if (ABSTRACT_SCHEMAS.has(baseEntity)) continue;
+    if (ABSTRACT_SCHEMAS.has(baseEntity)) {
+        if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking is ABSTRACT_SCHEMAS\n`); } catch (e) {}
+        continue;
+    }
 
     // Skip polymorphic base types (handled by helper mappers)
-    if (isPolymorphic(schema, schemaName)) continue;
+    if (isPolymorphic(schema, schemaName)) {
+        if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking isPolymorphic\n`); } catch (e) {}
+        continue;
+    }
 
     // Skip DTO variants (FVO, MVO) - only process base entity once
     if (!entityMappersMap.has(baseEntity)) {
+      if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking processing entity mapper\n`); } catch (e) {}
       const domainType = buildDomainFqcn(baseEntity, basePackage);
 
       const requestMappings: EntityMapping[] = [];
@@ -1449,6 +1541,8 @@ export function generateHybridMappers(
           });
         }
       }
+
+      if (schemaName === 'Booking') try { appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking setting entityMappersMap. Request mappings: ${requestMappings.length}, Response mappings: ${responseMappings.length}\n`); } catch (e) {}
 
       entityMappersMap.set(baseEntity, {
         mapperName: `${baseEntity}Mapper`,
@@ -1591,6 +1685,15 @@ export function generateHybridMappers(
       objectFactories: objectFactories.length > 0 ? objectFactories : undefined,
     } satisfies EntityMapperContext;
   });
+
+  try {
+    const bookingInMap = entityMappersMap.has('Booking');
+    const bookingInArray = entityMappers.find(m => m.entityName === 'Booking');
+    appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Final check in hybrid-mapper-generator. Booking in map: ${bookingInMap}, Booking in array: ${!!bookingInArray}\n`);
+    if (bookingInArray) {
+         appendFileSync('/tmp/jhipster-debug.log', `DEBUG: Booking mapper details: ${JSON.stringify(bookingInArray)}\n`);
+    }
+  } catch (e) {}
 
   return {
     helperMappers,

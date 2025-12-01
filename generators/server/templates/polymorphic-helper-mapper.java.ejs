@@ -31,7 +31,7 @@ public interface <%- mapperName %> {
             return null;
         }
  <%_ for (const subtype of subtypes) { _%>
-        if (source instanceof <%- subtype.domainType %>) {
+        if ((Object) source instanceof <%- subtype.domainType %>) {
             return new <%- subtype.dtoType %>();
         }
  <%_ } _%>
@@ -49,15 +49,21 @@ public interface <%- mapperName %> {
 <%_ } _%>
     <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
 
+    default <%- baseDomainType %> to<%- baseType %>Entity(<%- baseDtoType %> source) {
+        return to<%- baseType %>(source);
+    }
+
     @ObjectFactory
     default <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
         if (source == null) {
             return null;
         }
  <%_ for (const subtype of subtypes) { _%>
-        if (source instanceof <%- subtype.dtoType %>) {
+   <%_ if (subtype.isCompatible) { _%>
+        if ((Object) source instanceof <%- subtype.dtoType %>) {
             return new <%- subtype.domainType %>();
         }
+   <%_ } _%>
  <%_ } _%>
  <%_ if (isAbstract) { _%>
         return null;
@@ -92,9 +98,11 @@ public interface <%- mapperName %> {
                 }
             }
 _%>
-        if (source instanceof <%- subtypeDtoType %>) {
+    <%_ if (subtype.isCompatible) { _%>
+        if ((Object) source instanceof <%- subtypeDtoType %>) {
             return new <%- subtype.domainType %>();
         }
+    <%_ } _%>
 <%_     } _%>
 <%_     if (targetDomainType === baseDomainType && isAbstract) { _%>
         return null;
