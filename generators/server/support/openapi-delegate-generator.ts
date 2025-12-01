@@ -708,12 +708,12 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     const bodyParam = opContext.parameters.find(param => param.in === 'body');
     if (bodyParam && isMutation) {
-      const requestMapperType = operation.requestBodySchema ?? persistenceEntity.name;
+      const requestMapperType = persistenceEntity.name;
       const requestMapper = ensureMapperDependencyContext(context, requestMapperType, {
         primary: requestMapperType === context.resourceName,
       });
       opContext.requestMapperField = requestMapper.fieldName;
-      opContext.requestMapperMethod = `to${persistenceEntity.name}`;
+      opContext.requestMapperMethod = `to${persistenceEntity.name}Entity`;
       opContext.willPersist = true;
     } else {
       opContext.willPersist = false;

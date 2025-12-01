@@ -405,7 +405,14 @@ export class OpenApiEntityMatcher {
       return 6;
     }
     if (candidate.startsWith(canonical)) {
-      return 5;
+      const suffix = candidate.slice(canonical.length);
+      if (!suffix) {
+        return 6;
+      }
+      if (this.isVariantPrefix(suffix)) {
+        return 4;
+      }
+      return 0;
     }
     if (candidate.endsWith(canonical)) {
       const prefix = candidate.slice(0, candidate.length - canonical.length);
