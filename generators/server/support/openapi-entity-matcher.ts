@@ -134,6 +134,17 @@ export class OpenApiEntityMatcher {
     return descriptors;
   }
 
+  /**
+   * Attempt to match a schema name to an existing entity definition.
+   */
+  matchSchemaName(schemaName: string): MatchedEntityInfo | undefined {
+    const match = this.matchEntityBySchema(schemaName);
+    if (!match) {
+      return undefined;
+    }
+    return { name: match.name, fqcn: match.fqcn, entity: match.entity };
+  }
+
   describeOperation(operation: OpenAPIOperation, spec: ParsedOpenAPISpec): OperationDescriptor {
     const operationType = getOperationType(operation);
     const pathParameters = (operation.parameters ?? []).filter(param => param.in === 'path');
@@ -264,6 +275,15 @@ export class OpenApiEntityMatcher {
       derivedAliases.add(normalizeTypeName(alias));
       derivedAliases.add(pluralize.singular(alias));
       derivedAliases.add(pluralize.plural(alias));
+    }
+
+    const discriminatorValue =
+      entity.annotations?.discriminatorValue?.value ??
+      entity.annotations?.discriminatorValue ??
+      entity.discriminatorValue ??
+      entity.discriminator?.value;
+    if (typeof discriminatorValue === 'string' && discriminatorValue.trim()) {
+      derivedAliases.add(discriminatorValue);
     }
 
     for (const alias of derivedAliases) {

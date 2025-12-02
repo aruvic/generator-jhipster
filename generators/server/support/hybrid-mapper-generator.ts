@@ -409,28 +409,34 @@ function isSubtypeInstantiationCompatible(
   if (baseType === domainCandidate) {
     return true;
   }
+
   const normalizedCandidate = normalizeEntityKey(domainCandidate);
   if (!normalizedCandidate) {
     return false;
   }
+
   const matchedChild = metadata?.childEntities?.find(
     child => normalizeEntityKey(child.name) === normalizedCandidate,
   );
   if (matchedChild) {
     return !matchedChild.abstract;
   }
-  const hasChildMetadata = (metadata?.childEntities?.length ?? 0) > 0;
+
+  // If we know the base entity metadata but can't match the candidate to a declared child,
+  // avoid assuming inheritance to prevent mapping siblings to each other.
+  if (metadata) {
+    return false;
+  }
+
   // When no metadata is available (common for imported specs), optimistically allow instantiation
   // so MapStruct can create concrete subtypes instead of returning null factories.
-  if (!metadata || !hasChildMetadata) {
-    return true;
-  }
-  return false;
+  return true;
 }
 
 function collectAllOfDerivedSchemas(schemas: Record<string, any>): Map<string, Set<string>> {
   const derivedByBase = new Map<string, Set<string>>();
   const normalizedToOriginal = new Map<string, Set<string>>();
+  const compositeRefsByBase = new Map<string, Set<string>>();
 
   const register = (baseName?: string, derivedName?: string) => {
     if (!baseName || !derivedName) {
@@ -460,6 +466,15 @@ function collectAllOfDerivedSchemas(schemas: Record<string, any>): Map<string, S
         continue;
       }
       register(base, refName);
+      const baseKey = normalizeTypeName(stripDtoSuffix(base));
+      const refKey = normalizeTypeName(stripDtoSuffix(refName));
+      if (!baseKey || !refKey) {
+        continue;
+      }
+      if (!compositeRefsByBase.has(baseKey)) {
+        compositeRefsByBase.set(baseKey, new Set());
+      }
+      compositeRefsByBase.get(baseKey)!.add(refKey);
     }
   };
 
@@ -467,11 +482,17 @@ function collectAllOfDerivedSchemas(schemas: Record<string, any>): Map<string, S
     if (!mapping) {
       return;
     }
+    const baseKey = normalizeTypeName(stripDtoSuffix(base));
+    const allowedRefs = baseKey ? compositeRefsByBase.get(baseKey) : undefined;
     for (const target of Object.values(mapping)) {
       if (!target) {
         continue;
       }
       const refName = target.includes('/') ? target.split('/').pop() : target;
+      const targetKey = normalizeTypeName(stripDtoSuffix(refName ?? ''));
+      if (allowedRefs && targetKey && !allowedRefs.has(targetKey)) {
+        continue;
+      }
       register(base, refName);
     }
   };
@@ -623,32 +644,100 @@ function buildEntityMetadataFromDescriptor(entity: any): Partial<EntityMetadata>
     return undefined;
   }
   const childEntities: EntityMetadata['childEntities'] = [];
+  const discriminatorValues: Record<string, string> = {};
+
+  const registerChildEntity = (name?: string, discriminatorValue?: string, abstractFlag?: boolean) => {
+    const normalized = normalizeEntityKey(name ?? discriminatorValue);
+    if (!normalized) {
+      return;
+    }
+    const existing = childEntities.find(child => normalizeEntityKey(child.name) === normalized);
+    if (existing) {
+      existing.discriminatorValue = existing.discriminatorValue ?? discriminatorValue;
+      if (abstractFlag !== undefined) {
+        existing.abstract = abstractFlag;
+      }
+      return;
+    }
+    childEntities.push({
+      name: normalized,
+      discriminatorValue,
+      abstract: abstractFlag,
+    });
+  };
+
   if (Array.isArray(entity.childEntities)) {
     for (const child of entity.childEntities) {
       const normalized = normalizeEntityKey(child?.name ?? child?.entityClass ?? child?.entityNameCapitalized);
       if (!normalized) {
         continue;
       }
-      childEntities.push({
-        name: normalized,
-        discriminatorValue: child?.discriminatorValue,
-        abstract: child?.abstractClass ?? child?.abstract,
-      });
+      registerChildEntity(normalized, child?.discriminatorValue, child?.abstractClass ?? child?.abstract);
+    }
+  }
+
+  const registerDiscriminatorMapping = (value?: string, target?: string, abstractFlag?: boolean) => {
+    const discriminatorValue = value?.trim();
+    const targetName = target?.trim() ?? discriminatorValue;
+    if (!discriminatorValue || !targetName) {
+      return;
+    }
+    const normalizedTarget = normalizeEntityKey(targetName);
+    if (!normalizedTarget) {
+      return;
+    }
+    discriminatorValues[discriminatorValue] = normalizedTarget;
+    registerChildEntity(normalizedTarget, discriminatorValue, abstractFlag);
+  };
+
+  const discriminatorConfig = entity.annotations?.discriminator?.values ?? entity.discriminatorColumn?.values;
+  if (typeof discriminatorConfig === 'string') {
+    const mappings = discriminatorConfig.split(',').map(part => part.trim()).filter(Boolean);
+    for (const mapping of mappings) {
+      const [value, target] = mapping.split('->').map(entry => entry?.trim()).filter(Boolean);
+      registerDiscriminatorMapping(value ?? mapping, target);
+    }
+  } else if (Array.isArray(discriminatorConfig)) {
+    for (const entry of discriminatorConfig) {
+      if (!entry) continue;
+      if (typeof entry === 'string') {
+        registerDiscriminatorMapping(entry, entry);
+      } else if (typeof entry === 'object') {
+        registerDiscriminatorMapping(entry.value ?? entry.name ?? entry.entity, entry.entity ?? entry.name ?? entry.value, entry.abstract);
+      }
+    }
+  } else if (discriminatorConfig && typeof discriminatorConfig === 'object') {
+    for (const [value, target] of Object.entries(discriminatorConfig)) {
+      if (typeof target === 'string') {
+        registerDiscriminatorMapping(value, target);
+      } else if (target && typeof target === 'object') {
+        registerDiscriminatorMapping(value, (target as any).entity ?? (target as any).name ?? value);
+      } else {
+        registerDiscriminatorMapping(value, value);
+      }
     }
   }
 
   const annotationsAbstract = entity.annotations?.abstract;
-  return {
+  const metadata: Partial<EntityMetadata> = {
     isAbstract: Boolean(entity.abstractClass ?? entity.abstract ?? annotationsAbstract ?? entity.polymorphicRoot),
     discriminatorProperty: entity.discriminator?.property ?? entity.discriminatorProperty,
     childEntities,
-    discriminatorValues: entity.discriminatorColumn?.values,
-  } satisfies Partial<EntityMetadata>;
+  };
+
+  if (Object.keys(discriminatorValues).length > 0) {
+    metadata.discriminatorValues = discriminatorValues;
+  } else if (entity.discriminatorColumn?.values) {
+    metadata.discriminatorValues = entity.discriminatorColumn.values;
+  }
+
+  return metadata satisfies Partial<EntityMetadata>;
 }
 
 function collectEntityMetadata(
   operationDescriptors?: Map<OpenAPIOperation, OperationDescriptor>,
   resolveDomainMetadata?: DomainMetadataResolver,
+  entityDefinitions?: Map<string, any>,
 ): Map<string, EntityMetadata> {
   const metadataByName = new Map<string, EntityMetadata>();
 
@@ -666,6 +755,12 @@ function collectEntityMetadata(
       register(descriptor.matchedEntity);
       register(descriptor.requestEntityMatch);
       register(descriptor.responseEntityMatch);
+    }
+  }
+
+  if (entityDefinitions) {
+    for (const [entityName, definition] of entityDefinitions.entries()) {
+      register({ name: entityName, entity: definition });
     }
   }
 
@@ -1262,14 +1357,16 @@ function buildPolymorphicMapping(
   const normalizedBase = normalizeTypeName(baseType);
   const referenceLikeFamily = isReferenceLikeName(baseType);
   const subtypeNames = extractSubtypes(schema);
-  const derivedSchemas = resolveDerivedSchemas(baseType, derivedByBase);
-  for (const derivedSchema of derivedSchemas) {
-    const normalizedDerived = stripDtoSuffix(derivedSchema);
-    if (!normalizedDerived) {
-      continue;
-    }
-    if (!subtypeNames.includes(normalizedDerived)) {
-      subtypeNames.push(normalizedDerived);
+  if (subtypeNames.length === 0) {
+    const derivedSchemas = resolveDerivedSchemas(baseType, derivedByBase);
+    for (const derivedSchema of derivedSchemas) {
+      const normalizedDerived = stripDtoSuffix(derivedSchema);
+      if (!normalizedDerived) {
+        continue;
+      }
+      if (!subtypeNames.includes(normalizedDerived)) {
+        subtypeNames.push(normalizedDerived);
+      }
     }
   }
   if (subtypeNames.length === 0) {
@@ -1290,6 +1387,12 @@ function buildPolymorphicMapping(
         return undefined;
       }
 
+      const metadataKey = normalizeEntityKey(baseType) ?? baseType;
+      const ancestors = resolveDerivedAncestors(domainCandidate, derivedByBase, derivedAncestorsCache ?? new Map());
+      if (metadataKey && ancestors.size > 0 && !ancestors.has(metadataKey) && metadataKey !== normalizeEntityKey(domainCandidate)) {
+        return undefined;
+      }
+
       const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
       const isCompatible = isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata);
 
@@ -1302,6 +1405,7 @@ function buildPolymorphicMapping(
       } satisfies SubtypeInfo;
     })
     .filter((info): info is SubtypeInfo => !!info);
+  subtypeInfos = subtypeInfos.filter(info => info.isCompatible !== false);
 
   if (referenceLikeFamily) {
     subtypeInfos = subtypeInfos.filter(info => isReferenceLikeName(info.domainSimpleName));
@@ -1344,15 +1448,21 @@ function buildPolymorphicMapping(
       let variantSubtypeInfos: SubtypeInfo[] = variantSubtypeNames
         .map((subtypeName): SubtypeInfo | undefined => {
           const domainCandidate = schemas[subtypeName] ? stripDtoSuffix(subtypeName) : baseType;
-          if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
-            return undefined;
-          }
-          if (isAbstract && domainCandidate === baseType) {
-            return undefined;
-          }
+        if (!domainCandidate || ABSTRACT_SCHEMAS.has(domainCandidate)) {
+          return undefined;
+        }
+        if (isAbstract && domainCandidate === baseType) {
+          return undefined;
+        }
 
-          const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
-          const isCompatible = isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata);
+        const metadataKey = normalizeEntityKey(baseType) ?? baseType;
+        const ancestors = resolveDerivedAncestors(domainCandidate, derivedByBase, derivedAncestorsCache ?? new Map());
+        if (metadataKey && ancestors.size > 0 && !ancestors.has(metadataKey) && metadataKey !== normalizeEntityKey(domainCandidate)) {
+          return undefined;
+        }
+
+        const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
+        const isCompatible = isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata);
 
           return {
             dtoType: buildDtoFqcn(subtypeName, basePackage),
@@ -1363,6 +1473,7 @@ function buildPolymorphicMapping(
           } satisfies SubtypeInfo;
         })
         .filter((subtypeInfo): subtypeInfo is SubtypeInfo => !!subtypeInfo);
+      variantSubtypeInfos = variantSubtypeInfos.filter(info => info.isCompatible !== false);
 
       if (referenceLikeFamily) {
         variantSubtypeInfos = variantSubtypeInfos.filter(info => isReferenceLikeName(info.domainSimpleName));
@@ -1405,10 +1516,22 @@ export function generateHybridMappers(
   basePackage: string,
   operationDescriptors?: Map<OpenAPIOperation, OperationDescriptor>,
   resolveDomainMetadata?: DomainMetadataResolver,
+  abstractSchemas?: Iterable<string>,
+  entityDefinitions?: Map<string, any>,
 ): {
   helperMappers: PolymorphicHelperMapperContext[];
   entityMappers: EntityMapperContext[];
 } {
+  ABSTRACT_SCHEMAS.clear();
+  if (abstractSchemas) {
+    for (const name of abstractSchemas) {
+      const normalized = normalizeTypeName(name);
+      if (normalized) {
+        ABSTRACT_SCHEMAS.add(normalized);
+      }
+    }
+  }
+
   const schemas = spec.schemas;
   const polymorphicTypes: PolymorphicTypeMapping[] = [];
   const entityMappersMap = new Map<string, EntityMapperContext>();
@@ -1417,7 +1540,7 @@ export function generateHybridMappers(
   const schemaVariants = new Map<string, Set<string>>();
   const requestTargetsBySchema = new Map<string, Set<string>>();
   const responseSourcesBySchema = new Map<string, Set<string>>();
-  const entityMetadata = collectEntityMetadata(operationDescriptors, resolveDomainMetadata);
+  const entityMetadata = collectEntityMetadata(operationDescriptors, resolveDomainMetadata, entityDefinitions);
   const schemaJsonMetadataCache = new Map<string, SchemaJsonMetadata>();
   const schemaPropertiesCache = new Map<string, SchemaProperties>();
   const polymorphicFactoryFallbacks = new Map<string, PolymorphicFallbackFactoryMetadata>();
@@ -1626,10 +1749,11 @@ export function generateHybridMappers(
         const normalizedB = normalizeTypeName(b);
 
         const priority = (normalized: string) => {
+          const upper = normalized.toUpperCase();
           if (normalized === normalizedBase) return 0;
-          if (normalized.endsWith('FVO')) return 1;
-          if (normalized.endsWith('MVO')) return 2;
-          if (normalized.endsWith('DTO')) return 3;
+          if (upper.endsWith('FVO')) return 1;
+          if (upper.endsWith('MVO')) return 2;
+          if (upper.endsWith('DTO')) return 3;
           return 4;
         };
 
@@ -1665,9 +1789,10 @@ export function generateHybridMappers(
       for (const variant of variants) {
         const variantDtoType = buildDtoFqcn(variant, basePackage);
         const normalizedVariant = normalizeTypeName(variant);
-        const isFVO = normalizedVariant.endsWith('FVO');
+        const normalizedVariantUpper = normalizedVariant.toUpperCase();
+        const isFVO = normalizedVariantUpper.endsWith('FVO');
         const isBaseVariant = normalizedVariant === normalizedBase;
-        const isMVO = normalizedVariant.endsWith('MVO');
+        const isMVO = normalizedVariantUpper.endsWith('MVO');
         const variantJsonMetadata = collectSchemaJsonMetadata(variant, schemas, schemaJsonMetadataCache);
         const { annotations: requestJsonAnnotations, mappedFields: requestMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'request');
         const { annotations: responseJsonAnnotations, mappedFields: responseMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'response');
