@@ -3,13 +3,34 @@
 -%>
 <%
     const basePackage = packageName.replace('.web.api.mapper', '');
-    const partyRoleSubtype = polymorphicTypes
-        .flatMap(poly => poly.subtypes)
-        .find(subtype => subtype.domainSimpleName === 'PartyRole');
-    const requiresPartyRoleNestedIgnore = polymorphicTypes.some(poly => poly.baseType === 'PartyOrPartyRole');
-    const requiresMappingImport = requiresPartyRoleNestedIgnore || Boolean(partyRoleSubtype);
+    const simpleName = fqcn => (fqcn ? fqcn.split('.').pop() : fqcn);
+    const seenBridgeMappings = new Set();
+    const domainBridgeMappings = [];
+    for (const poly of polymorphicTypes ?? []) {
+        if (!poly?.baseDomainType || !Array.isArray(poly.subtypes)) {
+            continue;
+        }
+        for (const subtype of poly.subtypes) {
+            if (!subtype?.domainType || subtype.domainType === poly.baseDomainType) {
+                continue;
+            }
+            const key = `${subtype.domainType}->${poly.baseDomainType}`;
+            if (seenBridgeMappings.has(key)) {
+                continue;
+            }
+            seenBridgeMappings.add(key);
+            const subtypeSimpleName = subtype.domainSimpleName ?? simpleName(subtype.domainType) ?? 'Subtype';
+            const baseSimpleName = poly.baseType ?? simpleName(poly.baseDomainType) ?? 'BaseType';
+            domainBridgeMappings.push({
+                methodName: `map${subtypeSimpleName}To${baseSimpleName}`,
+                paramType: subtype.domainType,
+                returnType: poly.baseDomainType,
+                paramSimpleName: subtypeSimpleName,
+                returnSimpleName: baseSimpleName,
+            });
+        }
+    }
 %>
-/**
  * Shared mapper for polymorphic types with @SubclassMapping support.
  * This mapper handles all abstract/interface types that have multiple concrete implementations.
  */
@@ -17,9 +38,6 @@
 package <%- packageName %>;
 
 import org.mapstruct.Mapper;
-<%_ if (requiresMappingImport) { _%>
-import org.mapstruct.Mapping;
-<%_ } _%>
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 import org.mapstruct.SubclassMapping;
@@ -65,54 +83,19 @@ public interface <%- mapperName %> {
         return value;
     }
 
-    // ========== Concrete to Abstract Type Mappings ==========
-    
+<%_ if (domainBridgeMappings.length > 0) { _%>
+    // ========== Concrete to Abstract Type Bridges ==========
+
+    <%_ for (const mapping of domainBridgeMappings) { _%>
     /**
-     * Map concrete EntityRef to abstract EntityRefOrValue
+     * Map concrete <%- mapping.paramSimpleName %> to abstract <%- mapping.returnSimpleName %>
      */
-    default <%- basePackage %>.domain.EntityRefOrValue mapEntityRefToEntityRefOrValue(
-        <%- basePackage %>.domain.EntityRef value
-    ) {
-        return value; // EntityRef extends EntityRefOrValue
+    default <%- mapping.returnType %> <%- mapping.methodName %>(<%- mapping.paramType %> value) {
+        return value;
     }
 
-    /**
-     * Map concrete PartyRef to abstract PartyRefOrPartyRoleRef  
-     */
-    default <%- basePackage %>.domain.PartyRefOrPartyRoleRef mapPartyRefToPartyRefOrPartyRoleRef(
-        <%- basePackage %>.domain.PartyRef value
-    ) {
-        return value; // PartyRef extends PartyRefOrPartyRoleRef
-    }
-
-    /**
-     * Map concrete PartyRoleRef to abstract PartyRefOrPartyRoleRef
-     */
-    default <%- basePackage %>.domain.PartyRefOrPartyRoleRef mapPartyRoleRefToPartyRefOrPartyRoleRef(
-        <%- basePackage %>.domain.PartyRoleRef value
-    ) {
-        return value; // PartyRoleRef extends PartyRefOrPartyRoleRef
-    }
-
-    /**
-     * Map concrete PaymentMethodRef to abstract EntityRefOrValue
-     */
-    default <%- basePackage %>.domain.EntityRefOrValue mapPaymentMethodRefToEntityRefOrValue(
-        <%- basePackage %>.domain.PaymentMethodRef value
-    ) {
-        return value; // PaymentMethodRef extends EntityRefOrValue
-    }
-
-<%_ if (partyRoleSubtype) { _%>
-
-    @Mapping(target = "paymentMethods", ignore = true)
-    <%- partyRoleSubtype.domainType %> mapPartyRole(<%- partyRoleSubtype.dtoType %> source);
-
-    @Mapping(target = "paymentMethods", ignore = true)
-    <%- partyRoleSubtype.dtoType %> mapPartyRoleToDto(<%- partyRoleSubtype.domainType %> source);
-
+    <%_ } _%>
 <%_ } _%>
-
 
 
 <%_ for (const poly of polymorphicTypes) { _%>
@@ -123,9 +106,6 @@ public interface <%- mapperName %> {
      */
     <%_ for (const subtype of poly.subtypes) { _%>
     @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
-    <%_ } _%>
-    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
-        @Mapping(target = "partyRole.paymentMethods", ignore = true)
     <%_ } _%>
     <%- poly.baseDomainType %> map<%- poly.baseType %>(<%- poly.baseDtoType %> source);
 
@@ -182,9 +162,6 @@ public interface <%- mapperName %> {
     <%_ for (const subtype of variant.subtypes) { _%>
         @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
     <%_ } _%>
-    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
-        @Mapping(target = "partyRole.paymentMethods", ignore = true)
-    <%_ } _%>
         <%- poly.baseDomainType %> map<%- variant.normalizedName %>(<%- variant.dtoType %> source);
 
         /**
@@ -206,9 +183,6 @@ public interface <%- mapperName %> {
          */
     <%_ for (const subtype of variant.subtypes) { _%>
         @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
-    <%_ } _%>
-    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
-        @Mapping(target = "partyRole.paymentMethods", ignore = true)
     <%_ } _%>
         <%- variant.dtoType %> map<%- poly.baseType %>To<%- variant.normalizedName %>(<%- poly.baseDomainType %> source);
 
@@ -247,9 +221,6 @@ public interface <%- mapperName %> {
     <%_ for (const subtype of poly.subtypes) { _%>
     @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
   <%_ } _%>
-    <%_ if (poly.baseType === 'PartyOrPartyRole') { _%>
-        @Mapping(target = "partyRole.paymentMethods", ignore = true)
-    <%_ } _%>
     <%- poly.baseDtoType %> map<%- poly.baseType %>ToDto(<%- poly.baseDomainType %> source);
 
     /**

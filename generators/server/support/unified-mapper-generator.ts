@@ -84,7 +84,7 @@ export interface CustomMappingMethod {
 /**
  * Schemas that don't have corresponding domain entities (abstract/interface types)
  */
-const ABSTRACT_SCHEMAS = new Set(['Entity', 'Extensible', 'Addressable']);
+const ABSTRACT_SCHEMAS = new Set<string>();
 
 /**
  * Check if a schema is polymorphic (has oneOf, anyOf, or discriminator)

@@ -34,7 +34,7 @@ import {
  * Schemas that don't have corresponding domain entities (abstract/interface types)
  * These are skipped during mapper generation
  */
-const ABSTRACT_SCHEMAS = new Set(['Entity', 'Extensible', 'Addressable']);
+const ABSTRACT_SCHEMAS = new Set<string>();
 
 /**
  * Check if a schema should be skipped (no domain entity exists)
