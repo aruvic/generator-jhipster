@@ -28,12 +28,19 @@ import { collectImports, generateMapperContexts } from './mapper-context-builder
 import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 import { generateHybridMappers } from './hybrid-mapper-generator.ts';
 import { OpenApiEntityMatcher } from './openapi-entity-matcher.ts';
-import { normalizeTypeName, parseOpenAPISpec } from './openapi-mapper-generator.ts';
+import {
+  clearDomainNameOverrides,
+  normalizeTypeName,
+  parseOpenAPISpec,
+  registerDomainNameOverride,
+  stripDtoSuffix,
+} from './openapi-mapper-generator.ts';
 
 /**
  * Generate MapStruct mappers from OpenAPI spec
  */
 export async function generateMapStructMappers(generator: any, application: SpringBootApplication): Promise<void> {
+  clearDomainNameOverrides();
   // Only generate if enableSwaggerCodegen is true
   if (!application.enableSwaggerCodegen) {
     generator.log.debug('enableSwaggerCodegen is false, skipping mapper generation');
@@ -77,6 +84,59 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
   const domainInspector = javaPackageDir ? (entityName: string) => inspectDomainClass(generator, javaPackageDir, entityName) : undefined;
 
+  const existingEntities: Array<{ name?: string; definition?: any }> = generator.getExistingEntities?.() ?? [];
+  const existingEntityNames = new Set<string>();
+  const entityDefinitionsByName = new Map<string, any>();
+  for (const entry of existingEntities) {
+    const entityDef = entry?.definition ?? entry;
+    const candidates = [
+      entry?.name,
+      entityDef?.entityClass,
+      entityDef?.name,
+      entityDef?.entityNameCapitalized,
+    ];
+    for (const candidate of candidates) {
+      const normalized = candidate ? normalizeTypeName(candidate) : undefined;
+      if (normalized) {
+        existingEntityNames.add(normalized);
+        if (!entityDefinitionsByName.has(normalized)) {
+          entityDefinitionsByName.set(normalized, entityDef);
+        }
+      }
+    }
+  }
+
+  const schemaDomainOverrides = new Map<string, string>();
+  for (const schemaName of Object.keys(spec.schemas ?? {})) {
+    const baseName = stripDtoSuffix(schemaName);
+    if (!baseName || schemaDomainOverrides.has(baseName)) {
+      continue;
+    }
+    const match = entityMatcher.matchSchemaName(schemaName);
+    const mappedName = match?.name ? normalizeTypeName(match.name) : undefined;
+    if (mappedName && mappedName !== baseName) {
+      schemaDomainOverrides.set(baseName, mappedName);
+    }
+  }
+
+  const hasExistingEntities = existingEntityNames.size > 0;
+  for (const [schemaBase, domainName] of schemaDomainOverrides) {
+    if (!hasExistingEntities || existingEntityNames.has(domainName) || domainName === schemaBase) {
+      registerDomainNameOverride(schemaBase, domainName);
+    }
+  }
+
+  const abstractSchemas = new Set<string>();
+  if (hasExistingEntities) {
+    const schemaBaseNames = new Set<string>(Object.keys(spec.schemas ?? {}).map(name => stripDtoSuffix(name)));
+    for (const baseName of schemaBaseNames) {
+      const targetDomain = schemaDomainOverrides.get(baseName) ?? baseName;
+      if (!existingEntityNames.has(targetDomain)) {
+        abstractSchemas.add(baseName);
+      }
+    }
+  }
+
   // Determine which mapper generation strategy to use
   // Hybrid: polymorphic helper mappers + per-entity mappers (RECOMMENDED for complex APIs)
   // Unified: 2 large Request/Response mappers (good for simple APIs)
@@ -88,7 +148,14 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
   if (strategy === 'hybrid') {
     generator.log.info('MapStruct: using hybrid mapper strategy (polymorphic helpers + per-entity)');
-    const { helperMappers, entityMappers } = generateHybridMappers(spec, application.packageName!, operationDescriptors, domainInspector);
+    const { helperMappers, entityMappers } = generateHybridMappers(
+      spec,
+      application.packageName!,
+      operationDescriptors,
+      domainInspector,
+      abstractSchemas,
+      entityDefinitionsByName,
+    );
     
     mapperContexts = [];
 

@@ -439,6 +439,38 @@ export function stripDtoSuffix(dtoName: string): string {
 }
 
 /**
+ * Optional overrides when a schema base name maps to a differently named domain entity.
+ */
+const DOMAIN_NAME_OVERRIDES = new Map<string, string>();
+
+/**
+ * Clear previously registered domain name overrides.
+ */
+export function clearDomainNameOverrides(): void {
+  DOMAIN_NAME_OVERRIDES.clear();
+}
+
+/**
+ * Register a domain name override for a given schema base name.
+ */
+export function registerDomainNameOverride(schemaBaseName: string, domainEntityName: string): void {
+  const base = normalizeTypeName(schemaBaseName);
+  const domain = normalizeTypeName(domainEntityName);
+  if (!base || !domain) {
+    return;
+  }
+  DOMAIN_NAME_OVERRIDES.set(base, domain);
+}
+
+function resolveDomainTypeName(entityName: string): string {
+  const normalized = normalizeTypeName(entityName);
+  if (!normalized) {
+    return entityName;
+  }
+  return DOMAIN_NAME_OVERRIDES.get(normalized) ?? normalized;
+}
+
+/**
  * Build fully-qualified class name for DTO
  */
 export function buildDtoFqcn(dtoName: string, basePackage: string): string {
@@ -449,7 +481,7 @@ export function buildDtoFqcn(dtoName: string, basePackage: string): string {
  * Build fully-qualified class name for domain entity
  */
 export function buildDomainFqcn(entityName: string, basePackage: string): string {
-  return `${basePackage}.domain.${normalizeTypeName(entityName)}`;
+  return `${basePackage}.domain.${resolveDomainTypeName(entityName)}`;
 }
 
 /**
