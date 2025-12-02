@@ -243,24 +243,64 @@ _%>
         }
     }
 
-<%_ if (resourceName === 'Booking') { _%>
+    /**
+     * Seed default status values for newly created entities.
+     * This method attempts to find and set common status fields using reflection.
+     */
     private void seedDefaults(Object entity) {
-        try {
-            Method getter = entity.getClass().getMethod("getBookingStatus");
-            Object currentValue = getter.invoke(entity);
-            if (currentValue == null) {
-                Method setter = entity.getClass().getMethod("setBookingStatus", getter.getReturnType());
-                setter.invoke(entity, "RECEIVED");
+        // Common status field name patterns to look for
+        String[] statusFieldPatterns = {"Status", "State"};
+        String[] defaultStatusValues = {"RECEIVED", "CREATED", "PENDING", "ACTIVE"};
+        
+        for (String pattern : statusFieldPatterns) {
+            for (Method method : entity.getClass().getMethods()) {
+                if (!method.getName().startsWith("get") || method.getParameterCount() != 0) {
+                    continue;
+                }
+                if (!method.getName().endsWith(pattern)) {
+                    continue;
+                }
+                
+                try {
+                    Object currentValue = method.invoke(entity);
+                    if (currentValue != null) {
+                        continue; // Already has a value
+                    }
+                    
+                    String setterName = "set" + method.getName().substring(3);
+                    Method setter = entity.getClass().getMethod(setterName, method.getReturnType());
+                    
+                    // Try to set a sensible default based on return type
+                    if (method.getReturnType() == String.class) {
+                        setter.invoke(entity, defaultStatusValues[0]);
+                        return; // Successfully seeded, stop looking
+                    } else if (method.getReturnType().isEnum()) {
+                        // For enums, try to find a value matching our preferred defaults
+                        Object[] enumConstants = method.getReturnType().getEnumConstants();
+                        if (enumConstants != null && enumConstants.length > 0) {
+                            Object defaultEnum = null;
+                            for (String preferred : defaultStatusValues) {
+                                for (Object enumConst : enumConstants) {
+                                    if (enumConst.toString().equalsIgnoreCase(preferred)) {
+                                        defaultEnum = enumConst;
+                                        break;
+                                    }
+                                }
+                                if (defaultEnum != null) break;
+                            }
+                            if (defaultEnum == null) {
+                                defaultEnum = enumConstants[0]; // Fallback to first enum value
+                            }
+                            setter.invoke(entity, defaultEnum);
+                            return; // Successfully seeded, stop looking
+                        }
+                    }
+                } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
+                    // Skip this field if reflection fails
+                }
             }
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-            // Skip default seeding when accessors are unavailable.
         }
     }
-<%_ } else { _%>
-    private void seedDefaults(Object entity) {
-        // No defaults to seed for this resource.
-    }
-<%_ } _%>
 
     private void setTmfIdIfMissing(Object entity) {
         try {
