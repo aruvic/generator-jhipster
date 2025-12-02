@@ -280,76 +280,54 @@ function isWrapperVariantSchema(variantName: string, schemas: Record<string, any
   return true;
 }
 
-function collectReferencedEntities(
-  schema: any,
-  referencedEntities: Set<string>,
-  schemas: Record<string, any>,
-  visited: Set<string> = new Set(),
-  derivedByBase?: Map<string, Set<string>>,
-  ancestorCache?: Map<string, Set<string>>,
-): void {
-  if (!schema) {
-    return;
+function collectDirectSchemaReferences(schemaName: string | undefined, schemas: Record<string, any>): Set<string> {
+  const references = new Set<string>();
+  if (!schemaName) {
+    return references;
   }
-
-  if (schema.type === 'array' && schema.items) {
-    collectReferencedEntities(schema.items, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
-  }
-
-  const ref = extractSchemaRef(schema);
-  if (ref) {
-    const refName = stripDtoSuffix(ref);
-    referencedEntities.add(refName);
-    if (derivedByBase) {
-      const derivedSchemas = resolveDerivedSchemas(refName, derivedByBase);
-      derivedSchemas.forEach(derivedSchema => {
-        const normalizedDerived = stripDtoSuffix(derivedSchema);
-        if (normalizedDerived) {
-          referencedEntities.add(normalizedDerived);
-        }
-      });
+  const addReference = (refName?: string) => {
+    const normalized = normalizeTypeName(stripDtoSuffix(refName ?? ''));
+    if (normalized) {
+      references.add(normalized);
     }
-    if (derivedByBase && ancestorCache) {
-      const ancestors = resolveDerivedAncestors(refName, derivedByBase, ancestorCache);
-      ancestors.forEach(ancestor => referencedEntities.add(ancestor));
-    }
-    if (!visited.has(ref) && schemas[ref]) {
-      visited.add(ref);
-      collectReferencedEntities(schemas[ref], referencedEntities, schemas, visited, derivedByBase, ancestorCache);
-      visited.delete(ref);
-    }
-  }
+  };
 
-  if (schema.properties) {
-    for (const propertySchema of Object.values<any>(schema.properties)) {
-      collectReferencedEntities(propertySchema, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
+  const visit = (fragment: any) => {
+    if (!fragment) {
+      return;
     }
-  }
-
-  if (Array.isArray(schema.allOf)) {
-    for (const item of schema.allOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
-
-      const refName = extractSchemaRef(item);
-      if (refName && schemas[refName] && !visited.has(refName)) {
-        visited.add(refName);
-        collectReferencedEntities(schemas[refName], referencedEntities, schemas, visited, derivedByBase, ancestorCache);
-        visited.delete(refName);
+    if (fragment.type === 'array' && fragment.items) {
+      visit(fragment.items);
+    }
+    const refName = extractSchemaRef(fragment);
+    if (refName) {
+      addReference(refName);
+    }
+    if (fragment.discriminator?.mapping) {
+      for (const target of Object.values<string>(fragment.discriminator.mapping)) {
+        const mapped = target?.includes('/') ? target.split('/').pop() : target;
+        addReference(mapped);
       }
     }
-  }
+    for (const composite of [fragment.allOf, fragment.oneOf, fragment.anyOf]) {
+      if (Array.isArray(composite)) {
+        composite.forEach(visit);
+      }
+    }
+  };
 
-  if (Array.isArray(schema.oneOf)) {
-    for (const item of schema.oneOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
+  const schema = schemas[schemaName];
+  if (schema) {
+    visit(schema);
+    if (schema.properties) {
+      Object.values<any>(schema.properties).forEach(visit);
+    }
+    if (schema.additionalProperties) {
+      visit(schema.additionalProperties);
     }
   }
 
-  if (Array.isArray(schema.anyOf)) {
-    for (const item of schema.anyOf) {
-      collectReferencedEntities(item, referencedEntities, schemas, visited, derivedByBase, ancestorCache);
-    }
-  }
+  return references;
 }
 
 function resolveVariantDomainSubtype(
@@ -761,6 +739,26 @@ function collectEntityMetadata(
   if (entityDefinitions) {
     for (const [entityName, definition] of entityDefinitions.entries()) {
       register({ name: entityName, entity: definition });
+      const childKey = normalizeEntityKey(entityName);
+      const baseExtends = normalizeEntityKey(definition?.extends);
+      if (childKey && baseExtends && childKey !== baseExtends) {
+        const childMetadata = metadataByName.get(childKey);
+        const childAbstract =
+          childMetadata?.isAbstract ??
+          Boolean(definition.abstractClass ?? definition.abstract ?? definition.annotations?.abstract ?? definition.polymorphicRoot);
+        const current = metadataByName.get(baseExtends) ?? { childEntities: [] };
+        metadataByName.set(
+          baseExtends,
+          mergeEntityMetadata(current, {
+            childEntities: [
+              {
+                name: childKey,
+                abstract: childAbstract,
+              },
+            ],
+          }),
+        );
+      }
     }
   }
 
@@ -1373,6 +1371,16 @@ function buildPolymorphicMapping(
     return null;
   }
 
+  const baseMetadata = entityMetadata.get(normalizeEntityKey(baseType) ?? baseType);
+  if (baseMetadata?.childEntities) {
+    for (const child of baseMetadata.childEntities) {
+      const normalizedChild = normalizeEntityKey(child.name);
+      if (normalizedChild && !subtypeNames.includes(normalizedChild)) {
+        subtypeNames.push(normalizedChild);
+      }
+    }
+  }
+
   const baseDtoFqcn = buildDtoFqcn(schemaName, basePackage);
   const baseDomainFqcn = buildDomainFqcn(baseType, basePackage);
   const isAbstract = !!schema.discriminator || !!schema.abstract || !!schema['x-abstract'] || (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) || (Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
@@ -1553,6 +1561,42 @@ export function generateHybridMappers(
   }
 
   try {
+  const collectEntityDefinitionReferences = (entityName: string | undefined, target: Set<string>) => {
+    if (!entityName || !entityDefinitions) {
+      return;
+    }
+    const normalized = normalizeTypeName(entityName);
+    const definition = entityDefinitions.get(normalized) ?? entityDefinitions.get(entityName);
+    if (!definition) {
+      return;
+    }
+    for (const relationship of definition.relationships ?? []) {
+      const otherName = relationship?.otherEntityName ?? relationship?.otherEntity;
+      const normalizedOther = normalizeTypeName(stripDtoSuffix(otherName ?? ''));
+      if (normalizedOther && normalizedOther !== normalized) {
+        target.add(normalizedOther);
+      }
+    }
+  };
+
+  const expandWithChildEntities = (names: Set<string>) => {
+    const queue = Array.from(names);
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (!current) {
+        continue;
+      }
+      const metadata = entityMetadata.get(normalizeEntityKey(current) ?? current);
+      for (const child of metadata?.childEntities ?? []) {
+        const normalizedChild = normalizeEntityKey(child.name);
+        if (normalizedChild && !names.has(normalizedChild)) {
+          names.add(normalizedChild);
+          queue.push(normalizedChild);
+        }
+      }
+    }
+  };
+
   const recordUsage = (target: Map<string, Set<string>>, key: string, value: string) => {
     if (!key || !value) {
       return;
@@ -1632,20 +1676,14 @@ export function generateHybridMappers(
   const helperReferencedEntities = new Map<string, Set<string>>();
 
   const registerHelperReferences = (helperName: string, schemaName: string) => {
-    if (!schemas[schemaName]) {
+    const references = collectDirectSchemaReferences(schemaName, schemas);
+    if (references.size === 0) {
       return;
     }
     if (!helperReferencedEntities.has(helperName)) {
       helperReferencedEntities.set(helperName, new Set());
     }
-    collectReferencedEntities(
-      schemas[schemaName],
-      helperReferencedEntities.get(helperName)!,
-      schemas,
-      undefined,
-      derivedByBase,
-      ancestorCache,
-    );
+    references.forEach(ref => helperReferencedEntities.get(helperName)!.add(ref));
   };
 
   for (const [schemaName, schema] of Object.entries(schemas)) {
@@ -1770,11 +1808,12 @@ export function generateHybridMappers(
         if (!entityName) {
           return;
         }
-        referencedEntities.add(entityName);
+        const normalized = normalizeTypeName(entityName);
+        referencedEntities.add(normalized);
         if (derivedByBase) {
-          const derivedSchemas = resolveDerivedSchemas(entityName, derivedByBase);
+          const derivedSchemas = resolveDerivedSchemas(normalized, derivedByBase);
           derivedSchemas.forEach(derivedSchema => {
-            const normalizedDerived = stripDtoSuffix(derivedSchema);
+            const normalizedDerived = normalizeTypeName(stripDtoSuffix(derivedSchema));
             if (normalizedDerived) {
               referencedEntities.add(normalizedDerived);
             }
@@ -1782,8 +1821,12 @@ export function generateHybridMappers(
         }
       };
 
+      collectEntityDefinitionReferences(baseEntity, referencedEntities);
+
       for (const variant of variants) {
-        collectReferencedEntities(schemas[variant], referencedEntities, schemas, undefined, derivedByBase, ancestorCache);
+        collectEntityDefinitionReferences(variant, referencedEntities);
+        const directReferences = collectDirectSchemaReferences(variant, schemas);
+        directReferences.forEach(ref => registerReferencedEntity(ref));
       }
 
       for (const variant of variants) {
@@ -1887,6 +1930,8 @@ export function generateHybridMappers(
         }
       }
 
+      expandWithChildEntities(referencedEntities);
+
       entityMappersMap.set(baseEntity, {
         mapperName: `${baseEntity}Mapper`,
         packageName: `${basePackage}.web.api.mapper`,
@@ -1982,16 +2027,51 @@ export function generateHybridMappers(
     helperMappers.map(helper => [normalizeTypeName(helper.baseType) ?? helper.baseType, `${helper.packageName}.${helper.mapperName}`]),
   );
 
+  const resolveEntityMapper = (entityName?: string): EntityMapperContext | undefined => {
+    if (!entityName) {
+      return undefined;
+    }
+    const direct = entityMappersMap.get(entityName);
+    if (direct) {
+      return direct;
+    }
+    const normalized = normalizeTypeName(entityName);
+    if (normalized) {
+      const normalizedMatch = entityMappersMap.get(normalized);
+      if (normalizedMatch) {
+        return normalizedMatch;
+      }
+      for (const [key, value] of entityMappersMap.entries()) {
+        if (normalizeTypeName(key) === normalized) {
+          return value;
+        }
+      }
+    }
+    return undefined;
+  };
+
   for (const helper of helperMappers) {
-    const referenced = helperReferencedEntities.get(helper.baseType) ?? new Set<string>();
+    const referenced = new Set<string>(helperReferencedEntities.get(helper.baseType) ?? []);
+    collectDirectSchemaReferences(helper.baseType, schemas).forEach(ref => referenced.add(ref));
+    for (const variant of helper.variants ?? []) {
+      collectDirectSchemaReferences(variant.dtoSimpleName, schemas).forEach(ref => referenced.add(ref));
+      collectEntityDefinitionReferences(variant.dtoSimpleName, referenced);
+      if (variant.targetDomainSimpleName) {
+        collectEntityDefinitionReferences(variant.targetDomainSimpleName, referenced);
+      }
+    }
+    collectEntityDefinitionReferences(helper.baseType, referenced);
+    expandWithChildEntities(referenced);
     const currentUses = new Set(helper.usesMappers ?? []);
+    const normalizedHelper = normalizeTypeName(helper.baseType);
     for (const referencedEntity of referenced) {
       const normalized = normalizeTypeName(referencedEntity);
-      if (!normalized || normalized === normalizeTypeName(helper.baseType)) {
+      if (!normalized || normalized === normalizedHelper) {
         continue;
       }
-      if (entityMappersMap.has(normalized)) {
-        currentUses.add(`${helper.packageName}.${normalized}Mapper`);
+      const entityDependency = resolveEntityMapper(normalized);
+      if (entityDependency) {
+        currentUses.add(`${entityDependency.packageName}.${entityDependency.mapperName}`);
         continue;
       }
       const dependencyFqcn = helperMapperByBaseType.get(normalized);
@@ -1999,55 +2079,37 @@ export function generateHybridMappers(
         currentUses.add(dependencyFqcn);
       }
     }
-    helper.usesMappers = Array.from(currentUses).sort();
+    helper.usesMappers = Array.from(currentUses)
+      .filter(fqcn => !fqcn.endsWith(`.${helper.mapperName}`))
+      .sort();
   }
 
   const primitiveMapperFqcn = `${basePackage}.web.api.mapper.OpenApiPrimitiveMapper`;
 
   const entityMappers = Array.from(entityMappersMap.values()).map(mapper => {
     const usesMapperFqcns = new Set<string>([primitiveMapperFqcn]);
-
-    const collectTransitiveHelperDeps = (entities: string[], visited: Set<string> = new Set()) => {
-      for (const entity of entities) {
-        if (visited.has(entity)) continue;
-        visited.add(entity);
-
-        const normalized = normalizeTypeName(entity) ?? entity;
-        const helperDependency = helperMapperByBaseType.get(normalized);
-        if (helperDependency) {
-          usesMapperFqcns.add(helperDependency);
-        } else if (entityMappersMap.has(normalized)) {
-          const child = entityMappersMap.get(normalized)!;
-          usesMapperFqcns.add(`${child.packageName}.${child.mapperName}`);
-        }
-
-        const childMapper = entityMappersMap.get(entity);
-        if (childMapper?.referencedEntities) {
-          collectTransitiveHelperDeps(childMapper.referencedEntities, visited);
-        }
-      }
-    };
-
-    if (mapper.referencedEntities) {
-      collectTransitiveHelperDeps(mapper.referencedEntities);
-    }
-
+    const normalizedMapperName = normalizeTypeName(mapper.entityName);
     for (const referencedEntity of mapper.referencedEntities ?? []) {
-      if (referencedEntity === mapper.entityName) {
+      const normalized = normalizeTypeName(referencedEntity);
+      if (!normalized || normalized === normalizedMapperName) {
         continue;
       }
-      if (ABSTRACT_SCHEMAS.has(referencedEntity)) {
+      if (ABSTRACT_SCHEMAS.has(normalized)) {
         continue;
       }
-      if (entityMappersMap.has(referencedEntity)) {
-        usesMapperFqcns.add(`${mapper.packageName}.${referencedEntity}Mapper`);
+      const entityDependency = resolveEntityMapper(normalized);
+      if (entityDependency) {
+        usesMapperFqcns.add(`${entityDependency.packageName}.${entityDependency.mapperName}`);
       }
-      const normalizedReference = normalizeTypeName(referencedEntity) ?? referencedEntity;
-      const helperDependency = helperMapperByBaseType.get(normalizedReference);
+      const helperDependency = helperMapperByBaseType.get(normalized);
       if (helperDependency) {
         usesMapperFqcns.add(helperDependency);
       }
     }
+
+    const filteredUses = Array.from(usesMapperFqcns)
+      .filter(fqcn => !fqcn.endsWith(`.${mapper.mapperName}`))
+      .sort();
 
     const objectFactories = buildAbstractTargetFactories(
       mapper.requestMappings,
@@ -2059,7 +2121,7 @@ export function generateHybridMappers(
 
     return {
       ...mapper,
-      usesMappers: Array.from(usesMapperFqcns).sort(),
+      usesMappers: filteredUses,
       objectFactories: objectFactories.length > 0 ? objectFactories : undefined,
     } satisfies EntityMapperContext;
   });

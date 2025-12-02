@@ -42,10 +42,21 @@ public interface <%- mapperName %> {
         }
  <%_ for (const subtype of subtypes) { _%>
         if ((Object) source instanceof <%- subtype.domainType %>) {
-            return new <%- subtype.dtoType %>();
+            if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
+                <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
+            ) {
+                return (<%- baseDtoType %>)(Object) new <%- subtype.dtoType %>();
+            }
         }
  <%_ } _%>
  <%_ if (isAbstract) { _%>
+ <%_ for (const subtype of subtypes) { _%>
+        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
+            <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
+        ) {
+            return (<%- baseDtoType %>)(Object) new <%- subtype.dtoType %>();
+        }
+ <%_ } _%>
         return null;
  <%_ } else { _%>
         return new <%- baseDtoType %>();
@@ -59,10 +70,6 @@ public interface <%- mapperName %> {
 <%_ } _%>
     <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
 
-    default <%- baseDomainType %> to<%- baseType %>Entity(<%- baseDtoType %> source) {
-        return to<%- baseType %>(source);
-    }
-
     @ObjectFactory
     default <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
         if (source == null) {
@@ -71,11 +78,22 @@ public interface <%- mapperName %> {
  <%_ for (const subtype of subtypes) { _%>
    <%_ if (subtype.isCompatible) { _%>
         if ((Object) source instanceof <%- subtype.dtoType %>) {
-            return new <%- subtype.domainType %>();
+            if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
+                <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
+            ) {
+                return new <%- subtype.domainType %>();
+            }
         }
    <%_ } _%>
  <%_ } _%>
  <%_ if (isAbstract) { _%>
+ <%_ for (const subtype of subtypes) { _%>
+        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
+            <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
+        ) {
+            return new <%- subtype.domainType %>();
+        }
+ <%_ } _%>
         return null;
  <%_ } else { _%>
         return new <%- baseDomainType %>();
@@ -110,13 +128,27 @@ public interface <%- mapperName %> {
 _%>
     <%_ if (subtype.isCompatible) { _%>
         if ((Object) source instanceof <%- subtypeDtoType %>) {
-            return new <%- subtype.domainType %>();
+            if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
+                <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
+            ) {
+                return new <%- subtype.domainType %>();
+            }
         }
     <%_ } _%>
 <%_     } _%>
 <%_     if (targetDomainType === baseDomainType && isAbstract) { _%>
+ <%_         for (const subtype of effectiveSubtypes) { _%>
+            if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
+                <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
+            ) {
+                return new <%- subtype.domainType %>();
+            }
+ <%_         } _%>
         return null;
 <%_     } else { _%>
+        if (java.lang.reflect.Modifier.isAbstract(<%- targetDomainType %>.class.getModifiers())) {
+            return null;
+        }
         return new <%- targetDomainType %>();
 <%_     } _%>
     }
