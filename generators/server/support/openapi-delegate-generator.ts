@@ -18,7 +18,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import ejs from 'ejs';
 
@@ -149,6 +149,14 @@ type CrudOperationMatch = {
 };
 
 const dependencyKey = (value: string): string => value.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+
+type MapperMethodSignature = {
+  name: string;
+  returnType: string;
+  returnSimple: string;
+  parameterTypes: string[];
+  parameterSimples: string[];
+};
 
 export function ensureMapperDependency(
   ctx: ResourceContext,
@@ -294,6 +302,201 @@ function splitParameters(paramsStr: string): string[] {
   }
 
   return params;
+}
+
+function normalizeTypeSignature(type?: string): string | undefined {
+  if (!type) return undefined;
+  return removeModifiers(type)
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function extractSimpleType(type?: string): string | undefined {
+  const normalized = normalizeTypeSignature(type);
+  if (!normalized) return undefined;
+  const withoutArray = normalized.replace(/\[\]$/, '');
+  const segments = withoutArray.split('.');
+  return segments[segments.length - 1] || withoutArray;
+}
+
+function matchesTypeSignature(candidate: string, expectedFqcn?: string, expectedSimple?: string): boolean {
+  const normalizedCandidate = normalizeTypeSignature(candidate);
+  const candidateSimple = extractSimpleType(candidate);
+  if (expectedFqcn) {
+    const normalizedExpected = normalizeTypeSignature(expectedFqcn);
+    if (normalizedCandidate && normalizedExpected && normalizedCandidate === normalizedExpected) {
+      return true;
+    }
+    const expectedSimpleFromFqcn = extractSimpleType(expectedFqcn);
+    if (expectedSimpleFromFqcn && normalizedCandidate && !normalizedCandidate.includes('.')) {
+      return candidateSimple === expectedSimpleFromFqcn;
+    }
+    return false;
+  }
+  if (expectedSimple) {
+    return candidateSimple === expectedSimple;
+  }
+  return false;
+}
+
+function isCollectionTypeSignature(type?: string): boolean {
+  if (!type) return false;
+  return /(?:List|Set|Collection|Iterable)<|\[\]/.test(type);
+}
+
+function parseMapperMethods(content: string): MapperMethodSignature[] {
+  const methods: MapperMethodSignature[] = [];
+  const methodRegex = /(?:public\s+)?(?:default\s+)?([\w<>\[\].,\s?]+?)\s+(\w+)\s*\(([^)]*)\)\s*(?:;|\{)/g;
+
+  let match;
+  while ((match = methodRegex.exec(content)) !== null) {
+    const returnType = match[1]?.trim();
+    const methodName = match[2];
+    if (!methodName || !methodName.startsWith('to') || !returnType) {
+      continue;
+    }
+    const paramsStr = match[3] ?? '';
+    const parameterTypes: string[] = [];
+    const parameters = splitParameters(paramsStr);
+    for (const param of parameters) {
+      const cleaned = removeModifiers(param.replace(/@[\w.]+(?:\([^)]*\))?/g, '').trim());
+      const lastSpace = cleaned.lastIndexOf(' ');
+      const typeOnly = lastSpace === -1 ? cleaned : cleaned.substring(0, lastSpace);
+      if (typeOnly) {
+        parameterTypes.push(typeOnly.trim());
+      }
+    }
+
+    methods.push({
+      name: methodName,
+      returnType,
+      returnSimple: extractSimpleType(returnType) ?? returnType,
+      parameterTypes,
+      parameterSimples: parameterTypes.map(type => extractSimpleType(type) ?? type),
+    });
+  }
+
+  return methods;
+}
+
+function collectMapperMethods(generator: any, mapperDir: string): Map<string, MapperMethodSignature[]> {
+  const mapperMethods = new Map<string, MapperMethodSignature[]>();
+  const mapperDirAbsolute = generator.destinationPath(mapperDir);
+  const candidatePaths = new Set<string>();
+
+  try {
+    if (existsSync(mapperDirAbsolute)) {
+      readdirSync(mapperDirAbsolute)
+        .filter(file => file.endsWith('Mapper.java'))
+        .forEach(file => candidatePaths.add(join(mapperDirAbsolute, file)));
+    }
+  } catch {
+    // Continue to mem-fs inspection even if the directory is not yet on disk.
+  }
+
+  try {
+    const memFsStore = generator.fs?.store;
+    if (memFsStore?.each && typeof memFsStore.each === 'function') {
+      memFsStore.each((file: { path?: string }) => {
+        const filePath = file?.path;
+        if (typeof filePath !== 'string') {
+          return;
+        }
+        if (filePath.startsWith(mapperDirAbsolute) && filePath.endsWith('Mapper.java')) {
+          candidatePaths.add(filePath);
+        }
+      });
+    }
+  } catch {
+    // Ignore mem-fs inspection failures.
+  }
+
+  for (const absolutePath of candidatePaths) {
+    let content: string | undefined;
+    try {
+      content = generator.fs?.read?.(absolutePath);
+    } catch {
+      // Ignore mem-fs read issues and fall back to disk.
+    }
+    if (!content) {
+      try {
+        if (existsSync(absolutePath)) {
+          content = readFileSync(absolutePath, 'utf-8');
+        }
+      } catch {
+        // Skip files that cannot be read.
+      }
+    }
+    if (!content) {
+      continue;
+    }
+    const simpleName = basename(absolutePath).replace(/\.java$/, '');
+    mapperMethods.set(simpleName, parseMapperMethods(content));
+  }
+  return mapperMethods;
+}
+
+function resolveRequestMapperMethod(
+  mapperSimpleName: string,
+  persistenceEntityName: string,
+  persistenceEntityFqcn: string | undefined,
+  requestTypeFqcn: string | undefined,
+  requestTypeSimple: string | undefined,
+  mapperMethods: Map<string, MapperMethodSignature[]>,
+): string {
+  const defaultName = `to${persistenceEntityName}Entity`;
+  const methods = mapperMethods.get(mapperSimpleName);
+  if (!methods || methods.length === 0) {
+    return defaultName;
+  }
+
+  const preferred = methods.find(
+    method =>
+      !isCollectionTypeSignature(method.returnType) &&
+      matchesTypeSignature(method.returnType, persistenceEntityFqcn, persistenceEntityName) &&
+      (method.parameterTypes.length === 0 ||
+        method.parameterTypes.some(param => matchesTypeSignature(param, requestTypeFqcn, requestTypeSimple))),
+  );
+  if (preferred) {
+    return preferred.name;
+  }
+
+  const fallbackName = [`to${persistenceEntityName}Entity`, `to${persistenceEntityName}`].find(candidate =>
+    methods.some(method => method.name === candidate),
+  );
+  return fallbackName ?? defaultName;
+}
+
+function resolveResponseMapperMethod(
+  mapperSimpleName: string,
+  responseEntityName: string,
+  responseReturnFqcn: string | undefined,
+  sourceEntityFqcn: string | undefined,
+  sourceEntityName: string | undefined,
+  mapperMethods: Map<string, MapperMethodSignature[]>,
+): string {
+  const defaultName = `to${responseEntityName}Dto`;
+  const methods = mapperMethods.get(mapperSimpleName);
+  if (!methods || methods.length === 0) {
+    return defaultName;
+  }
+
+  const preferred = methods.find(
+    method =>
+      !isCollectionTypeSignature(method.returnType) &&
+      matchesTypeSignature(method.returnType, responseReturnFqcn, responseEntityName) &&
+      (method.parameterTypes.length === 0 ||
+        method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName))),
+  );
+  if (preferred) {
+    return preferred.name;
+  }
+
+  const fallbackName = [`to${responseEntityName}Dto`, `to${responseEntityName}`].find(candidate =>
+    methods.some(method => method.name === candidate),
+  );
+  return fallbackName ?? defaultName;
 }
 
 function classifyCrudOperation(
@@ -469,6 +672,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     );
     potentialInterfaceDirs.push(generatedApiDir);
   }
+  const mapperDir = join(javaPackageDir, 'web', 'api', 'mapper');
+  const mapperMethodsByName = collectMapperMethods(generator, mapperDir);
 
   const contexts: ResourceContext[] = [];
   const ensureRepositoryDependency = (
@@ -713,7 +918,14 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         primary: requestMapperType === context.resourceName,
       });
       opContext.requestMapperField = requestMapper.fieldName;
-      opContext.requestMapperMethod = `to${persistenceEntity.name}Entity`;
+      opContext.requestMapperMethod = resolveRequestMapperMethod(
+        requestMapper.simpleName,
+        persistenceEntity.name,
+        opContext.persistenceEntityFqcn,
+        opContext.requestBodyResolvedType?.fullType,
+        opContext.requestBodyType,
+        mapperMethodsByName,
+      );
       opContext.willPersist = true;
     } else {
       opContext.willPersist = false;
@@ -729,7 +941,15 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         opContext.responseMapperField = responseMapper.fieldName;
         opContext.responseEntityName = responseEntity.name;
         opContext.responseEntityFqcn = responseEntity.fqcn;
-        opContext.responseMapperMethod = `to${responseEntity.name}Dto`;
+        const responseReturnType = opContext.responseResolvedType?.fullType ?? (dtoPackage ? `${dtoPackage}.${opContext.responseType}` : undefined);
+        opContext.responseMapperMethod = resolveResponseMapperMethod(
+          responseMapper.simpleName,
+          responseEntity.name,
+          responseReturnType,
+          opContext.persistenceEntityFqcn,
+          opContext.persistenceEntityName,
+          mapperMethodsByName,
+        );
       }
     }
 
