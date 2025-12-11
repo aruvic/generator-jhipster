@@ -33,10 +33,11 @@ export interface OpenAPIOperation {
   tags?: string[]; // e.g., ['Booking', 'Notifications']
   requestBodySchema?: string; // e.g., PartyInteractionFVO
   requestBodySchemaObject?: any; // Raw schema (may include $ref)
-  requestBodyRequired?: boolean;
+ requestBodyRequired?: boolean;
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
   responseSchemaObject?: any; // Raw schema (may include $ref)
+  responseStatus?: string; // HTTP status code string for primary success response
   parameters?: OpenAPIParameter[];
 }
 
@@ -236,10 +237,12 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
         const responses = op.responses ?? {};
         const prioritizedStatuses = ['200', '201', '202', '204', '206'];
         let responseStatus: any;
+        let selectedStatusCode: string | undefined;
 
         for (const status of prioritizedStatuses) {
           if (responses[status]) {
             responseStatus = responses[status];
+            selectedStatusCode = status;
             break;
           }
         }
@@ -247,6 +250,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
         if (!responseStatus) {
           const successEntry = Object.entries(responses).find(([code]) => /^2\d\d$/.test(code));
           if (successEntry) {
+            selectedStatusCode = successEntry[0];
             responseStatus = successEntry[1];
           }
         }
@@ -259,6 +263,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
           const responseSchema = responseStatus.content['application/json'].schema;
           const resolvedSchema = responseSchema.$ref ? resolveRef(responseSchema.$ref) : responseSchema;
           openAPIOperation.responseSchemaObject = responseSchema;
+          openAPIOperation.responseStatus = selectedStatusCode;
 
           if (resolvedSchema?.type === 'array' || responseSchema?.type === 'array') {
             openAPIOperation.responseIsArray = true;
@@ -273,6 +278,8 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
               openAPIOperation.responseSchema = schemaName;
             }
           }
+        } else if (selectedStatusCode) {
+          openAPIOperation.responseStatus = selectedStatusCode;
         }
 
         // Keep all operations, even those without explicit request/response schemas (e.g., deletes returning 204).

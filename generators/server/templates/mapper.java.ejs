@@ -28,6 +28,7 @@ import <%= importStmt %>;
  * MapStruct mapper interface for <%= mapperName %>.
  * Automatically generated from OpenAPI specification to handle DTO ↔ Domain mappings.
  */
+@Lazy
 @Mapper(
     componentModel = "spring",
     unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,

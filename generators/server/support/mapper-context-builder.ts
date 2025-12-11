@@ -436,6 +436,7 @@ export function collectImports(context: MapperContext): string[] {
   imports.add('org.mapstruct.Mapping');
   imports.add('org.mapstruct.ReportingPolicy');
   imports.add('org.mapstruct.factory.Mappers');
+  imports.add('org.springframework.context.annotation.Lazy');
 
   // Add UUID if needed
   let needsUuid = false;

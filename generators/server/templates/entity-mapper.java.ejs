@@ -11,7 +11,10 @@ package <%- packageName %>;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.BeanMapping;
+import org.mapstruct.MappingTarget;
+import org.mapstruct.NullValuePropertyMappingStrategy;
 import org.mapstruct.ReportingPolicy;
+import org.springframework.context.annotation.Lazy;
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 import org.mapstruct.ObjectFactory;
 <%_ } _%>
@@ -20,6 +23,7 @@ import org.mapstruct.Named;
 import org.openapitools.jackson.nullable.JsonNullable;
 <%_ } _%>
 
+@Lazy
 @Mapper(
   componentModel = "spring",
   unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
@@ -38,6 +42,17 @@ public interface <%- mapperName %> {
     @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
     <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
+
+  @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+<%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
+  <%_ for (const annotation of mapping.annotations) { _%>
+    <%- annotation %>
+  <%_ } _%>
+<%_ } _%>
+  <%_ if (entityName === 'JsonPatch') { _%>
+    @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
+  <%_ } _%>
+    void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
 
 <%_ } _%>
 

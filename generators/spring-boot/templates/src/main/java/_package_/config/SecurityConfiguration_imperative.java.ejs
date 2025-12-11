@@ -236,7 +236,8 @@ public class SecurityConfiguration {
                     .requestMatchers("/management/health/**").permitAll()
                     .requestMatchers("/management/info").permitAll()
                     .requestMatchers("/management/prometheus").permitAll()
-                    .requestMatchers("/management/**").hasAuthority(AuthoritiesConstants.ADMIN))
+                    .requestMatchers("/management/**").hasAuthority(AuthoritiesConstants.ADMIN)
+                    .anyRequest().authenticated())
 <%_ if (authenticationTypeSession) { _%>
   <%_ if (generateUserManagement) { _%>
             .rememberMe(rememberMe ->

@@ -45,6 +45,7 @@ import {
 
 const CRUD_PREFIXES = ['create', 'list', 'retrieve', 'delete', 'patch'] as const;
 type CrudPrefix = (typeof CRUD_PREFIXES)[number];
+type OperationKind = CrudPrefix | 'other';
 
 const CRUD_SUFFIX_MAPPINGS: Record<string, CrudPrefix> = {
   Delete: 'delete',
@@ -55,14 +56,9 @@ const CRUD_SUFFIX_MAPPINGS: Record<string, CrudPrefix> = {
 };
 
 const BASE_TEMPLATE_IMPORTS = new Set([
-  'java.lang.reflect.InvocationTargetException',
-  'java.lang.reflect.Method',
   'java.net.URI',
-  'java.util.HashMap',
-  'java.util.Map',
-  'java.util.Objects',
+  'java.util.List',
   'java.util.Optional',
-  'java.util.UUID',
   'org.springframework.http.HttpStatus',
   'org.springframework.http.ResponseEntity',
   'org.springframework.stereotype.Service',
@@ -97,7 +93,7 @@ type EntityInfo = {
 };
 
 type OperationContext = {
-  kind: CrudPrefix;
+  kind: OperationKind;
   methodName: string;
   parameters: ParameterContext[];
   requestBodyType?: string;
@@ -114,10 +110,12 @@ type OperationContext = {
   willPersist?: boolean;
   requestMapperField?: string;
   requestMapperMethod?: string;
+  requestMapperUpdateMethod?: string;
   responseMapperField?: string;
   responseMapperMethod?: string;
   responseEntityName?: string;
   responseEntityFqcn?: string;
+  successStatus?: number;
 };
 
 type ResourceContext = {
@@ -144,7 +142,7 @@ type ResourceContext = {
 type CrudOperationMatch = {
   operation: OpenAPIOperation;
   descriptor?: OperationDescriptor;
-  kind: CrudPrefix;
+  kind: OperationKind;
   operationIdFragment?: string;
 };
 
@@ -156,6 +154,7 @@ type MapperMethodSignature = {
   returnSimple: string;
   parameterTypes: string[];
   parameterSimples: string[];
+  parameterAnnotations: string[][];
 };
 
 export function ensureMapperDependency(
@@ -353,19 +352,27 @@ function parseMapperMethods(content: string): MapperMethodSignature[] {
   while ((match = methodRegex.exec(content)) !== null) {
     const returnType = match[1]?.trim();
     const methodName = match[2];
-    if (!methodName || !methodName.startsWith('to') || !returnType) {
+    if (!methodName || !returnType) {
       continue;
     }
     const paramsStr = match[3] ?? '';
     const parameterTypes: string[] = [];
+    const parameterAnnotations: string[][] = [];
     const parameters = splitParameters(paramsStr);
     for (const param of parameters) {
-      const cleaned = removeModifiers(param.replace(/@[\w.]+(?:\([^)]*\))?/g, '').trim());
+      const annotations: string[] = [];
+      const annotationRegex = /@[\w.]+(?:\([^)]*\))?/g;
+      let annotationMatch;
+      while ((annotationMatch = annotationRegex.exec(param)) !== null) {
+        annotations.push(annotationMatch[0]);
+      }
+      const cleaned = removeModifiers(param.replace(annotationRegex, '').trim());
       const lastSpace = cleaned.lastIndexOf(' ');
       const typeOnly = lastSpace === -1 ? cleaned : cleaned.substring(0, lastSpace);
       if (typeOnly) {
         parameterTypes.push(typeOnly.trim());
       }
+      parameterAnnotations.push(annotations);
     }
 
     methods.push({
@@ -374,6 +381,7 @@ function parseMapperMethods(content: string): MapperMethodSignature[] {
       returnSimple: extractSimpleType(returnType) ?? returnType,
       parameterTypes,
       parameterSimples: parameterTypes.map(type => extractSimpleType(type) ?? type),
+      parameterAnnotations,
     });
   }
 
@@ -444,19 +452,22 @@ function resolveRequestMapperMethod(
   requestTypeFqcn: string | undefined,
   requestTypeSimple: string | undefined,
   mapperMethods: Map<string, MapperMethodSignature[]>,
-): string {
+): string | undefined {
   const defaultName = `to${persistenceEntityName}Entity`;
   const methods = mapperMethods.get(mapperSimpleName);
   if (!methods || methods.length === 0) {
     return defaultName;
   }
 
+  const acceptsRequestType = (method: MapperMethodSignature): boolean =>
+    method.parameterTypes.length === 0 ||
+    method.parameterTypes.some(param => matchesTypeSignature(param, requestTypeFqcn, requestTypeSimple));
+
   const preferred = methods.find(
     method =>
       !isCollectionTypeSignature(method.returnType) &&
       matchesTypeSignature(method.returnType, persistenceEntityFqcn, persistenceEntityName) &&
-      (method.parameterTypes.length === 0 ||
-        method.parameterTypes.some(param => matchesTypeSignature(param, requestTypeFqcn, requestTypeSimple))),
+      acceptsRequestType(method),
   );
   if (preferred) {
     return preferred.name;
@@ -465,7 +476,70 @@ function resolveRequestMapperMethod(
   const fallbackName = [`to${persistenceEntityName}Entity`, `to${persistenceEntityName}`].find(candidate =>
     methods.some(method => method.name === candidate),
   );
-  return fallbackName ?? defaultName;
+  if (!fallbackName) {
+    return requestTypeFqcn || requestTypeSimple ? undefined : defaultName;
+  }
+
+  const fallbackMethod = methods.find(method => method.name === fallbackName);
+  if (!fallbackMethod) {
+    return requestTypeFqcn || requestTypeSimple ? undefined : fallbackName;
+  }
+
+  if (acceptsRequestType(fallbackMethod)) {
+    return fallbackMethod.name;
+  }
+
+  return requestTypeFqcn || requestTypeSimple ? undefined : fallbackMethod.name;
+}
+
+function resolveRequestMapperUpdateMethod(
+  mapperSimpleName: string,
+  persistenceEntityName: string,
+  persistenceEntityFqcn: string | undefined,
+  requestTypeFqcn: string | undefined,
+  requestTypeSimple: string | undefined,
+  mapperMethods: Map<string, MapperMethodSignature[]>,
+): string | undefined {
+  const methods = mapperMethods.get(mapperSimpleName);
+  if (!methods || methods.length === 0) {
+    return undefined;
+  }
+
+  const matchesTarget = (type: string): boolean => matchesTypeSignature(type, persistenceEntityFqcn, persistenceEntityName);
+  const matchesSource = (type: string): boolean => matchesTypeSignature(type, requestTypeFqcn, requestTypeSimple);
+
+  for (const method of methods) {
+    if (!method.name.startsWith('update')) {
+      continue;
+    }
+    if (method.returnSimple && method.returnSimple.toLowerCase() !== 'void') {
+      continue;
+    }
+    if (!method.parameterTypes || method.parameterTypes.length < 2) {
+      continue;
+    }
+
+    let targetIndex = -1;
+    for (let i = 0; i < method.parameterTypes.length; i += 1) {
+      const annotations = method.parameterAnnotations?.[i] ?? [];
+      if (annotations.some(annotation => annotation.includes('@MappingTarget')) && matchesTarget(method.parameterTypes[i])) {
+        targetIndex = i;
+        break;
+      }
+    }
+    if (targetIndex === -1) {
+      continue;
+    }
+
+    const sourceIndex = method.parameterTypes.findIndex((type, idx) => idx !== targetIndex && matchesSource(type));
+    if (sourceIndex === -1) {
+      continue;
+    }
+
+    return method.name;
+  }
+
+  return undefined;
 }
 
 function resolveResponseMapperMethod(
@@ -475,8 +549,10 @@ function resolveResponseMapperMethod(
   sourceEntityFqcn: string | undefined,
   sourceEntityName: string | undefined,
   mapperMethods: Map<string, MapperMethodSignature[]>,
-): string {
-  const defaultName = `to${responseEntityName}Dto`;
+): string | undefined {
+  const defaultName = responseEntityName && sourceEntityName && responseEntityName !== sourceEntityName
+    ? `to${responseEntityName}`
+    : `to${responseEntityName}Dto`;
   const methods = mapperMethods.get(mapperSimpleName);
   if (!methods || methods.length === 0) {
     return defaultName;
@@ -493,16 +569,29 @@ function resolveResponseMapperMethod(
     return preferred.name;
   }
 
-  const fallbackName = [`to${responseEntityName}Dto`, `to${responseEntityName}`].find(candidate =>
+  const fallbackCandidates = [`to${responseEntityName}Dto`, `to${responseEntityName}`];
+
+  const bestFallback = fallbackCandidates.find(candidate =>
+    methods.some(method =>
+      method.name === candidate &&
+      (method.parameterTypes.length === 0 ||
+        method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName)))
+    )
+  );
+
+  if (bestFallback) {
+    return bestFallback;
+  }
+
+  return fallbackCandidates.find(candidate =>
     methods.some(method => method.name === candidate),
   );
-  return fallbackName ?? defaultName;
 }
 
 function classifyCrudOperation(
   operation: OpenAPIOperation,
   descriptor?: OperationDescriptor,
-): { kind: CrudPrefix; operationIdFragment?: string } | undefined {
+): { kind: OperationKind; operationIdFragment?: string } | undefined {
   const opId = operation.operationId?.trim() ?? '';
   const lowerOpId = opId.toLowerCase();
   const method = operation.method?.toUpperCase?.() ?? '';
@@ -623,23 +712,20 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
   const operationDescriptors = entityMatcher.describeOperations(spec);
 
   const operations: OpenAPIOperation[] = spec.operations || [];
-  const crudOperations: CrudOperationMatch[] = operations.flatMap(operation => {
+  const crudOperations: CrudOperationMatch[] = operations.map(operation => {
     const descriptor = operationDescriptors.get(operation);
     const classification = classifyCrudOperation(operation, descriptor);
-    if (!classification) {
-      return [] as CrudOperationMatch[];
-    }
     const result: CrudOperationMatch = {
       operation,
       descriptor,
-      kind: classification.kind,
-      operationIdFragment: classification.operationIdFragment,
+      kind: classification?.kind ?? 'other',
+      operationIdFragment: classification?.operationIdFragment,
     };
-    return [result];
+    return result;
   });
 
   if (crudOperations.length === 0) {
-    generator.log.debug('No CRUD-style OpenAPI operations found, skipping delegate implementation generation');
+    generator.log.debug('No OpenAPI operations found, skipping delegate implementation generation');
     return;
   }
 
@@ -817,8 +903,12 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     }
 
     const isPrimaryResource = resourceName === context.resourceName;
-    ensureRepositoryDependency(context, resourceName, { primary: isPrimaryResource });
-    ensureMapperDependencyContext(context, resourceName, { primary: isPrimaryResource });
+    const isCrudOperation = prefix !== 'other';
+
+    if (isCrudOperation) {
+      ensureRepositoryDependency(context, resourceName, { primary: isPrimaryResource });
+      ensureMapperDependencyContext(context, resourceName, { primary: isPrimaryResource });
+    }
 
     if (descriptor?.matchedEntity?.fqcn) {
       if (!context.domainFqcn || descriptor.matchedEntity.name === context.resourceName) {
@@ -894,55 +984,75 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       fqcn: descriptor?.matchedEntity?.fqcn ?? `${basePackage}.domain.${resourceName}`,
     };
 
-    const requestEntityInfo: EntityInfo | undefined = descriptor?.requestEntityMatch
-      ? { name: descriptor.requestEntityMatch.name, fqcn: descriptor.requestEntityMatch.fqcn }
-      : undefined;
     const responseEntityInfo: EntityInfo | undefined = descriptor?.responseEntityMatch
       ? { name: descriptor.responseEntityMatch.name, fqcn: descriptor.responseEntityMatch.fqcn }
       : undefined;
 
     const isMutation = prefix === 'create' || prefix === 'patch';
-    const persistenceEntity = isMutation && requestEntityInfo ? requestEntityInfo : primaryEntity;
-    const persistenceRepository = ensureRepositoryDependency(context, persistenceEntity.name, {
-      primary: persistenceEntity.name === context.resourceName,
-    });
-
-    opContext.persistenceEntityName = persistenceEntity.name;
-    opContext.persistenceEntityFqcn = persistenceEntity.fqcn;
-    opContext.persistenceRepositoryField = persistenceRepository.fieldName;
-
-    const bodyParam = opContext.parameters.find(param => param.in === 'body');
-    if (bodyParam && isMutation) {
-      const requestMapperType = persistenceEntity.name;
-      const requestMapper = ensureMapperDependencyContext(context, requestMapperType, {
-        primary: requestMapperType === context.resourceName,
+    if (isCrudOperation) {
+      const persistenceEntity = primaryEntity;
+      const persistenceRepository = ensureRepositoryDependency(context, persistenceEntity.name, {
+        primary: persistenceEntity.name === context.resourceName,
       });
-      opContext.requestMapperField = requestMapper.fieldName;
-      opContext.requestMapperMethod = resolveRequestMapperMethod(
-        requestMapper.simpleName,
-        persistenceEntity.name,
-        opContext.persistenceEntityFqcn,
-        opContext.requestBodyResolvedType?.fullType,
-        opContext.requestBodyType,
-        mapperMethodsByName,
-      );
-      opContext.willPersist = true;
-    } else {
-      opContext.willPersist = false;
-    }
 
-    if (opContext.responseType) {
-      const responseEntity = responseEntityInfo ?? primaryEntity;
-      const canMapResponse = Boolean(opContext.persistenceEntityName && responseEntity.name === opContext.persistenceEntityName);
-      if (canMapResponse) {
+      opContext.persistenceEntityName = persistenceEntity.name;
+      opContext.persistenceEntityFqcn = persistenceEntity.fqcn;
+      opContext.persistenceRepositoryField = persistenceRepository.fieldName;
+
+      const bodyParam = opContext.parameters.find(param => param.in === 'body');
+      if (bodyParam && isMutation) {
+        const requestMapperType = stripDtoSuffix(opContext.requestBodyType ?? '') || persistenceEntity.name;
+        const requestMapper = ensureMapperDependencyContext(context, requestMapperType, {
+          primary: requestMapperType === context.resourceName,
+        });
+        const requestMapperMethods = mapperMethodsByName.get(requestMapper.simpleName);
+        const requestBodyBaseName = stripDtoSuffix(opContext.requestBodyType ?? '');
+        opContext.requestMapperField = requestMapper.fieldName;
+        opContext.requestMapperMethod = resolveRequestMapperMethod(
+          requestMapper.simpleName,
+          persistenceEntity.name,
+          opContext.persistenceEntityFqcn,
+          opContext.requestBodyResolvedType?.fullType,
+          opContext.requestBodyType,
+          mapperMethodsByName,
+        );
+        opContext.requestMapperUpdateMethod = resolveRequestMapperUpdateMethod(
+          requestMapper.simpleName,
+          persistenceEntity.name,
+          opContext.persistenceEntityFqcn,
+          opContext.requestBodyResolvedType?.fullType,
+          opContext.requestBodyType,
+          mapperMethodsByName,
+        );
+        if (!opContext.requestMapperUpdateMethod && requestBodyBaseName && persistenceEntity.name) {
+          const expectedUpdate = `update${persistenceEntity.name}From${requestBodyBaseName}`;
+          if (!requestMapperMethods || requestMapperMethods.some(method => method.name === expectedUpdate)) {
+            opContext.requestMapperUpdateMethod = expectedUpdate;
+          }
+        }
+        if (!opContext.requestMapperMethod && persistenceEntity.name) {
+          const candidateNames = [`to${persistenceEntity.name}`, `to${persistenceEntity.name}Entity`];
+          for (const candidate of candidateNames) {
+            if (!requestMapperMethods || requestMapperMethods.some(method => method.name === candidate)) {
+              opContext.requestMapperMethod = candidate;
+              break;
+            }
+          }
+        }
+        opContext.willPersist = true;
+      } else {
+        opContext.willPersist = false;
+      }
+
+      if (opContext.responseType) {
+        const responseEntity = responseEntityInfo ?? primaryEntity;
         const responseMapper = ensureMapperDependencyContext(context, responseEntity.name, {
           primary: responseEntity.name === context.resourceName,
         });
-        opContext.responseMapperField = responseMapper.fieldName;
-        opContext.responseEntityName = responseEntity.name;
-        opContext.responseEntityFqcn = responseEntity.fqcn;
-        const responseReturnType = opContext.responseResolvedType?.fullType ?? (dtoPackage ? `${dtoPackage}.${opContext.responseType}` : undefined);
-        opContext.responseMapperMethod = resolveResponseMapperMethod(
+        const responseReturnType =
+          opContext.responseResolvedType?.fullType ?? (dtoPackage ? `${dtoPackage}.${opContext.responseType}` : undefined);
+        const responseMapperMethods = mapperMethodsByName.get(responseMapper.simpleName);
+        const responseMapperMethod = resolveResponseMapperMethod(
           responseMapper.simpleName,
           responseEntity.name,
           responseReturnType,
@@ -950,7 +1060,51 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           opContext.persistenceEntityName,
           mapperMethodsByName,
         );
+        if (responseMapperMethod) {
+          opContext.responseMapperField = responseMapper.fieldName;
+          opContext.responseEntityName = responseEntity.name;
+          opContext.responseEntityFqcn = responseEntity.fqcn;
+          opContext.responseMapperMethod = responseMapperMethod;
+          if (responseMapperMethods) {
+            const resolvedMethod = responseMapperMethods.find(method => method.name === responseMapperMethod);
+            const acceptsSource =
+              resolvedMethod &&
+              (!resolvedMethod.parameterTypes?.length ||
+                resolvedMethod.parameterTypes.some(param =>
+                  matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+                ));
+            if (!acceptsSource) {
+              const alternative = responseMapperMethods.find(
+                method =>
+                  matchesTypeSignature(method.returnType, responseReturnType, responseEntity.name) &&
+                  (method.parameterTypes.length === 0 ||
+                    method.parameterTypes.some(param =>
+                      matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+                    )),
+              );
+              if (alternative) {
+                opContext.responseMapperMethod = alternative.name;
+              }
+            }
+            if (opContext.responseMapperMethod?.endsWith('Dto')) {
+              const candidateName = `to${responseEntity.name}`;
+              const candidate = responseMapperMethods.find(method => method.name === candidateName);
+              const candidateMatches =
+                candidate &&
+                matchesTypeSignature(candidate.returnType, responseReturnType, responseEntity.name) &&
+                (candidate.parameterTypes.length === 0 ||
+                  candidate.parameterTypes.some(param =>
+                    matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+                  ));
+              if (candidateMatches) {
+                opContext.responseMapperMethod = candidateName;
+              }
+            }
+          }
+        }
       }
+    } else {
+      opContext.willPersist = false;
     }
 
     context.operations.push(opContext);
@@ -1172,7 +1326,7 @@ function capitalizeFirst(value: string): string {
 
 function buildOperationContext(
   operation: OpenAPIOperation,
-  kind: CrudPrefix,
+  kind: OperationKind,
   methodName: string,
   parsedSignature: ParsedMethodSignature | undefined,
   resolverContext: JavaTypeResolverContext,
@@ -1272,6 +1426,7 @@ function buildOperationContext(
   const responseType = responseResolvedType?.baseType;
 
   const defaultReturnType = responseResolvedType ? `ResponseEntity<${responseResolvedType.fullType}>` : 'ResponseEntity<Void>';
+  const successStatus = operation.responseStatus ? Number.parseInt(operation.responseStatus, 10) : undefined;
 
   return {
     kind,
@@ -1285,6 +1440,7 @@ function buildOperationContext(
     fullSignature: parsedSignature?.fullSignature,
     returnType: returnType ?? defaultReturnType,
     throwsClause,
+    successStatus: Number.isFinite(successStatus) ? successStatus : undefined,
   };
 }
 

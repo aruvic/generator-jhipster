@@ -23,6 +23,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 public class SpaWebFilter extends OncePerRequestFilter {
@@ -35,7 +38,12 @@ public class SpaWebFilter extends OncePerRequestFilter {
         throws ServletException, IOException {
         // Request URI includes the contextPath if any, removed it.
         String path = request.getRequestURI().substring(request.getContextPath().length());
+        boolean isGetRequest = HttpMethod.GET.matches(request.getMethod());
+        String acceptHeader = request.getHeader(HttpHeaders.ACCEPT);
+        boolean isHtmlPreferred = acceptHeader != null && acceptHeader.contains(MediaType.TEXT_HTML_VALUE);
         if (
+            isGetRequest &&
+            isHtmlPreferred &&
             !path.startsWith("/api") &&
             !path.startsWith("/management") &&
             !path.startsWith("/v3/api-docs") &&

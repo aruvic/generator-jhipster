@@ -18,6 +18,8 @@
 -%>
 package <%- packageName %>.web.filter;
 
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -30,8 +32,13 @@ public class SpaWebFilter implements WebFilter {
      */
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        String path = exchange.getRequest().getURI().getPath();
+        var request = exchange.getRequest();
+        String path = request.getURI().getPath();
+        boolean isGetRequest = HttpMethod.GET.matches(request.getMethodValue());
+        boolean isHtmlPreferred = request.getHeaders().getAccept().stream().anyMatch(MediaType.TEXT_HTML::isCompatibleWith);
         if (
+            isGetRequest &&
+            isHtmlPreferred &&
             !path.startsWith("/api") &&
             !path.startsWith("/management") &&
             !path.startsWith("/v3/api-docs") &&
