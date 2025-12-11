@@ -303,6 +303,8 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('private final ReferenceMapper mapper;');
       expect(output).toContain('Reference entity = this.mapper.toReference(reference);');
       expect(output).toContain('return ResponseEntity.created(buildLocation(saved)).body(this.mapper.toReferenceDto(saved));');
+      expect(output).toContain('ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();');
+      expect(output).toContain('String.format("/reference/%s", idValue)');
       expect(output).toContain('this.mapper.toReference(reference)');
       expect(output).toContain('return ResponseEntity.ok(this.mapper.toReferenceDto(saved));');
     } finally {

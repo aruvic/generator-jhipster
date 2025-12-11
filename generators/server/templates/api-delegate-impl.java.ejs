@@ -1,16 +1,13 @@
 package <%= packageName %>;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.net.URI;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 <%_ if (imports?.length) { imports.forEach(fqcn => { _%>
 import <%= fqcn %>;
 <%_ }); } _%>
@@ -20,28 +17,22 @@ import <%= basePackage %>.web.api.<%= interfaceName %>;
 @Service
 public class <%= className %> implements <%= interfaceName %> {
 
-<%_ const domainType = domainFqcn;
-    const hasInjections = Array.isArray(injections) && injections.length > 0;
+<%_ const hasInjections = Array.isArray(injections) && injections.length > 0;
     const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
     const buildSuperArgs = op => op.parameters.map(p => p.varName).join(', ');
     const maybeThrows = op => (op.throwsClause ? ` throws ${op.throwsClause}` : '');
     const getBodyParam = op => op.parameters.find(param => param.in === 'body');
     const getIdParam = op => op.parameters.find(param => param.in === 'path');
-    const asIdArg = param => {
-      if (!param) {
-        return 'null';
-      }
-      if (param.javaType === 'String') {
-        return param.varName;
-      }
-      return `String.valueOf(${param.varName})`;
-    };
     const responseMapperField = op => op.responseMapperField ?? undefined;
     const responseMapperMethod = op => op.responseMapperMethod ?? undefined;
-    const repositoryField = op => op.persistenceRepositoryField ?? 'repository';
-    const requestMapperField = op => op.requestMapperField ?? 'mapper';
-    const requestMapperMethod = op => op.requestMapperMethod ?? `to${op.persistenceEntityName ?? resourceName}`;
-    const persistenceType = op => op.persistenceEntityFqcn ?? domainType;
+    const repositoryField = op => op.persistenceRepositoryField ?? (repositories?.[0]?.fieldName ?? undefined);
+    const requestMapperField = op => op.requestMapperField ?? undefined;
+    const requestMapperMethod = op =>
+        op.requestMapperMethod ??
+        (op.requestBodyType && op.persistenceEntityName && op.requestBodyType === op.persistenceEntityName ? `to${op.persistenceEntityName}` : undefined);
+    const requestMapperUpdateMethod = op => op.requestMapperUpdateMethod ?? undefined;
+    const persistenceType = op => op.persistenceEntityFqcn ?? domainFqcn;
+    const resolvedResourceSlug = resourceSlug || resourceName?.toLowerCase() || 'resource';
     const constructorArgs = hasInjections
       ? `\n${injections.map(dep => `        ${dep.simpleName} ${dep.fieldName}`).join(',\n')}\n    `
       : '';
@@ -68,25 +59,32 @@ _%>
     const mapperMethod = requestMapperMethod(op);
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
-    const canPersist = Boolean(op.willPersist && bodyParam && repoField && mapperField && mapperMethod);
     const hasResponseBody = Boolean(op.responseType);
-    const canMapResponse = !hasResponseBody || Boolean(responseField && responseMethod);
     const persistenceTypeFqcn = persistenceType(op);
 _%>
+    @Transactional
     @Override
     public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canPersist || !canMapResponse) { _%>
+<%_ if (!bodyParam || !repoField || !mapperField || !mapperMethod) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
+        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.CREATED);
         <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
-        copyByNormalizedName(<%= bodyParam.varName %>, entity, true, false);
-        seedDefaults(entity);
-        setTmfIdIfMissing(entity);
+        if (entity == null) {
+            return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+        }
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);
 <%_ if (!hasResponseBody) { _%>
-        return ResponseEntity.created(buildLocation(saved)).build();
+        if (successStatus == HttpStatus.CREATED) {
+            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).build();
+        }
+        return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
 <%_ } else { _%>
-        return ResponseEntity.created(buildLocation(saved)).body(this.<%= responseField %>.<%= responseMethod %>(saved));
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = this.<%= responseField %>.<%= responseMethod %>(saved);
+        if (successStatus == HttpStatus.CREATED) {
+            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);
+        }
+        return ResponseEntity.status(successStatus).body(responseBody);
 <%_ } _%>
 <%_ } _%>
     }
@@ -100,16 +98,23 @@ _%>
     const repoField = repositoryField(op);
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
-    const canHandle = Boolean(repoField && responseField && responseMethod);
     const persistenceTypeFqcn = persistenceType(op);
 _%>
+    @Transactional(readOnly = true)
     @Override
     public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canHandle) { _%>
+<%_ if (!repoField || !responseField || !responseMethod) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
-        java.util.List<<%= persistenceTypeFqcn %>> entities = this.<%= repoField %>.findAll();
-        return ResponseEntity.ok(entities.stream().map(this.<%= responseField %>::<%= responseMethod %>).toList());
+        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
+        List<<%= persistenceTypeFqcn %>> entities = this.<%= repoField %>.findAll();
+        if (successStatus == HttpStatus.NO_CONTENT) {
+            return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+        }
+        List<<%- op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object' %>> body = entities.stream()
+            .map(this.<%= responseField %>::<%= responseMethod %>)
+            .toList();
+        return ResponseEntity.status(successStatus).body(body);
 <%_ } _%>
     }
 
@@ -120,18 +125,31 @@ _%>
     const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
     const superArgs = buildSuperArgs(op);
     const idParam = getIdParam(op);
+    const repoField = repositoryField(op);
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
-    const canHandle = Boolean(idParam && responseField && responseMethod);
+    const persistenceTypeFqcn = persistenceType(op);
 _%>
+    @Transactional(readOnly = true)
     @Override
     public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canHandle) { _%>
+<%_ if (!idParam || !repoField || !responseField || !responseMethod) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { const idArg = asIdArg(idParam); _%>
-        return findByIdOrTmfId(<%= idArg %>)
-            .map(found -> ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(found)))
-            .orElseGet(() -> ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build());
+<%_ } else { _%>
+        Optional<Long> parsedId = parseId(<%= idParam.varName %>);
+        if (parsedId.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+        }
+        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
+        return this.<%= repoField %>
+            .findById(parsedId.orElseThrow())
+            .map(found -> {
+                if (successStatus == HttpStatus.NO_CONTENT) {
+                    return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+                }
+                return ResponseEntity.status(successStatus).body(this.<%= responseField %>.<%= responseMethod %>(found));
+            })
+            .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null));
 <%_ } _%>
     }
 
@@ -143,20 +161,28 @@ _%>
     const superArgs = buildSuperArgs(op);
     const idParam = getIdParam(op);
     const repoField = repositoryField(op);
-    const canHandle = Boolean(idParam && repoField);
+    const persistenceTypeFqcn = persistenceType(op);
 _%>
+    @Transactional
     @Override
     public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canHandle) { _%>
+<%_ if (!idParam || !repoField) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { const idArg = asIdArg(idParam); _%>
-        Optional<<%= persistenceType(op) %>> maybeEntity = findByIdOrTmfId(<%= idArg %>);
+<%_ } else { _%>
+        Optional<Long> parsedId = parseId(<%= idParam.varName %>);
+        if (parsedId.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
+        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.NO_CONTENT);
+        Optional<<%= persistenceTypeFqcn %>> maybeEntity = this.<%= repoField %>.findById(parsedId.orElseThrow());
         if (maybeEntity.isPresent()) {
             this.<%= repoField %>.delete(maybeEntity.orElseThrow());
-            return ResponseEntity.noContent().build();
-        } else {
-            return ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build();
+            if (successStatus == HttpStatus.NO_CONTENT) {
+                return ResponseEntity.noContent().build();
+            }
+            return ResponseEntity.status(successStatus).build();
         }
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
 <%_ } _%>
     }
 
@@ -171,238 +197,106 @@ _%>
     const repoField = repositoryField(op);
     const mapperField = requestMapperField(op);
     const mapperMethod = requestMapperMethod(op);
+    const updateMethod = requestMapperUpdateMethod(op);
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
-    const canHandle = Boolean(idParam && bodyParam && repoField && mapperField && mapperMethod && responseField && responseMethod);
     const persistenceTypeFqcn = persistenceType(op);
+    const hasPatchMapping = Boolean(updateMethod || mapperMethod);
 _%>
+    @Transactional
     @Override
     public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!canHandle) { _%>
+<%_ if (!idParam || !bodyParam || !repoField || !mapperField || !responseField || !responseMethod) { _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
-<%_ } else { const idArg = asIdArg(idParam); _%>
-        return findByIdOrTmfId(<%= idArg %>)
-            .map(found -> {
-                <%= persistenceTypeFqcn %> incoming = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
-                copyByNormalizedName(incoming, found, true, true);
-                setTmfIdIfMissing(found);
-                <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(found);
-                return ResponseEntity.ok(this.<%= responseField %>.<%= responseMethod %>(saved));
-            })
-            .orElseGet(() -> ResponseEntity.status(isParsableId(<%= idArg %>) ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST).build());
+<%_ } else { _%>
+        Optional<Long> parsedId = parseId(<%= idParam.varName %>);
+        if (parsedId.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+        }
+        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
+        Optional<<%= persistenceTypeFqcn %>> maybeEntity = this.<%= repoField %>.findById(parsedId.orElseThrow());
+        if (maybeEntity.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+        }
+        <%= persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
+<%_ if (updateMethod) { _%>
+        this.<%= mapperField %>.<%= updateMethod %>(existing, <%= bodyParam.varName %>);
+<%_ } else if (mapperMethod) { _%>
+        <%= persistenceTypeFqcn %> mapped = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
+        if (mapped == null) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
+        mapped.setId(existing.getId());
+        existing = mapped;
+<%_ } else { _%>
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+<%_ } _%>
+<%_ if (hasPatchMapping) { _%>
+        <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(existing);
+        if (successStatus == HttpStatus.NO_CONTENT) {
+            return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Object' %>) null);
+        }
+        return ResponseEntity.status(successStatus).body(this.<%= responseField %>.<%= responseMethod %>(saved));
+<%_ } _%>
 <%_ } _%>
     }
 
 <%_ }); _%>
 
-    private Optional<<%= domainType %>> findByIdOrTmfId(String id) {
-        Optional<Long> maybeLong = parseLong(id);
-        if (maybeLong.isPresent()) {
-            Optional<<%= domainType %>> byId = repository.findById(maybeLong.orElseThrow());
-            if (byId.isPresent()) {
-                return byId;
-            }
-        }
-        Optional<UUID> maybeUuid = parseUuid(id);
-        if (maybeUuid.isEmpty()) {
+<%_ operations.filter(op => op.kind === 'other').forEach(op => { 
+    const paramSig = buildParamSignature(op);
+    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
+    const superArgs = buildSuperArgs(op);
+_%>
+    @Override
+    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+        // Generated stub: no delegate logic inferred for this operation.
+        return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
+    }
+
+<%_ }); _%>
+
+    private Optional<Long> parseId(Object rawId) {
+        if (rawId == null) {
             return Optional.empty();
         }
-        return repository.findAll().stream().filter(entity -> {
-            UUID current = getTmfId(entity);
-            return current != null && current.equals(maybeUuid.orElseThrow());
-        }).findFirst();
-    }
-
-    private boolean isParsableId(String id) {
-        return parseLong(id).isPresent() || parseUuid(id).isPresent();
-    }
-
-    private Optional<Long> parseLong(String value) {
+        if (rawId instanceof Long) {
+            return Optional.of((Long) rawId);
+        }
+        if (rawId instanceof Number) {
+            return Optional.of(((Number) rawId).longValue());
+        }
         try {
-            return value != null ? Optional.of(Long.parseLong(value)) : Optional.empty();
-        } catch (NumberFormatException ignored) {
+            return Optional.of(Long.parseLong(rawId.toString()));
+        } catch (NumberFormatException ex) {
             return Optional.empty();
         }
     }
 
-    private Optional<UUID> parseUuid(String value) {
+    private HttpStatus resolveSuccessStatus(Integer statusCode, HttpStatus fallback) {
+        if (statusCode == null) {
+            return fallback;
+        }
         try {
-            return value != null ? Optional.of(UUID.fromString(value)) : Optional.empty();
+            return HttpStatus.valueOf(statusCode);
         } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
+            return fallback;
         }
     }
 
-    private UUID getTmfId(Object entity) {
+    private URI buildLocation(Object identifier) {
+        Object idValue = identifier != null ? identifier : "";
         try {
-            Method getter = entity.getClass().getMethod("getTmfId");
-            Object value = getter.invoke(entity);
-            return value instanceof UUID ? (UUID) value : null;
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-            return null;
-        }
-    }
-
-    /**
-     * Seed default status values for newly created entities.
-     * This method attempts to find and set common status fields using reflection.
-     */
-    private void seedDefaults(Object entity) {
-        // Common status field name patterns to look for
-        String[] statusFieldPatterns = {"Status", "State"};
-        String[] defaultStatusValues = {"RECEIVED", "CREATED", "PENDING", "ACTIVE"};
-        
-        for (String pattern : statusFieldPatterns) {
-            for (Method method : entity.getClass().getMethods()) {
-                if (!method.getName().startsWith("get") || method.getParameterCount() != 0) {
-                    continue;
-                }
-                if (!method.getName().endsWith(pattern)) {
-                    continue;
-                }
-                
-                try {
-                    Object currentValue = method.invoke(entity);
-                    if (currentValue != null) {
-                        continue; // Already has a value
-                    }
-                    
-                    String setterName = "set" + method.getName().substring(3);
-                    Method setter = entity.getClass().getMethod(setterName, method.getReturnType());
-                    
-                    // Try to set a sensible default based on return type
-                    if (method.getReturnType() == String.class) {
-                        setter.invoke(entity, defaultStatusValues[0]);
-                        return; // Successfully seeded, stop looking
-                    } else if (method.getReturnType().isEnum()) {
-                        // For enums, try to find a value matching our preferred defaults
-                        Object[] enumConstants = method.getReturnType().getEnumConstants();
-                        if (enumConstants != null && enumConstants.length > 0) {
-                            Object defaultEnum = null;
-                            for (String preferred : defaultStatusValues) {
-                                for (Object enumConst : enumConstants) {
-                                    if (enumConst.toString().equalsIgnoreCase(preferred)) {
-                                        defaultEnum = enumConst;
-                                        break;
-                                    }
-                                }
-                                if (defaultEnum != null) break;
-                            }
-                            if (defaultEnum == null) {
-                                defaultEnum = enumConstants[0]; // Fallback to first enum value
-                            }
-                            setter.invoke(entity, defaultEnum);
-                            return; // Successfully seeded, stop looking
-                        }
-                    }
-                } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-                    // Skip this field if reflection fails
-                }
+            ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();
+            if (identifier == null) {
+                return builder.build().toUri();
             }
-        }
-    }
-
-    private void setTmfIdIfMissing(Object entity) {
-        try {
-            Method getter = entity.getClass().getMethod("getTmfId");
-            Object currentValue = getter.invoke(entity);
-            if (Objects.nonNull(currentValue)) {
-                return;
+            return builder.pathSegment(idValue.toString()).build().normalize().toUri();
+        } catch (IllegalStateException ignored) {
+            if (idValue == null || idValue.toString().isBlank()) {
+                return URI.create(String.format("/%s", "<%= resolvedResourceSlug %>"));
             }
-            Method setter = entity.getClass().getMethod("setTmfId", getter.getReturnType());
-            if (UUID.class.equals(getter.getReturnType())) {
-                setter.invoke(entity, UUID.randomUUID());
-            }
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-            // Entity has no tmfId or reflection failed; skip seeding.
-        }
-    }
-
-    private void copyByNormalizedName(Object source, Object target, boolean skipNullValues, boolean overwriteExisting) {
-        Map<String, Method> settersByName = new HashMap<>();
-        Map<String, Method> gettersByName = new HashMap<>();
-
-        for (Method method : target.getClass().getMethods()) {
-            if (method.getParameterCount() == 1 && method.getName().startsWith("set")) {
-                settersByName.put(normalizeName(method.getName().substring(3)), method);
-            }
-            if (method.getParameterCount() == 0 && (method.getName().startsWith("get") || method.getName().startsWith("is"))) {
-                String base = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
-                gettersByName.put(normalizeName(base), method);
-            }
-        }
-
-        for (Method method : source.getClass().getMethods()) {
-            if (method.getParameterCount() != 0) {
-                continue;
-            }
-            if (!(method.getName().startsWith("get") || method.getName().startsWith("is"))) {
-                continue;
-            }
-            if ("getClass".equals(method.getName())) {
-                continue;
-            }
-
-            Object value;
-            try {
-                value = method.invoke(source);
-            } catch (IllegalAccessException | InvocationTargetException ignored) {
-                continue;
-            }
-            if (skipNullValues && value == null) {
-                continue;
-            }
-
-            String baseName = method.getName().startsWith("is") ? method.getName().substring(2) : method.getName().substring(3);
-            String normalized = normalizeName(baseName);
-            Method setter = settersByName.get(normalized);
-            if (setter == null) {
-                continue;
-            }
-
-            if (!overwriteExisting) {
-                Method targetGetter = gettersByName.get(normalized);
-                if (targetGetter != null) {
-                    try {
-                        Object currentValue = targetGetter.invoke(target);
-                        if (currentValue != null) {
-                            continue;
-                        }
-                    } catch (IllegalAccessException | InvocationTargetException ignored) {
-                        // Fall through to attempt copy.
-                    }
-                }
-            }
-
-            Class<?> paramType = setter.getParameterTypes()[0];
-            if (value != null && !paramType.isAssignableFrom(value.getClass()) && !(paramType.isPrimitive())) {
-                continue;
-            }
-            try {
-                setter.invoke(target, value);
-            } catch (IllegalAccessException | InvocationTargetException ignored) {
-                // Skip properties without compatible setters.
-            }
-        }
-    }
-
-    private String normalizeName(String name) {
-        return name == null ? "" : name.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
-    }
-
-    private URI buildLocation(Object entity) {
-        UUID tmfId = getTmfId(entity);
-        String identifier = tmfId != null ? tmfId.toString() : Optional.ofNullable(extractId(entity)).map(Object::toString).orElse("");
-        return URI.create(String.format("/%s/%s", "<%= resourceSlug %>", identifier));
-    }
-
-    private Long extractId(Object entity) {
-        try {
-            Method getter = entity.getClass().getMethod("getId");
-            Object value = getter.invoke(entity);
-            return value instanceof Number ? ((Number) value).longValue() : null;
-        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException ignored) {
-            return null;
+            return URI.create(String.format("/%s/%s", "<%= resolvedResourceSlug %>", idValue));
         }
     }
 }

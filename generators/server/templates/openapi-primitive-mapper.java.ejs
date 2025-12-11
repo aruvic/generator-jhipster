@@ -16,8 +16,10 @@ import org.mapstruct.Mapper;
 import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
+import org.springframework.context.annotation.Lazy;
 import org.openapitools.jackson.nullable.JsonNullable;
 
+@Lazy
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface OpenApiPrimitiveMapper {
     default String map(Object value) {

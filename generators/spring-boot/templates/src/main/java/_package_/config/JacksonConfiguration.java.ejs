@@ -31,6 +31,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.io.IOException;
 import java.time.LocalTime;
 
+import org.openapitools.jackson.nullable.JsonNullableModule;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -56,6 +57,11 @@ public class JacksonConfiguration {
     @Bean
     public Jdk8Module jdk8TimeModule() {
         return new Jdk8Module();
+    }
+
+    @Bean
+    public JsonNullableModule jsonNullableModule() {
+        return new JsonNullableModule();
     }
 <%_ if (databaseTypeSql && !reactive) { _%>
 

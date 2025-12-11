@@ -6,9 +6,17 @@
         variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Mapping(')))
     );
     const requiresNamedImport = Boolean(
+        requestVariants.length > 0 ||
         (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Named'))) ||
         variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Named')))
     );
+    const mappingQualifierForSubtype = subtypeDtoType => {
+        const variant = requestVariants.find(candidate => candidate.dtoType === subtypeDtoType);
+        if (!variant) {
+            return undefined;
+        }
+        return variant.mappingMethodName || `to${baseType}From${variant.dtoSimpleName}`;
+    };
 %>
 /**
  * MapStruct helper mapper for the <%- baseType %> polymorphic family.
@@ -25,14 +33,20 @@ import org.mapstruct.Mapping;
 import org.mapstruct.Named;
 <%_ } _%>
 import org.mapstruct.ObjectFactory;
+import org.mapstruct.SubclassMapping;
 import org.mapstruct.ReportingPolicy;
+import org.springframework.context.annotation.Lazy;
 
+@Lazy
 @Mapper(
     componentModel = "spring",
     unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (hasMapperDependencies) { _%>,
     uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public interface <%- mapperName %> {
+<%_ for (const subtype of subtypes) { if (subtype.isCompatible === false) { continue; } _%>
+    @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
+<%_ } _%>
     <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
 
     @ObjectFactory
@@ -77,6 +91,12 @@ public interface <%- mapperName %> {
 <%_ for (const annotation of baseMethodAnnotations) { _%>
     <%- annotation %>
 <%_ } _%>
+<%_ } _%>
+<%_ for (const subtype of subtypes) { 
+      if (subtype.isCompatible === false) { continue; }
+      const qualifier = mappingQualifierForSubtype(subtype.dtoType);
+_%>
+    @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class<%- qualifier ? `, qualifiedByName = "${qualifier}"` : '' %>)
 <%_ } _%>
     <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
 
@@ -126,6 +146,7 @@ public interface <%- mapperName %> {
     <%- annotation %>
 <%_ } _%>
 <%_ } _%>
+    @Named("<%- variant.mappingMethodName || `to${baseType}From${variant.dtoSimpleName}` %>")
     <%- targetDomainType %> <%- variant.mappingMethodName || `to${baseType}From${variant.dtoSimpleName}` %>(<%- variant.dtoType %> source);
 
     @ObjectFactory

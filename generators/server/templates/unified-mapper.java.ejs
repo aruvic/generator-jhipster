@@ -44,11 +44,13 @@ import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.SubclassExhaustiveStrategy;
+import org.springframework.context.annotation.Lazy;
 
 /**
  * MapStruct <%- direction === 'request' ? 'Request' : 'Response' %> Mapper.
  * Automatically generated from OpenAPI specification to handle <%- direction === 'request' ? 'DTO → Domain' : 'Domain → DTO' %> mappings.
  */
+@Lazy
 @Mapper(
     componentModel = "spring",
     unmappedTargetPolicy = ReportingPolicy.IGNORE,

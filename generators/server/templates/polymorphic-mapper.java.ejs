@@ -42,8 +42,10 @@ import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.SubclassExhaustiveStrategy;
+import org.springframework.context.annotation.Lazy;
 import org.openapitools.jackson.nullable.JsonNullable;
 
+@Lazy
 @Mapper(
     componentModel = "spring",
     unmappedTargetPolicy = ReportingPolicy.IGNORE,
