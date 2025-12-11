@@ -73,6 +73,11 @@ _%>
         if (entity == null) {
             return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
         }
+<%_ if (op.tmfIdAccessor) { _%>
+        if (entity.get<%= op.tmfIdAccessor %>() == null) {
+            entity.set<%= op.tmfIdAccessor %>(java.util.UUID.randomUUID());
+        }
+<%_ } _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);
 <%_ if (!hasResponseBody) { _%>
         if (successStatus == HttpStatus.CREATED) {

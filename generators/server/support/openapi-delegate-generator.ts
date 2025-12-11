@@ -27,6 +27,7 @@ import {
   type JavaTypeResolverContext,
   type JavaTypeResolverOptions,
   camelize,
+  pascalize,
   resolveJavaType,
   singularize,
   toJavaOperationName,
@@ -90,6 +91,7 @@ type DependencyDescriptor = {
 type EntityInfo = {
   name: string;
   fqcn: string;
+  definition?: any;
 };
 
 type OperationContext = {
@@ -116,6 +118,7 @@ type OperationContext = {
   responseEntityName?: string;
   responseEntityFqcn?: string;
   successStatus?: number;
+  tmfIdAccessor?: string;
 };
 
 type ResourceContext = {
@@ -977,15 +980,24 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas }, resolverOptions);
 
     const matchedEntityInfo: EntityInfo | undefined = descriptor?.matchedEntity
-      ? { name: descriptor.matchedEntity.name, fqcn: descriptor.matchedEntity.fqcn }
+      ? {
+          name: descriptor.matchedEntity.name,
+          fqcn: descriptor.matchedEntity.fqcn,
+          definition: descriptor.matchedEntity.entity,
+        }
       : undefined;
     const primaryEntity: EntityInfo = matchedEntityInfo ?? {
       name: resourceName,
       fqcn: descriptor?.matchedEntity?.fqcn ?? `${basePackage}.domain.${resourceName}`,
+      definition: descriptor?.matchedEntity?.entity,
     };
 
     const responseEntityInfo: EntityInfo | undefined = descriptor?.responseEntityMatch
-      ? { name: descriptor.responseEntityMatch.name, fqcn: descriptor.responseEntityMatch.fqcn }
+      ? {
+          name: descriptor.responseEntityMatch.name,
+          fqcn: descriptor.responseEntityMatch.fqcn,
+          definition: descriptor.responseEntityMatch.entity,
+        }
       : undefined;
 
     const isMutation = prefix === 'create' || prefix === 'patch';
@@ -1007,27 +1019,41 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         });
         const requestMapperMethods = mapperMethodsByName.get(requestMapper.simpleName);
         const requestBodyBaseName = stripDtoSuffix(opContext.requestBodyType ?? '');
+        const requestBodyFullType = opContext.requestBodyResolvedType?.fullType ?? bodyParam?.fullType;
+        const requestBodySimpleType = extractSimpleType(opContext.requestBodyType) ?? extractSimpleType(bodyParam?.javaType) ?? bodyParam?.javaType;
         opContext.requestMapperField = requestMapper.fieldName;
         opContext.requestMapperMethod = resolveRequestMapperMethod(
           requestMapper.simpleName,
           persistenceEntity.name,
           opContext.persistenceEntityFqcn,
-          opContext.requestBodyResolvedType?.fullType,
-          opContext.requestBodyType,
+          requestBodyFullType,
+          requestBodySimpleType,
           mapperMethodsByName,
         );
         opContext.requestMapperUpdateMethod = resolveRequestMapperUpdateMethod(
           requestMapper.simpleName,
           persistenceEntity.name,
           opContext.persistenceEntityFqcn,
-          opContext.requestBodyResolvedType?.fullType,
-          opContext.requestBodyType,
+          requestBodyFullType,
+          requestBodySimpleType,
           mapperMethodsByName,
         );
         if (!opContext.requestMapperUpdateMethod && requestBodyBaseName && persistenceEntity.name) {
-          const expectedUpdate = `update${persistenceEntity.name}From${requestBodyBaseName}`;
-          if (!requestMapperMethods || requestMapperMethods.some(method => method.name === expectedUpdate)) {
-            opContext.requestMapperUpdateMethod = expectedUpdate;
+          const requestBodySimple = extractSimpleType(opContext.requestBodyType) ?? requestBodyBaseName;
+          const bodyTypeSimple = extractSimpleType(bodyParam?.javaType ?? bodyParam?.fullType ?? '') ?? requestBodySimple;
+          const expectedUpdateNames = [
+            `update${persistenceEntity.name}EntityFrom${bodyTypeSimple}`,
+            `update${persistenceEntity.name}EntityFrom${requestBodySimple}`,
+            `update${persistenceEntity.name}EntityFrom${requestBodyBaseName}`,
+            `update${persistenceEntity.name}From${bodyTypeSimple}`,
+            `update${persistenceEntity.name}From${requestBodySimple}`,
+            `update${persistenceEntity.name}From${requestBodyBaseName}`,
+          ];
+          for (const candidate of expectedUpdateNames) {
+            if (!requestMapperMethods || requestMapperMethods.some(method => method.name === candidate)) {
+              opContext.requestMapperUpdateMethod = candidate;
+              break;
+            }
           }
         }
         if (!opContext.requestMapperMethod && persistenceEntity.name) {
@@ -1040,6 +1066,20 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           }
         }
         opContext.willPersist = true;
+        if (prefix === 'create') {
+          const tmfIdField = persistenceEntity?.definition?.fields?.find(
+            (field: any) => field?.fieldName?.toLowerCase() === 'tmfid',
+          );
+          if (
+            tmfIdField &&
+            typeof tmfIdField.fieldType === 'string' &&
+            tmfIdField.fieldType.toLowerCase() === 'uuid' &&
+            Array.isArray(tmfIdField.fieldValidateRules) &&
+            tmfIdField.fieldValidateRules.includes('required')
+          ) {
+            opContext.tmfIdAccessor = pascalize(tmfIdField.fieldName ?? 'tmfId');
+          }
+        }
       } else {
         opContext.willPersist = false;
       }
@@ -1419,7 +1459,7 @@ function buildOperationContext(
 
   const bodyParam = parameterContexts.find(param => param.in === 'body');
   const requestBodyResolvedType = resolvedRequestBodyType ?? bodyParam?.resolvedType;
-  const requestBodyType = requestBodyResolvedType?.baseType;
+  const requestBodyType = requestBodyResolvedType?.baseType ?? bodyParam?.javaType;
 
   const responseSchema = operation.responseSchemaObject;
   const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext, resolverOptions) : undefined;
