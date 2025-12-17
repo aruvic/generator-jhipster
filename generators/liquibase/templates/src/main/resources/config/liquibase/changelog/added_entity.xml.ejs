@@ -18,7 +18,16 @@
 -%>
 <%- include('/liquibase-changelog-header') -%>
 
-<%_ for (const [idx, field] of fields.filter(field => field.liquibaseCustomSequenceGenerator).entries()) { _%>
+<%_
+const inheritedFieldNames = new Set<string>();
+let inheritanceCursor = entity.parentEntity;
+while (inheritanceCursor?.fields) {
+  for (const inheritedField of inheritanceCursor.fields) inheritedFieldNames.add(inheritedField.fieldName);
+  inheritanceCursor = inheritanceCursor.parentEntity;
+}
+const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+_%>
+<%_ for (const [idx, field] of declaredFields.filter(field => field.liquibaseCustomSequenceGenerator).entries()) { _%>
     <changeSet id="<%- changelogDate %>-seq-<%- idx %>" author="jhipster">
         <createSequence sequenceName="<%- field.liquibaseSequenceGeneratorName %>" startValue="1050" incrementBy="50"/>
     </changeSet>
@@ -46,7 +55,7 @@ _%>
             </column>
 <%_             writtenColumnNames.add(entity.discriminatorColumn.name); _%>
 <%_ } _%>
-<%_ for (field of fields) { _%>
+<%_ for (field of declaredFields) { _%>
 <%_     if (field.columnName && writtenColumnNames.has(field.columnName)) continue; _%>
 <%_     if (field.columnName) writtenColumnNames.add(field.columnName); _%>
             <column name="<%- field.columnName %>" type="<%- field.columnType %>"<%- this.createDefaultValueLiquibaseAttribute(field, true) -%><%- this.formatAsLiquibaseRemarks(field.documentation, true) %><%- field.id && field.liquibaseAutoIncrement ? ' autoIncrement="true" startWith="1500"' : '' %>>
@@ -76,7 +85,7 @@ _%>
 <%_ } _%>
             <!-- jhipster-needle-liquibase-add-column - JHipster will add columns here -->
         </createTable>
-<%_ for (const field of fields) { _%>
+<%_ for (const field of declaredFields) { _%>
   <%_ if (field.shouldDropDefaultValue) { _%>
         <dropDefaultValue tableName="<%- entity.entityTableName %>" columnName="<%- field.columnName %>" columnDataType="${datetimeType}"/>
   <%_ } _%>

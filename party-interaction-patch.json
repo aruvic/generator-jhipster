@@ -1,0 +1,168 @@
+{
+  "@type": "PartyInteraction",
+  "tmfId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  "direction": "outbound",
+  "reason": "Follow-up on complaint resolution",
+  "interactionDate": {
+    "startDateTime": "2025-02-01T08:00:00Z",
+    "endDateTime": "2025-02-01T09:00:00Z"
+  },
+  "description": "Patched payload update",
+  "status": "closed",
+  "statusChangeDate": "2025-02-01T09:00:00Z",
+  "creationDate": "2025-01-01T09:30:00Z",
+  "lastUpdate": "2025-02-01T10:00:00Z",
+  "relatedChannels": [
+    {
+      "@type": "RelatedChannel",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/related-channel",
+      "role": "updatedChannel",
+      "channel": {
+        "@type": "ChannelRef",
+        "@baseType": "Extensible",
+        "@schemaLocation": "http://example.com/schema/channelref",
+        "tmfId": "99999999-9999-9999-9999-999999999999",
+        "href": "http://example.com/channel/2000",
+        "name": "Mobile App",
+        "@referredType": "Channel"
+      }
+    }
+  ],
+  "relatedPartys": [
+    {
+      "@type": "RelatedPartyOrPartyRole",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/related-party",
+      "role": "updatedCustomer",
+      "partyOrPartyRole": {
+        "@type": "PartyRoleRef",
+        "@baseType": "Extensible",
+        "@schemaLocation": "http://example.com/schema/partyroleref",
+        "tmfId": "99999999-9999-9999-9999-999999999998",
+        "href": "http://example.com/party-role/3000",
+        "name": "Updated Customer Role",
+        "@referredType": "PartyRole",
+        "partyId": "P-002",
+        "partyName": "Jane Doe"
+      }
+    }
+  ],
+  "notes": [
+    {
+      "@type": "Note",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/note",
+      "tmfId": "99999999-9999-9999-9999-999999999996",
+      "author": "Supervisor",
+      "date": "2025-02-01T09:15:00Z",
+      "text": "Issue resolved and closed."
+    }
+  ],
+  "interactionItems": [
+    {
+      "@type": "InteractionItem",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/interaction-item",
+      "tmfId": "99999999-9999-9999-9999-999999999995",
+      "itemDate": {
+        "startDateTime": "2025-02-01T08:10:00Z",
+        "endDateTime": "2025-02-01T08:20:00Z"
+      },
+      "reason": "Resolution confirmation",
+      "resolution": "Resolved",
+      "creationDate": "2025-02-01T08:05:00Z",
+      "lastUpdate": "2025-02-01T08:25:00Z",
+      "status": "completed",
+      "item": {
+        "@type": "RelatedEntityRefOrValue",
+        "@baseType": "Extensible",
+        "role": "subject",
+        "entity": {
+          "@type": "EntityRef",
+          "@baseType": "Extensible",
+          "tmfId": "99999999-9999-9999-9999-999999999994",
+          "href": "http://example.com/entity/7000",
+          "name": "Referenced entity 7000",
+          "@referredType": "SomeEntity"
+        }
+      },
+      "relatedChannels": [
+        {
+          "@type": "RelatedChannel",
+          "@baseType": "Extensible",
+          "role": "followupChannel",
+          "channel": {
+            "@type": "ChannelRef",
+            "@baseType": "Extensible",
+            "tmfId": "99999999-9999-9999-9999-999999999993",
+            "href": "http://example.com/channel/2001",
+            "name": "Email",
+            "@referredType": "Channel"
+          }
+        }
+      ],
+      "relatedPartys": [
+        {
+          "@type": "RelatedPartyRefOrPartyRoleRef",
+          "@baseType": "Extensible",
+          "role": "supervisor",
+          "partyOrPartyRole": {
+            "@type": "PartyRoleRef",
+            "@baseType": "Extensible",
+            "tmfId": "99999999-9999-9999-9999-999999999992",
+            "href": "http://example.com/party-role/3001",
+            "name": "Supervisor Role",
+            "@referredType": "PartyRole",
+            "partyId": "S-001",
+            "partyName": "Alice Smith"
+          }
+        }
+      ],
+      "notes": [
+        {
+          "@type": "Note",
+          "@baseType": "Extensible",
+          "tmfId": "99999999-9999-9999-9999-999999999990",
+          "author": "Supervisor",
+          "date": "2025-02-01T08:22:00Z",
+          "text": "Resolution confirmed with customer."
+        }
+      ],
+      "interactionItemRelationships": [
+        {
+          "@type": "InteractionItemRelationship",
+          "@baseType": "Extensible",
+          "tmfId": "99999999-9999-9999-9999-999999999989",
+          "relationshipType": "followup",
+          "href": "http://example.com/interactionItem/9000",
+          "name": "Followup item",
+          "@referredType": "InteractionItem"
+        }
+      ],
+      "interactionItemType": "Closure"
+    }
+  ],
+  "interactionRelationships": [
+    {
+      "@type": "InteractionRelationship",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/interaction-relationship",
+      "tmfId": "99999999-9999-9999-9999-999999999988",
+      "href": "http://example.com/ir/9001",
+      "name": "Closure followup",
+      "@referredType": "Interaction",
+      "relationshipType": "closure"
+    }
+  ],
+  "externalIdentifiers": [
+    {
+      "@type": "ExternalIdentifier",
+      "@baseType": "Extensible",
+      "@schemaLocation": "http://example.com/schema/external-identifier",
+      "tmfId": "99999999-9999-9999-9999-999999999987",
+      "owner": "CRM",
+      "externalIdentifierType": "CaseIdUpdated"
+    }
+  ]
+}
