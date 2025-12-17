@@ -16,6 +16,23 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 -%>
+-%>
+<%_
+  const inheritedFieldNames = new Set();
+  let inheritanceCursor =
+    typeof parentEntity !== 'undefined' && parentEntity
+      ? parentEntity
+      : typeof entity !== 'undefined' && entity
+        ? entity.parentEntity
+        : undefined;
+  while (inheritanceCursor && inheritanceCursor.fields) {
+    for (const inheritedField of inheritanceCursor.fields) {
+      inheritedFieldNames.add(inheritedField.fieldName);
+    }
+    inheritanceCursor = inheritanceCursor.parentEntity;
+  }
+  const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+_%>
 <&_
  // Register sections and max allowed fragments, 0 for unlimited.
   fragments.registerSections({
@@ -30,7 +47,7 @@
     classAdditionalFieldsMethodsSection: 0,
     classAdditionalRelationshipsSection: 0,
     classAdditionalRelationshipsMethodsSection: 0,
-<%_ for (const field of fields) { _%>
+<%_ for (const field of declaredFields) { _%>
     field<%- field.fieldNameCapitalized %>CustomDeclarationSection: 1,
     field<%- field.fieldNameCapitalized %>CustomMethodsSection: 1,
     field<%- field.fieldNameCapitalized %>AnnotationSection: 0,
@@ -120,7 +137,7 @@ public <%= abstractClass ? 'abstract ' : '' %>class <%= persistClass %> <&- frag
 <%_ } _%>
 <&- fragments.classStaticFieldsSection() -&>
 <&- fragments.classFieldsSection() -&>
-<%_ for (const field of fields.filter(field => !field.javaInherited && !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
+<%_ for (const field of declaredFields.filter(field => !field.javaInherited && !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
 <&- fragments.field<%- field.fieldNameCapitalized %>CustomDeclarationSection() -&>
 <&_ if (!fragments.field<%- field.fieldNameCapitalized %>CustomDeclarationSection()) { -&>
   <%_ if (field.fieldJavadoc) { _%>
@@ -191,7 +208,7 @@ for (relationship of relationships) {
 <%_ } _%>
 <&- fragments.classAdditionalRelationshipsSection() -&>
     // jhipster-needle-entity-add-field - JHipster will add fields here
-<%_ for (const field of fields.filter(field => !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
+<%_ for (const field of declaredFields.filter(field => !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
 <&- fragments.field<%- field.fieldNameCapitalized %>CustomMethodsSection() -&>
 <&_ if (!fragments.field<%- field.fieldNameCapitalized %>CustomMethodsSection()) { -&>
 
@@ -373,7 +390,7 @@ _%>
 <%_ if (!embedded) { _%>
             "<%= primaryKey.name %>=" + get<%= primaryKey.nameCapitalized %>() +
 <%_ } _%>
-<%_ for (const field of fields.filter(field => !field.id && !field.transient)) {
+<%_ for (const field of declaredFields.filter(field => !field.id && !field.transient)) {
   const isNumeric = field.fieldTypeNumeric; _%>
             ", <%= field.fieldName %>=<% if (! isNumeric) { %>'<% } %>" + get<%= field.fieldInJavaBeanMethod %>() <% if (! isNumeric) { %>+ "'" <% } %>+
   <%_ if (field.fieldWithContentType) { _%>

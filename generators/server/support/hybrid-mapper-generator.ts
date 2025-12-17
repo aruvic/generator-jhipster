@@ -1532,7 +1532,8 @@ function buildPolymorphicMapping(
 
   const baseType = stripDtoSuffix(schemaName);
   const normalizedBase = normalizeTypeName(baseType);
-  const referenceLikeFamily = isReferenceLikeName(baseType);
+  // For RefOrValue families we need both reference and value subtypes, so avoid treating them as reference-only.
+  const referenceLikeFamily = isReferenceLikeName(baseType) && !baseType.toLowerCase().includes('orvalue');
   let subtypeNames = extractSubtypes(schema);
   const compositionSubtypeNames = collectCompositeSubtypeNames(schema);
   if (compositionSubtypeNames.size > 0) {
@@ -2266,6 +2267,14 @@ export function generateHybridMappers(
     const helperPackage = `${basePackage}.web.api.mapper`;
     const subtypeMapperFqcns = new Set<string>();
     const primitiveMapperFqcn = `${helperPackage}.OpenApiPrimitiveMapper`;
+    // Always reference subtype mappers so MapStruct can delegate full field mapping (including FVO/MVO variants).
+    for (const subtype of poly.subtypes) {
+      const subtypeName = normalizeTypeName(subtype.domainSimpleName) ?? subtype.domainSimpleName;
+      if (!subtypeName) {
+        continue;
+      }
+      subtypeMapperFqcns.add(`${helperPackage}.${subtypeName}Mapper`);
+    }
     const decoratedVariants = poly.variants.map(
       variant =>
         ({

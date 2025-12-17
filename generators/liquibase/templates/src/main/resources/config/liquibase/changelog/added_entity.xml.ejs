@@ -18,7 +18,19 @@
 -%>
 <%- include('/liquibase-changelog-header') -%>
 
-<%_ fields.filter(field => field.liquibaseCustomSequenceGenerator).forEach((field, idx) => { _%>
+<%_
+  const inheritedFieldNames = new Set();
+  let inheritanceCursor = typeof entity !== 'undefined' && entity ? entity.parentEntity : undefined;
+  while (inheritanceCursor && inheritanceCursor.fields) {
+    for (const inheritedField of inheritanceCursor.fields) {
+      inheritedFieldNames.add(inheritedField.fieldName);
+    }
+    inheritanceCursor = inheritanceCursor.parentEntity;
+  }
+  const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+_%>
+
+<%_ declaredFields.filter(field => field.liquibaseCustomSequenceGenerator).forEach((field, idx) => { _%>
     <changeSet id="<%= changelogDate %>-seq-<%- idx %>" author="jhipster">
         <createSequence sequenceName="<%- field.liquibaseSequenceGeneratorName %>" startValue="1050" incrementBy="50"/>
     </changeSet>
@@ -46,7 +58,7 @@ _%>
             </column>
 <%_             writtenColumnNames.add(entity.discriminatorColumn.name); _%>
 <%_ } _%>
-<%_ for (field of fields) { _%>
+<%_ for (field of declaredFields) { _%>
 <%_     if (field.columnName && writtenColumnNames.has(field.columnName)) { _%>
 <%_         continue; _%>
 <%_     } _%>
