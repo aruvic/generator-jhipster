@@ -216,6 +216,7 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
 function sanitizeOpenApiSpec(rawContents: string): string {
   try {
     const specObject = parseYaml(rawContents);
+    injectAddressableIntoEntityMvo(specObject);
     const stripExamples = (node: any) => {
       if (!node || typeof node !== 'object') return;
 
@@ -238,4 +239,36 @@ function sanitizeOpenApiSpec(rawContents: string): string {
     // If parsing fails, fall back to original content but keep newline termination
     return rawContents.endsWith('\n') ? rawContents : `${rawContents}\n`;
   }
+}
+
+function injectAddressableIntoEntityMvo(specObject: any) {
+  const schemas = specObject?.components?.schemas;
+  if (!schemas || !schemas.Entity_MVO) {
+    return;
+  }
+  const entityMvo = schemas.Entity_MVO;
+  const addressableSchema = schemas.Addressable_FVO ?? schemas.Addressable;
+  const addressableProperties = addressableSchema?.properties;
+  if (!addressableProperties) {
+    return;
+  }
+  const allOfEntries = Array.isArray(entityMvo.allOf) ? entityMvo.allOf : [];
+  const entityAlreadyHasTmfId =
+    !!entityMvo?.properties?.tmfId || allOfEntries.some((entry: any) => entry?.properties?.tmfId);
+  if (entityAlreadyHasTmfId) {
+    return;
+  }
+  const propertiesToCopy = ['href', 'id', 'tmfId'].reduce(
+    (copied, key) => {
+      if (addressableProperties[key]) {
+        copied[key] = { ...addressableProperties[key] };
+      }
+      return copied;
+    },
+    {} as Record<string, any>,
+  );
+  if (Object.keys(propertiesToCopy).length === 0) {
+    return;
+  }
+  entityMvo.allOf = [...allOfEntries, { type: 'object', properties: propertiesToCopy }];
 }

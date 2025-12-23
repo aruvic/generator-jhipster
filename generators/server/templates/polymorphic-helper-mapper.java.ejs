@@ -42,6 +42,29 @@
             });
         });
     };
+    const baseDtoSimpleName = baseDtoType.substring(baseDtoType.lastIndexOf('.') + 1);
+    const resolveVariantSubtypeDtoType = (variant, subtype) => {
+        const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1);
+        if (!variantDtoSimpleName.startsWith(baseType)) {
+            if (variant.targetDomainSimpleName && variant.targetDomainSimpleName === subtype.domainSimpleName) {
+                return variant.dtoType;
+            }
+            return subtype.dtoType;
+        }
+        const usesBaseSubtypes = !variant.subtypes || variant.subtypes.length === 0;
+        if (!usesBaseSubtypes) {
+            return subtype.dtoType;
+        }
+        let subtypeDtoType = subtype.dtoType;
+        const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
+        const normalizedVariantSuffix = variantSuffix.replace(/_/g, '');
+        if (normalizedVariantSuffix && !subtype.dtoSimpleName.endsWith(normalizedVariantSuffix)) {
+            const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
+            const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
+            subtypeDtoType = `${packagePart}.${subtypeBase}${normalizedVariantSuffix}`;
+        }
+        return subtypeDtoType;
+    };
 %>
 /**
  * MapStruct helper mapper for the <%- baseType %> polymorphic family.
@@ -51,6 +74,7 @@
 package <%- packageName %>;
 
 import org.mapstruct.Mapper;
+import org.mapstruct.MappingTarget;
 <%_ if (requiresMappingImport) { _%>
 import org.mapstruct.Mapping;
 <%_ } _%>
@@ -61,6 +85,7 @@ import org.mapstruct.ObjectFactory;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.ReportingPolicy;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.annotation.Autowired;
 
 @Lazy
 @Mapper(
@@ -68,18 +93,31 @@ import org.springframework.context.annotation.Lazy;
     unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (hasMapperDependencies) { _%>,
     uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
-public interface <%- mapperName %> {
-<%_ for (const subtype of subtypes) { if (subtype.isCompatible === false) { continue; } _%>
+public abstract class <%- mapperName %> {
+<%_ const mapperFields = (usesMappers ?? []).map(fqcn => ({
+      fqcn,
+      simpleName: fqcn.substring(fqcn.lastIndexOf('.') + 1),
+    }));
+    const lowerFirst = value => value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+_%>
+<%_ if (mapperFields.length > 0) { mapperFields.forEach(field => { _%>
+    @Autowired
+    protected <%- field.fqcn %> <%- lowerFirst(field.simpleName) %>;
+<%_ }); } _%>
+<%_ for (const subtype of subtypes) { 
+      if (subtype.isCompatible === false) { continue; }
+      if (subtype.isDtoSubtype === false) { continue; }
+_%>
     @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
 <%_ } _%>
-    <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
+    public abstract <%- baseDtoType %> to<%- baseType %>Dto(<%- baseDomainType %> source);
 
     @ObjectFactory
-    default <%- baseDtoType %> create<%- baseType %>Dto(<%- baseDomainType %> source) {
+    protected <%- baseDtoType %> create<%- baseType %>Dto(<%- baseDomainType %> source) {
         if (source == null) {
             return null;
         }
- <%_ for (const subtype of subtypes) { _%>
+ <%_ for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
         if ((Object) source instanceof <%- subtype.domainType %>) {
             if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
                 <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
@@ -89,7 +127,7 @@ public interface <%- mapperName %> {
         }
  <%_ } _%>
 <%_ if (isAbstract) { _%>
-<%_   for (const subtype of subtypes) { _%>
+<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
             <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
         ) {
@@ -101,7 +139,7 @@ public interface <%- mapperName %> {
         if (!java.lang.reflect.Modifier.isAbstract(<%- baseDtoType %>.class.getModifiers())) {
             return new <%- baseDtoType %>();
         }
-<%_   for (const subtype of subtypes) { _%>
+<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
             <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
         ) {
@@ -119,18 +157,66 @@ public interface <%- mapperName %> {
 <%_ } _%>
 <%_ for (const subtype of subtypes) { 
       if (subtype.isCompatible === false) { continue; }
+      if (subtype.isDtoSubtype === false) { continue; }
       const qualifier = mappingQualifierForSubtype(subtype.dtoType);
 _%>
     @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class<%- qualifier ? `, qualifiedByName = "${qualifier}"` : '' %>)
 <%_ } _%>
-    <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
+    public abstract <%- baseDomainType %> to<%- baseType %>(<%- baseDtoType %> source);
+
+    public void update<%- baseType %>From<%- baseDtoType.substring(baseDtoType.lastIndexOf('.') + 1) %>(@MappingTarget <%- baseDomainType %> target, <%- baseDtoType %> source) {
+        if (target == null || source == null) {
+            return;
+        }
+<%_ for (const subtype of subtypes) { if (subtype.isCompatible === false) { continue; }
+      if (subtype.isDtoSubtype === false) { continue; }
+      const subtypeMapper = `${subtype.domainSimpleName}Mapper`;
+      const subtypeMapperField = lowerFirst(subtypeMapper);
+      const updateMethod = subtype.usesHelperMapper
+        ? `update${subtype.domainSimpleName}From${subtype.dtoSimpleName}`
+        : `update${subtype.domainSimpleName}EntityFrom${subtype.dtoSimpleName}`;
+_%>
+        if (source instanceof <%- subtype.dtoType %> && target instanceof <%- subtype.domainType %>) {
+            this.<%- subtypeMapperField %>.<%- updateMethod %>((<%- subtype.domainType %>) target, (<%- subtype.dtoType %>) source);
+            return;
+        }
+<%_ } _%>
+    }
+
+<%_ for (const variant of requestVariants) {
+      const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1);
+      if (variantDtoSimpleName === baseDtoSimpleName) { continue; }
+      const variantEffectiveSubtypes = (variant.subtypes && variant.subtypes.length > 0) ? variant.subtypes : subtypes;
+_%>
+    public void update<%- baseType %>From<%- variantDtoSimpleName %>(@MappingTarget <%- baseDomainType %> target, <%- variant.dtoType %> source) {
+        if (target == null || source == null) {
+            return;
+        }
+  <%_ for (const subtype of variantEffectiveSubtypes) { if (subtype.isCompatible === false) { continue; }
+        if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; }
+        const subtypeDtoType = resolveVariantSubtypeDtoType(variant, subtype);
+        const subtypeDtoSimpleName = subtypeDtoType.substring(subtypeDtoType.lastIndexOf('.') + 1);
+        const subtypeMapper = `${subtype.domainSimpleName}Mapper`;
+        const subtypeMapperField = lowerFirst(subtypeMapper);
+        const updateMethod = subtype.usesHelperMapper
+          ? `update${subtype.domainSimpleName}From${subtypeDtoSimpleName}`
+          : `update${subtype.domainSimpleName}EntityFrom${subtypeDtoSimpleName}`;
+  _%>
+        if (source instanceof <%- subtypeDtoType %> && target instanceof <%- subtype.domainType %>) {
+            this.<%- subtypeMapperField %>.<%- updateMethod %>((<%- subtype.domainType %>) target, (<%- subtypeDtoType %>) source);
+            return;
+        }
+  <%_ } _%>
+    }
+
+<%_ } _%>
 
     @ObjectFactory
-    default <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
+    protected <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
         if (source == null) {
             return null;
         }
- <%_ for (const subtype of subtypes) { _%>
+ <%_ for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
    <%_ if (subtype.isCompatible) { _%>
         if ((Object) source instanceof <%- subtype.dtoType %>) {
             if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
@@ -142,7 +228,7 @@ _%>
    <%_ } _%>
    <%_ } _%>
 <%_ if (isAbstract) { _%>
-<%_   for (const subtype of subtypes) { _%>
+<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
@@ -154,7 +240,7 @@ _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- baseDomainType %>.class.getModifiers())) {
             return new <%- baseDomainType %>();
         }
-<%_   for (const subtype of subtypes) { _%>
+<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
@@ -184,6 +270,7 @@ _%>
 <%_   const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1); _%>
 <%_   if (variantDtoSimpleName.startsWith(baseType)) { _%>
 <%_   for (const subtype of variantEffectiveSubtypes) { 
+        if (subtype.isDtoSubtype === false) { continue; }
         let subtypeDtoType = subtype.dtoType;
         const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
         const normalizedVariantSuffix = variantSuffix.replace(/_/g, '');
@@ -196,15 +283,16 @@ _%>
     @SubclassMapping(source = <%- subtypeDtoType %>.class, target = <%- subtype.domainType %>.class<%- subtypeQualifier(subtypeDtoType) ? `, qualifiedByName = "${subtypeQualifier(subtypeDtoType)}"` : '' %>)
 <%_   } _%>
 <%_   } _%>
-    <%- targetDomainType %> <%- variantMappingMethodName %>(<%- variant.dtoType %> source);
+    public abstract <%- targetDomainType %> <%- variantMappingMethodName %>(<%- variant.dtoType %> source);
 
     @ObjectFactory
-    default <%- targetDomainType %> instantiate<%- baseType %>From<%- variant.dtoSimpleName %>(<%- variant.dtoType %> source) {
+    protected <%- targetDomainType %> instantiate<%- baseType %>From<%- variant.dtoSimpleName %>(<%- variant.dtoType %> source) {
         if (source == null) {
             return null;
         }
 <%_ 
         for (const subtype of variantEffectiveSubtypes) {
+            if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; }
             let subtypeDtoType = subtype.dtoType;
             if (!variant.subtypes || variant.subtypes.length === 0) {
                 const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
@@ -226,19 +314,19 @@ _%>
     <%_ } _%>
 <%_     } _%>
 <%_     if (targetDomainType === baseDomainType && isAbstract) { _%>
- <%_         for (const subtype of variantEffectiveSubtypes) { _%>
+ <%_         for (const subtype of variantEffectiveSubtypes) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
             return new <%- subtype.domainType %>();
         }
- <%_         } _%>
+<%_         } _%>
         return null;
 <%_     } else { _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- targetDomainType %>.class.getModifiers())) {
             return new <%- targetDomainType %>();
         }
- <%_         for (const subtype of variantEffectiveSubtypes) { _%>
+ <%_         for (const subtype of variantEffectiveSubtypes) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
@@ -249,7 +337,7 @@ _%>
 <%_     } _%>
     }
 
-    default java.util.List<<%- baseDomainType %>> map<%- variant.dtoSimpleName %>ListTo<%- baseType %>List(
+    protected java.util.List<<%- baseDomainType %>> map<%- variant.dtoSimpleName %>ListTo<%- baseType %>List(
         java.util.List<<%- variant.dtoType %>> source
     ) {
         if (source == null) {
