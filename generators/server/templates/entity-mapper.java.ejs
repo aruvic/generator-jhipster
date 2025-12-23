@@ -14,7 +14,9 @@ import org.mapstruct.BeanMapping;
 import org.mapstruct.MappingTarget;
 import org.mapstruct.NullValuePropertyMappingStrategy;
 import org.mapstruct.ReportingPolicy;
+import org.mapstruct.AfterMapping;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.beans.factory.annotation.Autowired;
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 import org.mapstruct.ObjectFactory;
 <%_ } _%>
@@ -23,13 +25,36 @@ import org.mapstruct.Named;
 import org.openapitools.jackson.nullable.JsonNullable;
 <%_ } _%>
 
+<%_ const hasCollectionMerges = requestMappings.some(mapping => Array.isArray(mapping.collectionFields) && mapping.collectionFields.length > 0); _%>
+<%_ const mergeMappers = new Set();
+    for (const mapping of requestMappings) {
+      for (const field of mapping.collectionFields ?? []) {
+        mergeMappers.add(field.mapperFqcn);
+      }
+    }
+    const mergeMappersList = Array.from(mergeMappers);
+    const needsMergeHelpers = hasCollectionMerges && mergeMappersList.length > 0;
+    const needsMapImports =
+      hasCollectionMerges &&
+      requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => (field.keyExpressions ?? []).length > 0));
+_%>
+<%_ if (needsMapImports) { _%>
+import java.util.HashMap;
+import java.util.Map;
+<%_ } _%>
+
 @Lazy
 @Mapper(
   componentModel = "spring",
   unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
   uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
-public interface <%- mapperName %> {
+public abstract class <%- mapperName %> {
+
+<%_ if (needsMergeHelpers) { mergeMappersList.forEach(fqcn => { _%>
+    @Autowired
+    protected <%- fqcn %> <%- fqcn.split('.').pop().charAt(0).toLowerCase() + fqcn.split('.').pop().slice(1) %>;
+<%_ }); } _%>
 
     // ========== Request Mappings (DTO -> Domain) ==========
 <%_ for (const mapping of requestMappings) { _%>
@@ -38,10 +63,14 @@ public interface <%- mapperName %> {
     <%- annotation %>
     <%_ } _%>
   <%_ } _%>
+  <%_ const hasIdIgnore = (mapping.annotations || []).some(annotation => annotation.includes('target = "id"')); _%>
+  <%_ if (!hasIdIgnore) { _%>
+    @Mapping(target = "id", ignore = true)
+  <%_ } _%>
   <%_ if (entityName === 'JsonPatch') { _%>
     @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
-    <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
+    public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
   @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
 <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
@@ -49,10 +78,13 @@ public interface <%- mapperName %> {
     <%- annotation %>
   <%_ } _%>
 <%_ } _%>
+  <%_ if (!hasIdIgnore) { _%>
+    @Mapping(target = "id", ignore = true)
+  <%_ } _%>
   <%_ if (entityName === 'JsonPatch') { _%>
     @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
-    void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
+    public abstract void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
 
 <%_ } _%>
 
@@ -66,15 +98,91 @@ public interface <%- mapperName %> {
     <%- annotation %>
     <%_ } _%>
   <%_ } _%>
-    <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
+    public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
+<%_ } _%>
+
+<%_ if (hasCollectionMerges) { _%>
+  <%_ for (const mapping of requestMappings) {
+        const collectionFields = mapping.collectionFields ?? [];
+        if (collectionFields.length === 0) { continue; }
+        const sourceSimple = mapping.sourceType.split('.').pop();
+    _%>
+    @AfterMapping
+    protected void mergeCollectionsFrom<%- sourceSimple %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source) {
+        if (source == null) {
+            return;
+        }
+    <%_ for (const field of collectionFields) { _%>
+        if (source.get<%- field.sourceGetter %>() != null) {
+            java.util.List<<%- field.elementDomainType %>> targetItems = target.get<%- field.targetGetter %>();
+            if (targetItems == null) {
+                targetItems = new java.util.ArrayList<>();
+            }
+      <%_ const keyExpressions = field.keyExpressions ?? []; _%>
+      <%_ if (keyExpressions.length > 0) { _%>
+            Map<Object, <%- field.elementDomainType %>> existingByKey = new HashMap<>();
+            for (<%- field.elementDomainType %> item : targetItems) {
+                Object itemKey = null;
+        <%_ for (const expr of keyExpressions) { _%>
+                if (itemKey == null) {
+                    Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
+                    if (candidateKey != null) {
+                        itemKey = candidateKey;
+                    }
+                }
+        <%_ } _%>
+                if (itemKey != null) {
+                    existingByKey.put(itemKey, item);
+                }
+            }
+            for (<%- field.elementDtoType %> item : source.get<%- field.sourceGetter %>()) {
+                <%- field.elementDomainType %> mappedCandidate = this.<%- field.mapperField %>.<%- field.mapMethod %>(item);
+                if (mappedCandidate == null) {
+                    continue;
+                }
+                Object itemKey = null;
+        <%_ for (const expr of keyExpressions) { _%>
+                if (itemKey == null) {
+                    Object candidateKey = <%- expr.replace(/\{var\}/g, 'mappedCandidate') %>;
+                    if (candidateKey != null) {
+                        itemKey = candidateKey;
+                    }
+                }
+        <%_ } _%>
+                if (itemKey != null && existingByKey.containsKey(itemKey)) {
+                    this.<%- field.mapperField %>.<%- field.updateMethod %>(existingByKey.get(itemKey), item);
+                } else {
+                    if (mappedCandidate.getId() != null) {
+                        mappedCandidate.setId(null);
+                    }
+                    targetItems.add(mappedCandidate);
+                }
+            }
+      <%_ } else { _%>
+            for (<%- field.elementDtoType %> item : source.get<%- field.sourceGetter %>()) {
+                <%- field.elementDomainType %> mapped = this.<%- field.mapperField %>.<%- field.mapMethod %>(item);
+                if (mapped != null) {
+                    if (mapped.getId() != null) {
+                        mapped.setId(null);
+                    }
+                    targetItems.add(mapped);
+                }
+            }
+      <%_ } _%>
+            target.<%- field.targetSetter %>(targetItems);
+        }
+    <%_ } _%>
+    }
+
+  <%_ } _%>
 <%_ } _%>
 
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 <%_   for (const factory of objectFactories) { _%>
 
   @ObjectFactory
-  default <%- factory.returnType %> <%- factory.methodName %>(<%- factory.sourceType %> source) {
+  protected <%- factory.returnType %> <%- factory.methodName %>(<%- factory.sourceType %> source) {
     if (source == null) {
       return null;
     }
@@ -101,7 +209,7 @@ public interface <%- mapperName %> {
 
 <%_ if (entityName === 'JsonPatch') { _%>
   @Named("unwrapJsonPatchValue")
-  default String unwrapJsonPatchValue(JsonNullable<Object> value) {
+  protected String unwrapJsonPatchValue(JsonNullable<Object> value) {
     if (value == null || !value.isPresent()) {
       return null;
     }
@@ -110,7 +218,7 @@ public interface <%- mapperName %> {
   }
 
   @Named("wrapJsonPatchValue")
-  default JsonNullable<Object> wrapJsonPatchValue(Object value) {
+  protected JsonNullable<Object> wrapJsonPatchValue(Object value) {
     return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
   }
 <%_ } _%>
