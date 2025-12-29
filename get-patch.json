@@ -1,0 +1,298 @@
+{
+  "@type" : "PartyInteraction",
+  "@baseType" : "Extensible",
+  "@schemaLocation" : "http://example.com/schema/partyInteraction",
+  "href" : null,
+  "id" : 1001,
+  "tmfId" : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "relatedChannels" : [ {
+    "@type" : "RelatedChannel",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/related-channel",
+    "role" : "updatedChannel",
+    "channel" : {
+      "@type" : "ChannelRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/channelref",
+      "href" : "http://example.com/channel/1000",
+      "id" : 1552,
+      "tmfId" : "11111111-1111-1111-1111-111111111111",
+      "name" : "Web Portal (updated name)",
+      "@referredType" : "Channel"
+    }
+  } ],
+  "direction" : "inbound",
+  "reason" : "Follow-up on complaint resolution",
+  "interactionDate" : {
+    "startDateTime" : "2025-02-01T08:00:00Z",
+    "endDateTime" : "2025-02-01T09:00:00Z"
+  },
+  "description" : "Patched payload update",
+  "status" : "closed",
+  "statusChangeDate" : null,
+  "creationDate" : null,
+  "lastUpdate" : "2025-02-01T10:00:00Z",
+  "relatedPartys" : [ {
+    "@type" : "RelatedPartyOrPartyRole",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/related-party",
+    "role" : "customer",
+    "partyOrPartyRole" : {
+      "@type" : "PartyRoleRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/partyroleref",
+      "href" : "http://example.com/party-role/2000",
+      "id" : 1652,
+      "tmfId" : "22222222-2222-2222-2222-222222222222",
+      "name" : "Customer Role (updated)",
+      "@referredType" : "PartyRole",
+      "partyId" : "P-001",
+      "partyName" : "John Doe"
+    }
+  }, {
+    "@type" : "RelatedPartyOrPartyRole",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/related-party",
+    "role" : "agent",
+    "partyOrPartyRole" : {
+      "@type" : "PartyRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/partyref",
+      "href" : "http://example.com/party/2002",
+      "id" : 1653,
+      "tmfId" : "22222222-2222-2222-2222-222222222224",
+      "name" : "Support Agent",
+      "@referredType" : "Individual"
+    }
+  } ],
+  "attachments" : [ {
+    "@type" : "Attachment",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/attachment",
+    "href" : null,
+    "id" : 1101,
+    "tmfId" : "33333333-3333-3333-3333-333333333333",
+    "name" : "Contract",
+    "description" : "Signed contract",
+    "url" : "http://example.com/contract.pdf",
+    "content" : "VGhpcyBpcyBhIHRlc3QgYXR0YWNobWVudA==",
+    "size" : {
+      "amount" : 123.45,
+      "units" : "KB"
+    },
+    "validFor" : {
+      "startDateTime" : "2025-01-01T00:00:00Z",
+      "endDateTime" : "2025-12-31T23:59:59Z"
+    },
+    "attachmentType" : "document",
+    "mimeType" : "application/pdf"
+  }, {
+    "@type" : "AttachmentRef",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/attachmentref",
+    "href" : "http://example.com/attachment/3002",
+    "id" : 1102,
+    "tmfId" : "33333333-3333-3333-3333-333333333335",
+    "name" : "Receipt (ref)",
+    "@referredType" : "Attachment",
+    "description" : "Reference-only attachment (updated)",
+    "url" : "http://example.com/receipt.pdf"
+  } ],
+  "notes" : [ {
+    "@type" : "Note",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/note",
+    "id" : 1454,
+    "author" : "Supervisor",
+    "date" : "2025-02-01T09:15:00Z",
+    "text" : "Issue resolved and closed.",
+    "tmfId" : "44444444-4444-4444-4444-444444444446"
+  }, {
+    "@type" : "Note",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/note",
+    "id" : 1452,
+    "author" : "Support Agent",
+    "date" : "2025-01-01T10:15:00Z",
+    "text" : "Customer reported intermittent connectivity. (confirmed)",
+    "tmfId" : "44444444-4444-4444-4444-444444444444"
+  } ],
+  "interactionItems" : [ {
+    "@type" : "InteractionItem",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/interaction-item",
+    "id" : 1251,
+    "itemDate" : {
+      "startDateTime" : "2025-02-01T08:10:00Z",
+      "endDateTime" : "2025-02-01T08:20:00Z"
+    },
+    "reason" : "Resolution confirmation",
+    "resolution" : "Resolved",
+    "creationDate" : "2025-01-01T10:06:00Z",
+    "lastUpdate" : "2025-02-01T08:25:00Z",
+    "item" : {
+      "@type" : "RelatedEntityRefOrValue",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/related-entity",
+      "role" : "subject",
+      "entity" : {
+        "@type" : "EntityRef",
+        "@baseType" : "Extensible",
+        "@schemaLocation" : "http://example.com/schema/entityref",
+        "href" : "http://example.com/entity/6000",
+        "id" : 1351,
+        "tmfId" : "66666666-6666-6666-6666-666666666666",
+        "name" : "Referenced entity 6000",
+        "@referredType" : "SomeEntity"
+      }
+    },
+    "relatedChannels" : [ {
+      "@type" : "RelatedChannel",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/related-channel",
+      "role" : "executionChannel",
+      "channel" : {
+        "@type" : "ChannelRef",
+        "@baseType" : "Extensible",
+        "@schemaLocation" : "http://example.com/schema/channelref",
+        "href" : "http://example.com/channel/1001",
+        "id" : 1551,
+        "tmfId" : "11111111-1111-1111-1111-111111111112",
+        "name" : "Call Center",
+        "@referredType" : "Channel"
+      }
+    }, {
+      "@type" : "RelatedChannel",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/related-channel",
+      "role" : "followupChannel",
+      "channel" : {
+        "@type" : "ChannelRef",
+        "@baseType" : "Extensible",
+        "@schemaLocation" : "http://example.com/schema/channelref",
+        "href" : "http://example.com/channel/1002",
+        "id" : 1553,
+        "tmfId" : "11111111-1111-1111-1111-111111111113",
+        "name" : "Email",
+        "@referredType" : "Channel"
+      }
+    } ],
+    "relatedPartys" : [ {
+      "@type" : "RelatedPartyRefOrPartyRoleRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/related-party",
+      "role" : "agent",
+      "partyOrPartyRole" : {
+        "@type" : "PartyRoleRef",
+        "@baseType" : "Extensible",
+        "@schemaLocation" : "http://example.com/schema/partyroleref",
+        "href" : "http://example.com/party-role/2001",
+        "id" : 1651,
+        "tmfId" : "22222222-2222-2222-2222-222222222223",
+        "name" : "Support Agent Role",
+        "@referredType" : "PartyRole",
+        "partyId" : "A-123",
+        "partyName" : "Agent Smith"
+      }
+    }, {
+      "@type" : "RelatedPartyRefOrPartyRoleRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/related-party",
+      "role" : "supervisor",
+      "partyOrPartyRole" : {
+        "@type" : "PartyRoleRef",
+        "@baseType" : "Extensible",
+        "@schemaLocation" : "http://example.com/schema/partyroleref",
+        "href" : "http://example.com/party-role/2003",
+        "id" : 1654,
+        "tmfId" : "22222222-2222-2222-2222-222222222225",
+        "name" : "Supervisor Role",
+        "@referredType" : "PartyRole",
+        "partyId" : "S-001",
+        "partyName" : "Alice Smith"
+      }
+    } ],
+    "attachments" : [ {
+      "@type" : "AttachmentRef",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/attachmentref",
+      "href" : "http://example.com/attachment/3001",
+      "id" : 1103,
+      "tmfId" : "33333333-3333-3333-3333-333333333334",
+      "name" : "Screenshot (ref)",
+      "@referredType" : "Attachment",
+      "description" : "Evidence screenshot",
+      "url" : "http://example.com/screenshot.png"
+    }, {
+      "@type" : "Attachment",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/attachment",
+      "href" : null,
+      "id" : 1104,
+      "tmfId" : "33333333-3333-3333-3333-333333333336",
+      "name" : "Closure evidence",
+      "description" : "Evidence of closure",
+      "url" : "http://example.com/closure.txt",
+      "content" : "Q2xvc3VyZSBldmlkZW5jZQ==",
+      "size" : {
+        "amount" : 1.0,
+        "units" : "KB"
+      },
+      "validFor" : {
+        "startDateTime" : "2025-02-01T00:00:00Z",
+        "endDateTime" : "2025-12-31T23:59:59Z"
+      },
+      "attachmentType" : "evidence",
+      "mimeType" : "text/plain"
+    } ],
+    "notes" : [ {
+      "@type" : "Note",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/note",
+      "id" : 1451,
+      "author" : "Support Agent",
+      "date" : "2025-01-01T10:18:00Z",
+      "text" : "Diagnostics started; awaiting results.",
+      "tmfId" : "44444444-4444-4444-4444-444444444445"
+    }, {
+      "@type" : "Note",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/note",
+      "id" : 1453,
+      "author" : "Supervisor",
+      "date" : "2025-02-01T08:22:00Z",
+      "text" : "Resolution confirmed with customer.",
+      "tmfId" : "44444444-4444-4444-4444-444444444447"
+    } ],
+    "interactionItemRelationships" : [ {
+      "@type" : "InteractionItemRelationship",
+      "@baseType" : "Extensible",
+      "@schemaLocation" : "http://example.com/schema/interaction-item-relationship",
+      "id" : 1401,
+      "relationshipType" : "followup",
+      "tmfId" : "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    } ],
+    "interactionItemType" : "Closure",
+    "tmfId" : "55555555-5555-5555-5555-555555555555"
+  } ],
+  "interactionRelationships" : [ {
+    "@type" : "InteractionRelationship",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/interaction-relationship",
+    "href" : "http://example.com/ir/9000",
+    "id" : 1701,
+    "tmfId" : "dddddddd-dddd-dddd-dddd-dddddddddddd",
+    "name" : "Follow up (updated)",
+    "@referredType" : "Interaction",
+    "relationshipType" : "closure"
+  } ],
+  "externalIdentifiers" : [ {
+    "@type" : "ExternalIdentifier",
+    "@baseType" : "Extensible",
+    "@schemaLocation" : "http://example.com/schema/external-identifier",
+    "owner" : "CRM",
+    "externalIdentifierType" : "CaseIdUpdated",
+    "id" : 1201,
+    "tmfId" : "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+  } ]
+}
