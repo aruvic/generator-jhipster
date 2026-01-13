@@ -6,6 +6,7 @@ package <%- packageName %>;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -17,19 +18,24 @@ import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
 
 @Lazy
-@Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
+@Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.WARN)
 public interface OpenApiPrimitiveMapper {
     default String map(Object value) {
         if (value == null) {
             return null;
         }
-        if (value instanceof Map || value instanceof List) {
-            return JsonMappingSupport.writeValueAsString(value);
+        if (value instanceof String stringValue) {
+            return stringValue;
         }
-        return value.toString();
+        if (value instanceof JsonNullable<?> jsonNullable) {
+            return map(jsonNullable);
+        }
+        return JsonMappingSupport.writeValueAsString(value);
     }
 
     default String map(JsonNullable<?> value) {
@@ -37,13 +43,10 @@ public interface OpenApiPrimitiveMapper {
             return null;
         }
         final Object resolved = value.orElse(null);
-        if (resolved == null) {
-            return null;
+        if (resolved instanceof String stringValue) {
+            return stringValue;
         }
-        if (resolved instanceof Map || resolved instanceof List) {
-            return JsonMappingSupport.writeValueAsString(resolved);
-        }
-        return resolved.toString();
+        return JsonMappingSupport.writeValueAsString(resolved);
     }
 
     @Named("jsonStringToJsonNullableMap")
@@ -147,7 +150,7 @@ public interface OpenApiPrimitiveMapper {
             try {
                 return OBJECT_MAPPER.readValue(value, MAP_TYPE);
             } catch (JsonProcessingException ex) {
-                throw new IllegalArgumentException("Unable to deserialize JSON to Map", ex);
+                throw badRequest("Unable to deserialize JSON to Map", ex);
             }
         }
 
@@ -155,7 +158,7 @@ public interface OpenApiPrimitiveMapper {
             try {
                 return OBJECT_MAPPER.readValue(value, STRING_LIST_TYPE);
             } catch (JsonProcessingException ex) {
-                throw new IllegalArgumentException("Unable to deserialize JSON to List", ex);
+                throw badRequest("Unable to deserialize JSON to List", ex);
             }
         }
 
@@ -166,8 +169,12 @@ public interface OpenApiPrimitiveMapper {
             try {
                 return OBJECT_MAPPER.writeValueAsString(value);
             } catch (JsonProcessingException ex) {
-                throw new IllegalArgumentException("Unable to serialize value to JSON", ex);
+                throw badRequest("Unable to serialize value to JSON", ex);
             }
+        }
+
+        private static ResponseStatusException badRequest(String message, Exception ex) {
+            return new ResponseStatusException(HttpStatus.BAD_REQUEST, message, ex);
         }
     }
 }

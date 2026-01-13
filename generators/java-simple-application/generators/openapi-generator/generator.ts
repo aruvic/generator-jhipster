@@ -114,6 +114,8 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 <delegatePattern>true</delegatePattern>
                                 <title>${application.dasherizedBaseName}</title>
                                 <useSpringBoot3>true</useSpringBoot3>
+                                <useBeanValidation>false</useBeanValidation>
+                                <performBeanValidation>false</performBeanValidation>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>

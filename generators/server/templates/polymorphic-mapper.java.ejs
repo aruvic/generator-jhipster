@@ -43,12 +43,17 @@ import org.mapstruct.ReportingPolicy;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.SubclassExhaustiveStrategy;
 import org.springframework.context.annotation.Lazy;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
 
 @Lazy
 @Mapper(
     componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE,
+    unmappedTargetPolicy = ReportingPolicy.WARN,
     subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR
 )
 public interface <%- mapperName %> {
@@ -61,7 +66,7 @@ public interface <%- mapperName %> {
     default String mapJsonNullableObjectToString(JsonNullable<Object> value) {
         if (value == null || !value.isPresent()) return null;
         Object obj = value.get();
-        return obj == null ? null : obj.toString();
+        return obj == null ? null : JsonValueSupport.writeValueAsString(obj);
     }
 
     /**
@@ -75,7 +80,7 @@ public interface <%- mapperName %> {
      * Map Object to String
      */
     default String mapObjectToString(Object value) {
-        return value == null ? null : value.toString();
+        return JsonValueSupport.writeValueAsString(value);
     }
 
     /**
@@ -83,6 +88,29 @@ public interface <%- mapperName %> {
      */
     default Object mapStringToObject(String value) {
         return value;
+    }
+
+    final class JsonValueSupport {
+        private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+        private JsonValueSupport() {}
+
+        static String writeValueAsString(Object value) {
+            if (value == null) {
+                return null;
+            }
+            if (value instanceof String stringValue) {
+                return stringValue;
+            }
+            if (value instanceof JsonNode node) {
+                return node.toString();
+            }
+            try {
+                return OBJECT_MAPPER.writeValueAsString(value);
+            } catch (JsonProcessingException ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to serialize value", ex);
+            }
+        }
     }
 
 <%_ if (domainBridgeMappings.length > 0) { _%>

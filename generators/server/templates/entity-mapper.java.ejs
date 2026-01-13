@@ -21,7 +21,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.mapstruct.ObjectFactory;
 <%_ } _%>
 <%_ if (entityName === 'JsonPatch') { _%>
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.mapstruct.Named;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
 <%_ } _%>
 
@@ -34,19 +39,22 @@ import org.openapitools.jackson.nullable.JsonNullable;
     }
     const mergeMappersList = Array.from(mergeMappers);
     const needsMergeHelpers = hasCollectionMerges && mergeMappersList.length > 0;
-    const needsMapImports =
-      hasCollectionMerges &&
-      requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => (field.keyExpressions ?? []).length > 0));
 _%>
-<%_ if (needsMapImports) { _%>
-import java.util.HashMap;
+<%_ if (hasCollectionMerges) { _%>
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
 <%_ } _%>
 
 @Lazy
 @Mapper(
   componentModel = "spring",
-  unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
+  unmappedTargetPolicy = ReportingPolicy.WARN<%_ if (usesMappers && usesMappers.length > 0) { _%>,
   uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public abstract class <%- mapperName %> {
@@ -72,7 +80,7 @@ public abstract class <%- mapperName %> {
   <%_ } _%>
     public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
-  @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+  @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.SET_TO_NULL)
 <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
   <%_ for (const annotation of mapping.annotations) { _%>
     <%- annotation %>
@@ -114,68 +122,113 @@ public abstract class <%- mapperName %> {
             return;
         }
     <%_ for (const field of collectionFields) { _%>
-        if (source.get<%- field.sourceGetter %>() != null) {
-            java.util.List<<%- field.elementDomainType %>> targetItems = target.get<%- field.targetGetter %>();
-            if (targetItems == null) {
-                targetItems = new java.util.ArrayList<>();
-            }
+        Function<<%- field.elementDomainType %>, Object> <%- field.targetField %>ExistingKey = item -> {
       <%_ const keyExpressions = field.keyExpressions ?? []; _%>
       <%_ if (keyExpressions.length > 0) { _%>
-            Map<Object, <%- field.elementDomainType %>> existingByKey = new HashMap<>();
-            for (<%- field.elementDomainType %> item : targetItems) {
-                Object itemKey = null;
+            Object key = null;
         <%_ for (const expr of keyExpressions) { _%>
-                if (itemKey == null) {
-                    Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
-                    if (candidateKey != null) {
-                        itemKey = candidateKey;
-                    }
-                }
-        <%_ } _%>
-                if (itemKey != null) {
-                    existingByKey.put(itemKey, item);
+            if (key == null) {
+                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
                 }
             }
-            for (<%- field.elementDtoType %> item : source.get<%- field.sourceGetter %>()) {
-                <%- field.elementDomainType %> mappedCandidate = this.<%- field.mapperField %>.<%- field.mapMethod %>(item);
-                if (mappedCandidate == null) {
-                    continue;
-                }
-                Object itemKey = null;
-        <%_ for (const expr of keyExpressions) { _%>
-                if (itemKey == null) {
-                    Object candidateKey = <%- expr.replace(/\{var\}/g, 'mappedCandidate') %>;
-                    if (candidateKey != null) {
-                        itemKey = candidateKey;
-                    }
-                }
         <%_ } _%>
-                if (itemKey != null && existingByKey.containsKey(itemKey)) {
-                    this.<%- field.mapperField %>.<%- field.updateMethod %>(existingByKey.get(itemKey), item);
-                } else {
-                    if (mappedCandidate.getId() != null) {
-                        mappedCandidate.setId(null);
-                    }
-                    targetItems.add(mappedCandidate);
-                }
-            }
+            return key;
       <%_ } else { _%>
-            for (<%- field.elementDtoType %> item : source.get<%- field.sourceGetter %>()) {
-                <%- field.elementDomainType %> mapped = this.<%- field.mapperField %>.<%- field.mapMethod %>(item);
-                if (mapped != null) {
-                    if (mapped.getId() != null) {
-                        mapped.setId(null);
-                    }
-                    targetItems.add(mapped);
+            return null;
+      <%_ } _%>
+        };
+        Function<<%- field.elementDtoType %>, Object> <%- field.targetField %>IncomingKey = item -> {
+      <%_ if (keyExpressions.length > 0) { _%>
+            Object key = null;
+        <%_ for (const expr of keyExpressions) { _%>
+            if (key == null) {
+                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
                 }
             }
+        <%_ } _%>
+            return key;
+      <%_ } else { _%>
+            return null;
       <%_ } _%>
-            target.<%- field.targetSetter %>(targetItems);
-        }
+        };
+      <%_ if (keyExpressions.length > 0) { _%>
+        BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard =
+            (existingItem, incomingItem) -> {
+                Object existingKey = <%- field.targetField %>ExistingKey.apply(existingItem);
+                Object incomingKey = <%- field.targetField %>IncomingKey.apply(incomingItem);
+                if (existingKey != null && incomingKey != null && !existingKey.equals(incomingKey)) {
+                    throw new IllegalArgumentException("Identifier for <%- field.targetField %> is immutable");
+                }
+            };
+      <%_ } else { _%>
+        BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard = null;
+      <%_ } _%>
+        List<<%- field.elementDomainType %>> merged<%- field.targetGetter %> = mergeCollection(
+            target.get<%- field.targetGetter %>(),
+            source.get<%- field.sourceGetter %>(),
+            <%- field.targetField %>ExistingKey,
+            <%- field.targetField %>IncomingKey,
+            <%- field.targetField %>Guard,
+            (existingItem, incomingItem) -> this.<%- field.mapperField %>.<%- field.updateMethod %>(existingItem, incomingItem),
+            incomingItem -> this.<%- field.mapperField %>.<%- field.mapMethod %>(incomingItem)
+        );
+        target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);
     <%_ } _%>
     }
 
   <%_ } _%>
+
+    protected <D, S> List<D> mergeCollection(
+        List<D> current,
+        List<S> incoming,
+        Function<D, Object> existingKeyResolver,
+        Function<S, Object> incomingKeyResolver,
+        BiConsumer<D, S> immutableGuard,
+        BiConsumer<D, S> updater,
+        Function<S, D> mapper
+    ) {
+        List<D> existingItems = current != null ? new ArrayList<>(current) : new ArrayList<>();
+        if (incoming == null) {
+            return new ArrayList<>();
+        }
+        Map<Object, D> currentByKey = new LinkedHashMap<>();
+        if (existingKeyResolver != null) {
+            for (D item : existingItems) {
+                Object key = existingKeyResolver.apply(item);
+                if (key != null && !currentByKey.containsKey(key)) {
+                    currentByKey.put(key, item);
+                }
+            }
+        }
+        List<D> merged = new ArrayList<>();
+        Set<Object> seenKeys = new LinkedHashSet<>();
+        for (S incomingItem : incoming) {
+            Object incomingKey = incomingKeyResolver != null ? incomingKeyResolver.apply(incomingItem) : null;
+            if (incomingKey != null && !seenKeys.add(incomingKey)) {
+                continue;
+            }
+            if (incomingKey != null && currentByKey.containsKey(incomingKey)) {
+                D currentItem = currentByKey.get(incomingKey);
+                if (immutableGuard != null) {
+                    immutableGuard.accept(currentItem, incomingItem);
+                }
+                if (updater != null) {
+                    updater.accept(currentItem, incomingItem);
+                }
+                merged.add(currentItem);
+                continue;
+            }
+            D mappedItem = mapper != null ? mapper.apply(incomingItem) : null;
+            if (mappedItem != null) {
+                merged.add(mappedItem);
+            }
+        }
+        return merged;
+    }
 <%_ } _%>
 
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
@@ -213,13 +266,78 @@ public abstract class <%- mapperName %> {
     if (value == null || !value.isPresent()) {
       return null;
     }
-    final Object resolved = value.orElse(null);
-    return resolved != null ? resolved.toString() : null;
+    return JsonPatchValueSupport.toJsonString(value.orElse(null));
   }
 
   @Named("wrapJsonPatchValue")
   protected JsonNullable<Object> wrapJsonPatchValue(Object value) {
-    return value != null ? JsonNullable.of(value) : JsonNullable.undefined();
+    if (value == null) {
+      return JsonNullable.undefined();
+    }
+    return JsonNullable.of(JsonPatchValueSupport.toStructuredValue(value));
+  }
+
+  private static final class JsonPatchValueSupport {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private JsonPatchValueSupport() {}
+
+    static Object toStructuredValue(Object value) {
+      if (value == null) {
+        return null;
+      }
+      if (value instanceof JsonNode) {
+        return value;
+      }
+      if (value instanceof String stringValue) {
+        String trimmed = stringValue.trim();
+        if (trimmed.isEmpty()) {
+          return stringValue;
+        }
+        try {
+          return OBJECT_MAPPER.readTree(trimmed);
+        } catch (JsonProcessingException ex) {
+          throw badRequest("Unable to deserialize JSON Patch value", ex);
+        }
+      }
+      return value;
+    }
+
+    static String toJsonString(Object value) {
+      if (value == null) {
+        return null;
+      }
+      try {
+        if (value instanceof String stringValue) {
+          String trimmed = stringValue.trim();
+          if (trimmed.isEmpty()) {
+            return OBJECT_MAPPER.writeValueAsString(stringValue);
+          }
+          if (looksLikeJson(trimmed)) {
+            return OBJECT_MAPPER.writeValueAsString(OBJECT_MAPPER.readTree(trimmed));
+          }
+          return OBJECT_MAPPER.writeValueAsString(stringValue);
+        }
+        if (value instanceof JsonNode node) {
+          return OBJECT_MAPPER.writeValueAsString(node);
+        }
+        return OBJECT_MAPPER.writeValueAsString(OBJECT_MAPPER.valueToTree(value));
+      } catch (JsonProcessingException ex) {
+        throw badRequest("Unable to serialize JSON Patch value", ex);
+      }
+    }
+
+    private static boolean looksLikeJson(String value) {
+      if (value.isEmpty()) {
+        return false;
+      }
+      char first = value.charAt(0);
+      return first == '{' || first == '[' || first == '"' || first == '\'' || Character.isDigit(first) || first == '-';
+    }
+
+    private static ResponseStatusException badRequest(String message, Exception ex) {
+      return new ResponseStatusException(HttpStatus.BAD_REQUEST, message, ex);
+    }
   }
 <%_ } _%>
 }

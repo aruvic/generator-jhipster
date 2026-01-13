@@ -1,13 +1,49 @@
 package <%= packageName %>;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.NullNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.github.fge.jsonpatch.JsonPatch;
+import com.github.fge.jsonpatch.JsonPatchException;
+import com.github.fge.jsonpatch.mergepatch.JsonMergePatch;
+import com.jayway.jsonpath.Configuration;
+import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.PathNotFoundException;
+import com.jayway.jsonpath.TypeRef;
+import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
+import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 <%_ if (imports?.length) { imports.forEach(fqcn => { _%>
 import <%= fqcn %>;
 <%_ }); } _%>
@@ -16,6 +52,8 @@ import <%= basePackage %>.web.api.<%= interfaceName %>;
 // Generated delegate implementation - do not edit manually.
 @Service
 public class <%= className %> implements <%= interfaceName %> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(<%= className %>.class);
 
 <%_ const hasInjections = Array.isArray(injections) && injections.length > 0;
     const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
@@ -42,11 +80,18 @@ _%>
 <%_ }); } else { _%>
     // No dependencies required for this delegate.
 <%_ } _%>
+    private final Configuration jsonPathConfiguration;
 
     public <%= className %>(<%- constructorArgs %>) {
 <%_ if (hasInjections) { injections.forEach(dep => { _%>
         this.<%= dep.fieldName %> = <%= dep.fieldName %>;
 <%_ }); } _%>
+        this.jsonPathConfiguration =
+            Configuration.builder()
+                .jsonProvider(new JacksonJsonNodeJsonProvider(this.objectMapper))
+                .mappingProvider(new JacksonMappingProvider(this.objectMapper))
+                .options(Option.AS_PATH_LIST)
+                .build();
     }
 
 <%_ operations.filter(op => op.kind === 'create').forEach(op => { 
@@ -69,6 +114,10 @@ _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.CREATED);
+        // Persisting a new resource should return a creation status even if the contract advertises 204.
+        // This keeps TMF create/event handlers aligned with Location header expectations.
+        final HttpStatus resolvedStatus = successStatus == HttpStatus.NO_CONTENT ? HttpStatus.CREATED : successStatus;
+        LOG.info("Creating <%= resolvedResourceSlug %>");
         <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
         if (entity == null) {
             return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
@@ -79,17 +128,22 @@ _%>
         }
 <%_ } _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);
+        LOG.info(
+            "Created <%= resolvedResourceSlug %> id={} tmfId={}",
+            saved != null ? saved.getId() : null<%_ if (op.tmfIdAccessor) { _%>,
+            saved != null ? saved.get<%= op.tmfIdAccessor %>() : null<%_ } else { _%>, null<%_ } _%>
+        );
 <%_ if (!hasResponseBody) { _%>
-        if (successStatus == HttpStatus.CREATED) {
+        if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).build();
         }
-        return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+        return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
 <%_ } else { _%>
         <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = this.<%= responseField %>.<%= responseMethod %>(saved);
-        if (successStatus == HttpStatus.CREATED) {
+        if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);
         }
-        return ResponseEntity.status(successStatus).body(responseBody);
+        return ResponseEntity.status(resolvedStatus).body(responseBody);
 <%_ } _%>
 <%_ } _%>
     }
@@ -104,6 +158,10 @@ _%>
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
     const persistenceTypeFqcn = persistenceType(op);
+    const offsetParam = op.parameters.find(param => param.name?.toLowerCase() === 'offset');
+    const limitParam = op.parameters.find(param => param.name?.toLowerCase() === 'limit');
+    const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
+    const elementType = op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object';
 _%>
     @Transactional(readOnly = true)
     @Override
@@ -112,13 +170,24 @@ _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
-        List<<%= persistenceTypeFqcn %>> entities = this.<%= repoField %>.findAll();
+        final int resolvedOffset = resolveOffset(<%- offsetParam?.varName ?? 'null' %>);
+        final int resolvedLimit = resolveLimit(<%- limitParam?.varName ?? 'null' %>);
+        Pageable pageable = PageRequest.of(resolvedLimit > 0 ? resolvedOffset / Math.max(resolvedLimit, 1) : 0, Math.max(resolvedLimit, 1));
+        Page<<%= persistenceTypeFqcn %>> page = this.<%= repoField %>.findAll(pageable);
+        List<<%= persistenceTypeFqcn %>> entities = page.getContent();
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
         }
-        List<<%- op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object' %>> body = entities.stream()
-            .map(this.<%= responseField %>::<%= responseMethod %>)
-            .toList();
+        List<<%- elementType %>> body = entities.stream().map(this.<%= responseField %>::<%= responseMethod %>).toList();
+<%_ if (fieldsParam) { _%>
+        if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
+            List<<%- elementType %>> filtered = body
+                .stream()
+                .map(item -> filterFields(item, <%- fieldsParam.varName %>, <%- elementType %>.class))
+                .toList();
+            return ResponseEntity.status(successStatus).body(filtered);
+        }
+<%_ } _%>
         return ResponseEntity.status(successStatus).body(body);
 <%_ } _%>
     }
@@ -134,6 +203,7 @@ _%>
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
     const persistenceTypeFqcn = persistenceType(op);
+    const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
 _%>
     @Transactional(readOnly = true)
     @Override
@@ -152,7 +222,13 @@ _%>
                 if (successStatus == HttpStatus.NO_CONTENT) {
                     return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
                 }
-                return ResponseEntity.status(successStatus).body(this.<%= responseField %>.<%= responseMethod %>(found));
+                <%- op.responseResolvedType?.fullType ?? 'Object' %> body = this.<%= responseField %>.<%= responseMethod %>(found);
+<%_ if (fieldsParam) { _%>
+                if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
+                    body = filterFields(body, <%- fieldsParam.varName %>, <%- op.responseResolvedType?.fullType ?? 'Object' %>.class);
+                }
+<%_ } _%>
+                return ResponseEntity.status(successStatus).body(body);
             })
             .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null));
 <%_ } _%>
@@ -178,9 +254,13 @@ _%>
         if (parsedId.isEmpty()) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
-        final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.NO_CONTENT);
+        HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.NO_CONTENT);
+        if (successStatus == HttpStatus.ACCEPTED) {
+            successStatus = HttpStatus.NO_CONTENT;
+        }
         Optional<<%= persistenceTypeFqcn %>> maybeEntity = this.<%= repoField %>.findById(parsedId.orElseThrow());
         if (maybeEntity.isPresent()) {
+            LOG.info("Deleting <%= resolvedResourceSlug %> id={}", parsedId.orElse(null));
             this.<%= repoField %>.delete(maybeEntity.orElseThrow());
             if (successStatus == HttpStatus.NO_CONTENT) {
                 return ResponseEntity.noContent().build();
@@ -207,6 +287,7 @@ _%>
     const responseMethod = responseMapperMethod(op);
     const persistenceTypeFqcn = persistenceType(op);
     const hasPatchMapping = Boolean(updateMethod || mapperMethod);
+    const payloadType = op.requestBodyType ?? bodyParam?.javaType ?? 'Object';
 _%>
     @Transactional
     @Override
@@ -225,9 +306,24 @@ _%>
         }
         <%= persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
 <%_ if (updateMethod) { _%>
-        this.<%= mapperField %>.<%= updateMethod %>(existing, <%= bodyParam.varName %>);
+        LOG.info("Patching <%= resolvedResourceSlug %> id={}", parsedId.orElse(null));
+        <%- payloadType %> currentPayload = convertValue(this.<%= responseField %>.<%= responseMethod %>(existing), <%- payloadType %>.class);
+        JsonNode baseNode = toJsonObject(currentPayload);
+        JsonNode patchNode = readPatchNode(<%= bodyParam.varName %>);
+        PatchFormat patchFormat = resolvePatchFormat(resolveContentType(), patchNode);
+        JsonNode patchedNode = applyPatchedNode(baseNode, patchNode, patchFormat);
+        enforceImmutableIdentifiers(baseNode, patchedNode);
+        <%- payloadType %> mergedPayload = convertAndValidate(patchedNode, <%- payloadType %>.class);
+        try {
+            this.<%= mapperField %>.<%= updateMethod %>(existing, mergedPayload);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
+        }
 <%_ } else if (mapperMethod) { _%>
-        <%= persistenceTypeFqcn %> mapped = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
+        LOG.info("Replacing <%= resolvedResourceSlug %> id={}", parsedId.orElse(null));
+        <%- payloadType %> replacementPayload = convertAndValidate(readPatchNode(<%= bodyParam.varName %>), <%- payloadType %>.class);
+        enforceImmutableIdentifiers(toJsonObject(this.<%= responseField %>.<%= responseMethod %>(existing)), toJsonObject(replacementPayload));
+        <%= persistenceTypeFqcn %> mapped = this.<%= mapperField %>.<%= mapperMethod %>(replacementPayload);
         if (mapped == null) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
         }
@@ -238,6 +334,11 @@ _%>
 <%_ } _%>
 <%_ if (hasPatchMapping) { _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(existing);
+        LOG.info(
+            "Patched <%= resolvedResourceSlug %> id={} tmfId={}",
+            saved != null ? saved.getId() : null<%_ if (op.tmfIdAccessor) { _%>,
+            saved != null ? saved.get<%= op.tmfIdAccessor %>() : null<%_ } else { _%>, null<%_ } _%>
+        );
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Object' %>) null);
         }
@@ -260,6 +361,42 @@ _%>
     }
 
 <%_ }); _%>
+
+    private int resolveOffset(Object rawOffset) {
+        if (rawOffset == null) {
+            return 0;
+        }
+        if (rawOffset instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        try {
+            return Math.max(0, Integer.parseInt(rawOffset.toString()));
+        } catch (NumberFormatException ex) {
+            return 0;
+        }
+    }
+
+    private int resolveLimit(Object rawLimit) {
+        final int defaultLimit = 20;
+        final int maxLimit = 200;
+        if (rawLimit == null) {
+            return defaultLimit;
+        }
+        int value;
+        if (rawLimit instanceof Number number) {
+            value = number.intValue();
+        } else {
+            try {
+                value = Integer.parseInt(rawLimit.toString());
+            } catch (NumberFormatException ex) {
+                return defaultLimit;
+            }
+        }
+        if (value <= 0) {
+            return defaultLimit;
+        }
+        return Math.min(value, maxLimit);
+    }
 
     private Optional<Long> parseId(Object rawId) {
         if (rawId == null) {
@@ -289,6 +426,427 @@ _%>
         }
     }
 
+    private String resolveContentType() {
+        return resolveCurrentHttpServletRequest().map(HttpServletRequest::getContentType).orElse("");
+    }
+
+    private JsonNode readPatchNode(Object incomingPayload) {
+        final String rawBody = readCachedRequestBody();
+        if (rawBody != null && !rawBody.isBlank()) {
+            try {
+                return this.objectMapper.readTree(rawBody);
+            } catch (Exception ex) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to parse patch payload", ex);
+            }
+        }
+        if (incomingPayload == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patch payload is required");
+        }
+        try {
+            return this.objectMapper.valueToTree(incomingPayload);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid patch payload", ex);
+        }
+    }
+
+    private <T> JsonNode toJsonObject(T value) {
+        if (value == null) {
+            return this.objectMapper.createObjectNode();
+        }
+        JsonNode node = this.objectMapper.valueToTree(value);
+        if (node == null || node.isMissingNode()) {
+            return this.objectMapper.createObjectNode();
+        }
+        return node;
+    }
+
+    private PatchFormat resolvePatchFormat(String contentType, JsonNode patchNode) {
+        final String normalized = contentType != null ? contentType.toLowerCase() : "";
+        if (normalized.contains("json-patch-query")) {
+            return PatchFormat.JSON_PATCH_QUERY;
+        }
+        if (normalized.contains("json-patch")) {
+            return PatchFormat.JSON_PATCH;
+        }
+        if (normalized.contains("merge-patch")) {
+            return PatchFormat.MERGE_PATCH;
+        }
+        if (patchNode != null && patchNode.isArray()) {
+            return PatchFormat.JSON_PATCH;
+        }
+        return PatchFormat.MERGE_PATCH;
+    }
+
+    private JsonNode applyPatchedNode(JsonNode baseNode, JsonNode patchNode, PatchFormat format) {
+        if (format == PatchFormat.JSON_PATCH_QUERY) {
+            if (!(patchNode instanceof ArrayNode patchArray)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "JSON Patch payload must be an array");
+            }
+            return applyJsonPatchQuery(baseNode, patchArray);
+        }
+        if (format == PatchFormat.JSON_PATCH) {
+            if (!(patchNode instanceof ArrayNode patchArray)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "JSON Patch payload must be an array");
+            }
+            return applyStandardJsonPatch(baseNode, patchArray);
+        }
+        return applyMergePatch(baseNode, patchNode);
+    }
+
+    private JsonNode applyMergePatch(JsonNode baseNode, JsonNode patchNode) {
+        try {
+            JsonMergePatch mergePatch = JsonMergePatch.fromJson(patchNode != null ? patchNode : NullNode.instance);
+            JsonNode target = baseNode != null ? baseNode : this.objectMapper.createObjectNode();
+            return mergePatch.apply(target);
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to apply merge patch", ex);
+        }
+    }
+
+    private JsonNode applyStandardJsonPatch(JsonNode baseNode, ArrayNode patchNode) {
+        try {
+            JsonPatch jsonPatch = JsonPatch.fromJson(patchNode);
+            JsonNode target = baseNode != null ? baseNode : this.objectMapper.createObjectNode();
+            return jsonPatch.apply(target);
+        } catch (JsonPatchException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to apply JSON Patch", ex);
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSON Patch payload", ex);
+        }
+    }
+
+    private JsonNode applyJsonPatchQuery(JsonNode baseNode, ArrayNode patchOperations) {
+        ArrayNode translated = translateJsonPatchQuery(baseNode, patchOperations);
+        return applyStandardJsonPatch(baseNode, translated);
+    }
+
+    private ArrayNode translateJsonPatchQuery(JsonNode baseNode, ArrayNode patchOperations) {
+        ArrayNode translated = this.objectMapper.createArrayNode();
+        for (JsonNode operation : patchOperations) {
+            if (!(operation instanceof ObjectNode opObject)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "JSON Patch operation must be an object");
+            }
+            if (!opObject.hasNonNull("op") || !opObject.has("path")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "JSON Patch operation requires 'op' and 'path'");
+            }
+            ObjectNode copy = opObject.deepCopy();
+            copy.put("path", resolvePatchPath(baseNode, opObject.get("path")));
+            if (opObject.has("from")) {
+                copy.put("from", resolvePatchPath(baseNode, opObject.get("from")));
+            }
+            translated.add(copy);
+        }
+        return translated;
+    }
+
+    private String resolvePatchPath(JsonNode baseNode, JsonNode rawPath) {
+        if (rawPath == null || rawPath.isNull()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patch path is required");
+        }
+        final String path = rawPath.asText();
+        if (path == null || path.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patch path is required");
+        }
+        final boolean appendToArray = path.endsWith("/-");
+        final String effectivePath = appendToArray ? path.substring(0, path.length() - 2) : path;
+        String resolvedPath;
+        if (effectivePath.startsWith("/")) {
+            resolvedPath = effectivePath;
+        } else {
+            List<String> resolved = evaluateJsonPath(effectivePath, baseNode);
+            if (resolved.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "JSONPath did not match any nodes");
+            }
+            if (resolved.size() > 1) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "JSONPath matched multiple targets");
+            }
+            resolvedPath = resolved.get(0);
+        }
+        return appendToArray ? resolvedPath + "/-" : resolvedPath;
+    }
+
+    private List<String> evaluateJsonPath(String expression, JsonNode baseNode) {
+        try {
+            String normalizedExpression = normalizeJsonPathExpression(expression);
+            List<String> paths = JsonPath
+                .using(this.jsonPathConfiguration)
+                .parse(baseNode)
+                .read(normalizedExpression, new TypeRef<List<String>>() {});
+            if (paths == null || paths.isEmpty()) {
+                return List.of();
+            }
+            List<String> pointers = new ArrayList<>();
+            for (String path : paths) {
+                String pointer = convertJsonPathToPointer(path);
+                if (pointer != null && !pointer.isBlank()) {
+                    pointers.add(pointer);
+                }
+            }
+            return pointers;
+        } catch (PathNotFoundException ex) {
+            return List.of();
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSONPath expression", ex);
+        }
+    }
+
+    private String normalizeJsonPathExpression(String expression) {
+        if (expression == null) {
+            return "";
+        }
+        Matcher matcher = Pattern.compile("(==\\s*)([^'\"\\s\\]]+)").matcher(expression);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            String value = matcher.group(2);
+            matcher.appendReplacement(buffer, matcher.group(1) + "'" + value + "'");
+        }
+        matcher.appendTail(buffer);
+        return buffer.toString();
+    }
+
+    private String convertJsonPathToPointer(String jsonPath) {
+        if (jsonPath == null || jsonPath.isBlank()) {
+            return null;
+        }
+        final String trimmed = jsonPath.trim();
+        if ("$".equals(trimmed)) {
+            return "/";
+        }
+        final String normalized = trimmed.startsWith("$") ? trimmed.substring(1) : trimmed;
+        List<String> segments = new ArrayList<>();
+        int index = 0;
+        while (index < normalized.length()) {
+            char current = normalized.charAt(index);
+            if (current == '.') {
+                index++;
+                int start = index;
+                while (index < normalized.length() && normalized.charAt(index) != '.' && normalized.charAt(index) != '[') {
+                    index++;
+                }
+                if (index > start) {
+                    segments.add(normalized.substring(start, index));
+                }
+            } else if (current == '[') {
+                index++;
+                if (index < normalized.length() && (normalized.charAt(index) == '\'' || normalized.charAt(index) == '\"')) {
+                    char quote = normalized.charAt(index++);
+                    int start = index;
+                    while (index < normalized.length() && normalized.charAt(index) != quote) {
+                        index++;
+                    }
+                    if (index > start) {
+                        segments.add(normalized.substring(start, index));
+                    }
+                    while (index < normalized.length() && normalized.charAt(index) != ']') {
+                        index++;
+                    }
+                    index++;
+                } else {
+                    int start = index;
+                    while (index < normalized.length() && normalized.charAt(index) != ']') {
+                        index++;
+                    }
+                    if (index > start) {
+                        segments.add(normalized.substring(start, index));
+                    }
+                    if (index < normalized.length()) {
+                        index++;
+                    }
+                }
+            } else {
+                index++;
+            }
+        }
+        if (segments.isEmpty()) {
+            return null;
+        }
+        StringBuilder pointer = new StringBuilder();
+        segments.forEach(segment -> pointer.append('/').append(escapePointerSegment(segment)));
+        return pointer.length() == 0 ? "/" : pointer.toString();
+    }
+
+    private String escapePointerSegment(String segment) {
+        return segment.replace("~", "~0").replace("/", "~1");
+    }
+
+    private String readCachedRequestBody() {
+        return resolveCurrentHttpServletRequest().map(this::extractCachedBody).orElse("");
+    }
+
+    private Optional<HttpServletRequest> resolveCurrentHttpServletRequest() {
+        Optional<HttpServletRequest> fromDelegate = getRequest()
+            .map(request -> request.getNativeRequest(HttpServletRequest.class))
+            .filter(HttpServletRequest.class::isInstance)
+            .map(HttpServletRequest.class::cast);
+        if (fromDelegate.isPresent()) {
+            return fromDelegate;
+        }
+        return Optional.ofNullable(RequestContextHolder.getRequestAttributes())
+            .filter(ServletRequestAttributes.class::isInstance)
+            .map(ServletRequestAttributes.class::cast)
+            .map(ServletRequestAttributes::getRequest);
+    }
+
+    private String extractCachedBody(HttpServletRequest request) {
+        HttpServletRequest current = request;
+        while (current instanceof HttpServletRequestWrapper wrapper && !(current instanceof ContentCachingRequestWrapper)) {
+            current = (HttpServletRequest) wrapper.getRequest();
+        }
+        if (current instanceof ContentCachingRequestWrapper cachingRequest) {
+            byte[] body = cachingRequest.getContentAsByteArray();
+            if (body != null && body.length > 0) {
+                return new String(body, StandardCharsets.UTF_8);
+            }
+        }
+        return "";
+    }
+
+    private <T> T convertValue(Object source, Class<T> targetType) {
+        try {
+            return this.objectMapper.convertValue(source, targetType);
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload", ex);
+        }
+    }
+
+    private <T> T convertAndValidate(JsonNode node, Class<T> payloadType) {
+        try {
+            T value = this.objectMapper.treeToValue(node, payloadType);
+            validatePayload(value);
+            return value;
+        } catch (ResponseStatusException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map patched payload", ex);
+        }
+    }
+
+    private <T> void validatePayload(T payload) {
+        if (payload == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Patched payload is empty");
+        }
+        if (this.validator == null) {
+            return;
+        }
+        Set<ConstraintViolation<T>> violations = this.validator.validate(payload);
+        if (!violations.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, buildValidationMessage(violations));
+        }
+    }
+
+    private <T> String buildValidationMessage(Set<ConstraintViolation<T>> violations) {
+        StringBuilder builder = new StringBuilder("Validation failed: ");
+        boolean first = true;
+        for (ConstraintViolation<T> violation : violations) {
+            if (!first) {
+                builder.append("; ");
+            }
+            builder.append(violation.getPropertyPath()).append(' ').append(violation.getMessage());
+            first = false;
+        }
+        return builder.toString();
+    }
+
+    private void enforceImmutableIdentifiers(JsonNode original, JsonNode patched) {
+        if (original == null || patched == null) {
+            return;
+        }
+        enforceImmutableRecursive(original, patched, true);
+    }
+
+    private void enforceImmutableRecursive(JsonNode original, JsonNode patched, boolean isRoot) {
+        if (original.isObject() && patched.isObject()) {
+            JsonNode originalTmfId = original.get("tmfId");
+            JsonNode patchedTmfId = patched.get("tmfId");
+            if (!isNullOrMissing(originalTmfId) && !isNullOrMissing(patchedTmfId) && !originalTmfId.equals(patchedTmfId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field 'tmfId' is immutable");
+            }
+            if (isRoot || isNullOrMissing(originalTmfId)) {
+                JsonNode originalId = original.get("id");
+                JsonNode patchedId = patched.get("id");
+                if (!isNullOrMissing(originalId) && !isNullOrMissing(patchedId) && !originalId.equals(patchedId)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field 'id' is immutable");
+                }
+            }
+            original.fieldNames().forEachRemaining(field -> {
+                if ("id".equals(field) || "tmfId".equals(field)) {
+                    return;
+                }
+                JsonNode originalChild = original.get(field);
+                JsonNode patchedChild = patched.get(field);
+                if (originalChild != null && patchedChild != null) {
+                    enforceImmutableRecursive(originalChild, patchedChild, false);
+                }
+            });
+        } else if (original.isArray() && patched.isArray()) {
+            Map<String, JsonNode> patchedByTmfId = new LinkedHashMap<>();
+            Map<String, JsonNode> patchedById = new LinkedHashMap<>();
+            patched.forEach(node -> {
+                JsonNode tmfIdNode = node.get("tmfId");
+                if (!isNullOrMissing(tmfIdNode)) {
+                    patchedByTmfId.put(tmfIdNode.asText(), node);
+                }
+                JsonNode idNode = node.get("id");
+                if (!isNullOrMissing(idNode)) {
+                    patchedById.put(idNode.asText(), node);
+                }
+            });
+            original.forEach(node -> {
+                JsonNode match = null;
+                JsonNode tmfIdNode = node.get("tmfId");
+                if (!isNullOrMissing(tmfIdNode)) {
+                    match = patchedByTmfId.get(tmfIdNode.asText());
+                }
+                if (match == null) {
+                    JsonNode idNode = node.get("id");
+                    if (!isNullOrMissing(idNode)) {
+                        match = patchedById.get(idNode.asText());
+                    }
+                }
+                if (match != null) {
+                    enforceImmutableRecursive(node, match, false);
+                }
+            });
+        }
+    }
+
+    private boolean isNullOrMissing(JsonNode node) {
+        return node == null || node.isMissingNode() || node.isNull();
+    }
+
+    private <T> T filterFields(T value, Object fields, Class<T> targetType) {
+        if (value == null || fields == null || targetType == null) {
+            return value;
+        }
+        final String fieldString = fields.toString();
+        if (fieldString == null || fieldString.isBlank()) {
+            return value;
+        }
+        Set<String> requested = new LinkedHashSet<>();
+        for (String token : fieldString.split(",")) {
+            if (token != null && !token.isBlank()) {
+                requested.add(token.trim());
+            }
+        }
+        if (requested.isEmpty()) {
+            return value;
+        }
+        if (!requested.contains("id")) {
+            requested.add("id");
+        }
+        try {
+            JsonNode node = this.objectMapper.valueToTree(value);
+            if (node instanceof ObjectNode objectNode) {
+                ObjectNode pruned = objectNode.deepCopy();
+                pruned.retain(requested);
+                return this.objectMapper.convertValue(pruned, targetType);
+            }
+            return value;
+        } catch (Exception ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to apply field filter", ex);
+        }
+    }
+
     private URI buildLocation(Object identifier) {
         Object idValue = identifier != null ? identifier : "";
         try {
@@ -303,5 +861,11 @@ _%>
             }
             return URI.create(String.format("/%s/%s", "<%= resolvedResourceSlug %>", idValue));
         }
+    }
+
+    private enum PatchFormat {
+        MERGE_PATCH,
+        JSON_PATCH,
+        JSON_PATCH_QUERY
     }
 }
