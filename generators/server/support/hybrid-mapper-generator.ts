@@ -1007,114 +1007,6 @@ function collectSchemaProperties(
   return properties;
 }
 
-function schemaHasIdProperty(
-  schemaName: string | undefined,
-  schemas: Record<string, any>,
-  cache: Map<string, boolean>,
-  visiting = new Set<string>(),
-): boolean {
-  if (!schemaName) {
-    return false;
-  }
-  if (cache.has(schemaName)) {
-    return cache.get(schemaName)!;
-  }
-  if (visiting.has(schemaName)) {
-    return false;
-  }
-  const schema = schemas[schemaName];
-  if (!schema) {
-    return false;
-  }
-  visiting.add(schemaName);
-  let hasId = !!schema.properties?.id;
-  if (!hasId && Array.isArray(schema.allOf)) {
-    for (const fragment of schema.allOf) {
-      if (fragment?.$ref) {
-        const refName = extractSchemaRef(fragment);
-        if (refName && schemaHasIdProperty(refName, schemas, cache, visiting)) {
-          hasId = true;
-          break;
-        }
-      } else if (fragment?.properties?.id) {
-        hasId = true;
-        break;
-      }
-    }
-  }
-  visiting.delete(schemaName);
-  cache.set(schemaName, hasId);
-  return hasId;
-}
-
-function schemaHasTmfIdProperty(
-  schemaName: string | undefined,
-  schemas: Record<string, any>,
-  cache: Map<string, boolean>,
-  visiting = new Set<string>(),
-): boolean {
-  if (!schemaName) {
-    return false;
-  }
-  if (cache.has(schemaName)) {
-    return cache.get(schemaName)!;
-  }
-  if (visiting.has(schemaName)) {
-    return false;
-  }
-  const schema = schemas[schemaName];
-  if (!schema) {
-    return false;
-  }
-  visiting.add(schemaName);
-  let hasTmfId = !!schema.properties?.tmfId;
-  if (!hasTmfId && Array.isArray(schema.allOf)) {
-    for (const fragment of schema.allOf) {
-      if (fragment?.$ref) {
-        const refName = extractSchemaRef(fragment);
-        if (refName && schemaHasTmfIdProperty(refName, schemas, cache, visiting)) {
-          hasTmfId = true;
-          break;
-        }
-      } else if (fragment?.properties?.tmfId) {
-        hasTmfId = true;
-        break;
-      }
-    }
-  }
-  if (!hasTmfId && Array.isArray(schema.oneOf)) {
-    for (const fragment of schema.oneOf) {
-      if (fragment?.$ref) {
-        const refName = extractSchemaRef(fragment);
-        if (refName && schemaHasTmfIdProperty(refName, schemas, cache, visiting)) {
-          hasTmfId = true;
-          break;
-        }
-      } else if (fragment?.properties?.tmfId) {
-        hasTmfId = true;
-        break;
-      }
-    }
-  }
-  if (!hasTmfId && Array.isArray(schema.anyOf)) {
-    for (const fragment of schema.anyOf) {
-      if (fragment?.$ref) {
-        const refName = extractSchemaRef(fragment);
-        if (refName && schemaHasTmfIdProperty(refName, schemas, cache, visiting)) {
-          hasTmfId = true;
-          break;
-        }
-      } else if (fragment?.properties?.tmfId) {
-        hasTmfId = true;
-        break;
-      }
-    }
-  }
-  visiting.delete(schemaName);
-  cache.set(schemaName, hasTmfId);
-  return hasTmfId;
-}
-
 function isPrimitiveSchema(schema: any): boolean {
   if (!schema) {
     return false;
@@ -1131,8 +1023,6 @@ function collectCollectionFieldContexts(
   polymorphicHelperTypes: Set<string>,
   relationshipTargets?: Map<string, Map<string, string>>,
   targetEntityName?: string,
-  schemaHasIdCache = new Map<string, boolean>(),
-  schemaHasTmfIdCache = new Map<string, boolean>(),
 ): CollectionFieldContext[] {
   if (!schemaName) {
     return [];
@@ -1200,7 +1090,9 @@ function collectCollectionFieldContexts(
     const mapperField = `${lowerFirst(collectionBaseEntity)}Mapper`;
     const normalizedElementName = normalizeTypeName(elementSchemaName) ?? elementSchemaName;
     const isElementBase = normalizedElementName === normalizedCollectionBase;
-    const hasTmfId = schemaHasTmfIdProperty(elementSchemaName, schemas, schemaHasTmfIdCache);
+    const elementSchema = schemas[elementSchemaName] ?? resolveSchema(elementSchemaName, schemas);
+    const elementProperties = collectSchemaProperties(elementSchemaName, schemas, schemaPropertiesCache) ?? elementSchema?.properties ?? {};
+    const hasTmfId = Boolean(elementProperties?.tmfId);
     const mapMethod = isPolymorphic
       ? (isElementBase ? `to${collectionBaseEntity}` : `to${elementSchemaName}`)
       : `to${collectionBaseEntity}Entity`;
@@ -1208,7 +1100,7 @@ function collectCollectionFieldContexts(
       ? `update${collectionBaseEntity}From${elementDtoSimple}`
       : `update${collectionBaseEntity}EntityFrom${elementDtoSimple}`;
     const referencedEntity = normalizedCollectionBase;
-    const hasId = schemaHasIdProperty(elementSchemaName, schemas, schemaHasIdCache);
+    const hasId = Boolean(elementProperties?.id);
     const keyExpressions: string[] = [];
     const registerKeyExpression = (expression: string | undefined) => {
       if (!expression) {
@@ -1223,22 +1115,6 @@ function collectCollectionFieldContexts(
     }
     if (hasId) {
       registerKeyExpression('{var}.getId()');
-    }
-    const elementProperties = collectSchemaProperties(elementSchemaName, schemas, schemaPropertiesCache);
-    if (elementProperties) {
-      for (const [propName, propSchema] of Object.entries<any>(elementProperties)) {
-        const refName = extractSchemaRef(propSchema);
-        if (!refName) {
-          continue;
-        }
-        const propGetter = upperFirstCamelCase(toJHipsterPropertyName(propName));
-        if (schemaHasTmfIdProperty(refName, schemas, schemaHasTmfIdCache)) {
-          registerKeyExpression(`{var}.get${propGetter}() != null ? {var}.get${propGetter}().getTmfId() : null`);
-        }
-        if (schemaHasIdProperty(refName, schemas, schemaHasIdCache)) {
-          registerKeyExpression(`{var}.get${propGetter}() != null ? {var}.get${propGetter}().getId() : null`);
-        }
-      }
     }
     const singularTarget = singularize(targetField);
     const adderName = upperFirstCamelCase(singularTarget);
@@ -2775,8 +2651,6 @@ export function generateHybridMappers(
   const helperMapperByBaseType = new Map(
     helperMappers.map(helper => [normalizeTypeName(helper.baseType) ?? helper.baseType, `${helper.packageName}.${helper.mapperName}`]),
   );
-  const schemaHasIdCache = new Map<string, boolean>();
-  const schemaHasTmfIdCache = new Map<string, boolean>();
   for (const mapper of entityMappersMap.values()) {
     const referenced = new Set<string>(mapper.referencedEntities ?? []);
     for (const mapping of mapper.requestMappings) {
@@ -2788,8 +2662,6 @@ export function generateHybridMappers(
         polymorphicHelperTypes,
         relationshipTargets,
         mapping.targetSchemaName ?? mapper.entityName,
-        schemaHasIdCache,
-        schemaHasTmfIdCache,
       )
         .filter(field => {
           const normalized = normalizeTypeName(field.baseEntity) ?? field.baseEntity;

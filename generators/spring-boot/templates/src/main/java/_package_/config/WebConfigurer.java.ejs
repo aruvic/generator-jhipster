@@ -34,9 +34,13 @@ import tech.jhipster.web.filter.<% if (reactive) { %>reactive.<% } %>CachingHttp
 <%_ } _%>
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JavaType;
 <%_ if (!reactive) { _%>
 import org.springframework.boot.web.server.*;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.boot.web.servlet.server.ConfigurableServletWebServerFactory;
 <%_ } _%>
 <%_ if (reactive && !skipClient) { _%>
@@ -58,11 +62,23 @@ import org.springframework.data.web.ReactiveSortHandlerMethodArgumentResolver;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 <%_ } _%>
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.util.CollectionUtils;
 import org.springframework.web.cors.CorsConfiguration;
 <%_ if (!reactive) { _%>
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.http.MediaType;
+import org.springframework.http.HttpInputMessage;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import java.util.stream.Stream;
+import java.util.stream.IntStream;
 <%_ } _%>
 <%_ if (reactive) { _%>
 import org.springframework.web.cors.reactive.CorsConfigurationSource;;
@@ -76,6 +92,8 @@ import tech.jhipster.web.rest.errors.ReactiveWebExceptionHandler;
 <%_ if (!reactive) { _%>
 
 import jakarta.servlet.*;
+import java.io.IOException;
+import java.util.List;
     <%_ if (!skipClient) { _%>
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -83,6 +101,8 @@ import java.nio.file.Path;
 
 import static java.net.URLDecoder.decode;
     <%_ } _%>
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 <%_ } _%>
 <%_ if (reactive && !skipClient) { _%>
 
@@ -93,21 +113,28 @@ import java.util.concurrent.TimeUnit;
  * Configuration of web application with Servlet 3.0 APIs.
  */
 @Configuration
-public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitializer<% if (!skipClient) { %>, WebServerFactoryCustomizer<WebServerFactory><% } %><% } %><% if (reactive) { %>WebFluxConfigurer<% } %> {
+public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitializer<% if (!skipClient) { %>, WebServerFactoryCustomizer<WebServerFactory><% } %>, WebMvcConfigurer<% } %><% if (reactive) { %>WebFluxConfigurer<% } %> {
 
     private static final Logger LOG = LoggerFactory.getLogger(WebConfigurer.class);
-
 <%_ if (!reactive) { _%>
+    private static final List<MediaType> JSON_PATCH_MEDIA_TYPES = List.of(
+        MediaType.valueOf("application/json-patch+json"),
+        MediaType.valueOf("application/json-patch-query+json")
+    );
+    private static final MediaType MERGE_PATCH_MEDIA_TYPE = MediaType.valueOf("application/merge-patch+json");
+
     private final Environment env;
 
 <%_ } _%>
     private final JHipsterProperties jHipsterProperties;
+    private final ObjectMapper objectMapper;
 
-    public WebConfigurer(<% if (!reactive || devDatabaseTypeH2Any) { %>Environment env, <% } %>JHipsterProperties jHipsterProperties) {
+    public WebConfigurer(<% if (!reactive || devDatabaseTypeH2Any) { %>Environment env, <% } %>JHipsterProperties jHipsterProperties, ObjectMapper objectMapper) {
 <%_ if (!reactive) { _%>
         this.env = env;
 <%_ } _%>
         this.jHipsterProperties = jHipsterProperties;
+        this.objectMapper = objectMapper;
 <%_ if (devDatabaseTypeH2Any && reactive) { _%>
         if (h2ConsoleIsEnabled(env)) {
             try {
@@ -191,6 +218,152 @@ public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitia
         }
         return <% if (reactive) { %>source<% } else { %>new CorsFilter(source)<% } %>;
     }
+<%_ if (!reactive) { _%>
+
+    @Bean
+    public FilterRegistrationBean<OncePerRequestFilter> requestBodyCachingFilter() {
+        FilterRegistrationBean<OncePerRequestFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new OncePerRequestFilter() {
+            @Override
+            protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+                throws ServletException, IOException {
+                ContentCachingRequestWrapper wrapped =
+                    request instanceof ContentCachingRequestWrapper ? (ContentCachingRequestWrapper) request : new ContentCachingRequestWrapper(request);
+                filterChain.doFilter(wrapped, response);
+            }
+        });
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
+        return registration;
+    }
+
+    @Override
+    public void extendMessageConverters(List<HttpMessageConverter<?>> converters) {
+        LOG.debug("Ensuring JsonPatchMessageConverter is first in message converters");
+        converters.removeIf(converter -> converter instanceof JsonPatchMessageConverter);
+        converters.add(0, jsonPatchMessageConverter());
+        converters
+            .stream()
+            .filter(converter -> converter instanceof MappingJackson2HttpMessageConverter && !(converter instanceof JsonPatchMessageConverter))
+            .map(MappingJackson2HttpMessageConverter.class::cast)
+            .forEach(converter -> {
+                LOG.debug("Filtering supported media types for converter {}: {}", converter.getClass().getSimpleName(), converter.getSupportedMediaTypes());
+                List<MediaType> filtered = converter
+                    .getSupportedMediaTypes()
+                    .stream()
+                    .filter(mediaType -> !isJsonPatchMediaType(mediaType))
+                    .toList();
+                if (filtered.stream().noneMatch(mediaType -> mediaType.isCompatibleWith(MERGE_PATCH_MEDIA_TYPE))) {
+                    filtered = Stream.concat(filtered.stream(), Stream.of(MERGE_PATCH_MEDIA_TYPE)).toList();
+                }
+                LOG.debug("Updated supported media types for converter {}: {}", converter.getClass().getSimpleName(), filtered);
+                converter.setSupportedMediaTypes(filtered);
+            });
+        IntStream.range(0, converters.size())
+            .forEach(index -> LOG.debug("#{} converter={} mediaTypes={}", index, converters.get(index).getClass().getName(), converters.get(index).getSupportedMediaTypes()));
+    }
+
+    @Bean
+    @Order(Ordered.HIGHEST_PRECEDENCE)
+    public HttpMessageConverter<?> jsonPatchMessageConverter() {
+        return new JsonPatchMessageConverter(objectMapper);
+    }
+
+    private boolean isJsonPatchMediaType(MediaType mediaType) {
+        if (mediaType == null) {
+            return false;
+        }
+        return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(mediaType::isCompatibleWith);
+    }
+
+    private static final class JsonPatchMessageConverter extends MappingJackson2HttpMessageConverter {
+
+        JsonPatchMessageConverter(ObjectMapper objectMapper) {
+            super(objectMapper);
+            setSupportedMediaTypes(JSON_PATCH_MEDIA_TYPES);
+        }
+
+        @Override
+        public boolean canRead(Class<?> clazz, MediaType mediaType) {
+            boolean result = isJsonPatch(mediaType) || super.canRead(clazz, mediaType);
+            LOG.debug("JsonPatchMessageConverter canRead clazz={} mediaType={} -> {}", clazz.getSimpleName(), mediaType, result);
+            return result;
+        }
+
+        @Override
+        public boolean canRead(java.lang.reflect.Type type, Class<?> contextClass, MediaType mediaType) {
+            boolean result = isJsonPatch(mediaType) || super.canRead(type, contextClass, mediaType);
+            LOG.debug(
+                "JsonPatchMessageConverter canRead type={} contextClass={} mediaType={} -> {}",
+                type.getTypeName(),
+                contextClass != null ? contextClass.getSimpleName() : null,
+                mediaType,
+                result
+            );
+            return result;
+        }
+
+        @Override
+        protected Object readInternal(Class<?> clazz, HttpInputMessage inputMessage) throws IOException {
+            return readPayload(clazz, null, inputMessage);
+        }
+
+        @Override
+        public Object read(java.lang.reflect.Type type, Class<?> contextClass, HttpInputMessage inputMessage)
+            throws IOException, HttpMessageNotReadableException {
+            return readPayload(type, contextClass, inputMessage);
+        }
+
+        private Object readPayload(java.lang.reflect.Type type, Class<?> contextClass, HttpInputMessage inputMessage) throws IOException {
+            MediaType contentType = inputMessage.getHeaders().getContentType();
+            JsonNode parsed = this.getObjectMapper().readTree(inputMessage.getBody());
+            boolean parsedIsArray = parsed != null && parsed.isArray();
+            LOG.debug(
+                "JsonPatchMessageConverter read type={} contextClass={} contentType={} parsedIsArray={}",
+                type != null ? type.getTypeName() : null,
+                contextClass != null ? contextClass.getSimpleName() : null,
+                contentType,
+                parsedIsArray
+            );
+            final boolean treatAsJsonPatch = isJsonPatch(contentType) || parsedIsArray;
+            if (treatAsJsonPatch) {
+                LOG.debug("JsonPatchMessageConverter returning empty instance for {}", type != null ? type.getTypeName() : null);
+                return instantiateEmpty(type);
+            }
+            if (parsed == null || parsed.isMissingNode()) {
+                return instantiateEmpty(type);
+            }
+            JavaType javaType = this.getObjectMapper().getTypeFactory().constructType(type);
+            return this.getObjectMapper().treeToValue(parsed, javaType);
+        }
+
+        private boolean isJsonPatch(MediaType mediaType) {
+            if (mediaType == null) {
+                return false;
+            }
+            return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(mediaType::isCompatibleWith);
+        }
+
+        private Object instantiateEmpty(Class<?> clazz) {
+            try {
+                return clazz.getDeclaredConstructor().newInstance();
+            } catch (Exception ex) {
+                return this.getObjectMapper().convertValue(this.getObjectMapper().createObjectNode(), clazz);
+            }
+        }
+
+        private Object instantiateEmpty(java.lang.reflect.Type type) {
+            if (type instanceof Class<?> clazz) {
+                return instantiateEmpty(clazz);
+            }
+            try {
+                JavaType javaType = this.getObjectMapper().getTypeFactory().constructType(type);
+                return this.getObjectMapper().convertValue(this.getObjectMapper().createObjectNode(), javaType);
+            } catch (IllegalArgumentException ex) {
+                return this.getObjectMapper().createObjectNode();
+            }
+        }
+    }
+<%_ } _%>
 <%_ if (reactive) { _%>
 
   <%_ if (!databaseTypeNo) { _%>

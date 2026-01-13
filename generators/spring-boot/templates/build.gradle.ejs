@@ -170,6 +170,11 @@ configurations {
 dependencies {
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-hppc"
     implementation "com.fasterxml.jackson.datatype:jackson-datatype-jsr310"
+    implementation("com.github.java-json-tools:json-patch:1.13") {
+        exclude group: "com.google.code.findbugs", module: "jsr305"
+    }
+    implementation "com.jayway.jsonpath:json-path:2.9.0"
+    implementation "com.google.code.findbugs:jsr305:3.0.2"
     testImplementation("com.tngtech.archunit:archunit-junit5-api:${archunitJunit5Version}") {
         exclude group: "org.slf4j", module: "slf4j-api"
     }

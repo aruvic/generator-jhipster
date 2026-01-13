@@ -111,6 +111,27 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
         <dependency>
+            <groupId>com.github.java-json-tools</groupId>
+            <artifactId>json-patch</artifactId>
+            <version>1.13</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.google.code.findbugs</groupId>
+                    <artifactId>jsr305</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+            <version>2.9.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.findbugs</groupId>
+            <artifactId>jsr305</artifactId>
+            <version>3.0.2</version>
+        </dependency>
+        <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5-api</artifactId>
             <version>${archunit-junit5.version}</version>
@@ -363,8 +384,9 @@
                     <configOptions>
                         <delegatePattern>true</delegatePattern>
                         <title><%= dasherizedBaseName %></title>
-                        <useTags>true</useTags>
                         <useSpringBoot3>true</useSpringBoot3>
+                        <useBeanValidation>false</useBeanValidation>
+                        <performBeanValidation>false</performBeanValidation>
                     </configOptions>
                     <typeMappings>
                         <typeMapping>date=LocalDate</typeMapping>

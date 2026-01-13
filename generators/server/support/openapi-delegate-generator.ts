@@ -57,12 +57,30 @@ const CRUD_SUFFIX_MAPPINGS: Record<string, CrudPrefix> = {
 };
 
 const BASE_TEMPLATE_IMPORTS = new Set([
+  'com.fasterxml.jackson.databind.JsonNode',
+  'com.fasterxml.jackson.databind.ObjectMapper',
+  'com.fasterxml.jackson.databind.node.ArrayNode',
+  'com.fasterxml.jackson.databind.node.NullNode',
+  'com.fasterxml.jackson.databind.node.ObjectNode',
   'java.net.URI',
+  'java.nio.charset.StandardCharsets',
+  'java.util.HashSet',
   'java.util.List',
   'java.util.Optional',
+  'java.util.Set',
+  'org.slf4j.Logger',
+  'org.slf4j.LoggerFactory',
+  'org.springframework.data.domain.Page',
+  'org.springframework.data.domain.PageRequest',
+  'org.springframework.data.domain.Pageable',
   'org.springframework.http.HttpStatus',
   'org.springframework.http.ResponseEntity',
   'org.springframework.stereotype.Service',
+  'org.springframework.transaction.annotation.Transactional',
+  'org.springframework.web.server.ResponseStatusException',
+  'org.springframework.web.servlet.support.ServletUriComponentsBuilder',
+  'org.springframework.web.util.ContentCachingRequestWrapper',
+  'jakarta.servlet.http.HttpServletRequest',
 ]);
 
 const RESOURCE_SUFFIXES_TO_STRIP = new Set(['dto', 'request', 'response', 'payload', 'command', 'input', 'output']);
@@ -1066,19 +1084,17 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           }
         }
         opContext.willPersist = true;
-        if (prefix === 'create') {
-          const tmfIdField = persistenceEntity?.definition?.fields?.find(
-            (field: any) => field?.fieldName?.toLowerCase() === 'tmfid',
-          );
-          if (
-            tmfIdField &&
-            typeof tmfIdField.fieldType === 'string' &&
-            tmfIdField.fieldType.toLowerCase() === 'uuid' &&
-            Array.isArray(tmfIdField.fieldValidateRules) &&
-            tmfIdField.fieldValidateRules.includes('required')
-          ) {
-            opContext.tmfIdAccessor = pascalize(tmfIdField.fieldName ?? 'tmfId');
-          }
+        const tmfIdField = persistenceEntity?.definition?.fields?.find(
+          (field: any) => field?.fieldName?.toLowerCase() === 'tmfid',
+        );
+        if (
+          tmfIdField &&
+          typeof tmfIdField.fieldType === 'string' &&
+          tmfIdField.fieldType.toLowerCase() === 'uuid' &&
+          Array.isArray(tmfIdField.fieldValidateRules) &&
+          tmfIdField.fieldValidateRules.includes('required')
+        ) {
+          opContext.tmfIdAccessor = pascalize(tmfIdField.fieldName ?? 'tmfId');
         }
       } else {
         opContext.willPersist = false;
@@ -1170,6 +1186,34 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     const idParam = operation.parameters?.find((param: OpenAPIParameter) => param.in === 'path');
     if (idParam?.name) {
       context.idParamName = idParam.name;
+    }
+  }
+
+  for (const context of contexts) {
+    const key = dependencyKey('objectmapper');
+    if (!context.injections.some(dep => dep.key === key)) {
+      const dependency: DependencyDescriptor = {
+        key,
+        fieldName: 'objectMapper',
+        simpleName: 'ObjectMapper',
+        import: 'com.fasterxml.jackson.databind.ObjectMapper',
+        order: context.injections.length,
+      };
+      context.injections.push(dependency);
+    }
+  }
+
+  for (const context of contexts) {
+    const key = dependencyKey('validator');
+    if (!context.injections.some(dep => dep.key === key)) {
+      const dependency: DependencyDescriptor = {
+        key,
+        fieldName: 'validator',
+        simpleName: 'Validator',
+        import: 'jakarta.validation.Validator',
+        order: context.injections.length,
+      };
+      context.injections.push(dependency);
     }
   }
 

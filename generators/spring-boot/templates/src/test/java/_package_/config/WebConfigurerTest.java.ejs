@@ -18,12 +18,17 @@
 -%>
 package <%= packageName %>.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import tech.jhipster.config.JHipsterConstants;
 import tech.jhipster.config.JHipsterProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 <%_ if (!skipClient) { _%>
 import org.springframework.boot.web.embedded.undertow.UndertowServletWebServerFactory;
+<%_ } _%>
+<%_ if (!reactive) { _%>
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 <%_ } _%>
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.env.MockEnvironment;
@@ -59,6 +64,7 @@ class WebConfigurerTest {
     private MockEnvironment env;
 
     private JHipsterProperties props;
+    private ObjectMapper objectMapper;
 
     @BeforeEach
     void setup() {
@@ -68,8 +74,9 @@ class WebConfigurerTest {
 
         env = new MockEnvironment();
         props = new JHipsterProperties();
+        objectMapper = new ObjectMapper();
 
-        webConfigurer = new WebConfigurer(env, props);
+        webConfigurer = new WebConfigurer(env, props, objectMapper);
     }
 
 <%_ if (!skipClient) { _%>
@@ -155,4 +162,17 @@ class WebConfigurerTest {
             .andExpect(status().isOk())
             .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
+
+<%_ if (!reactive) { _%>
+    @Test
+    void shouldRegisterJsonPatchConverterFirst() {
+        List<HttpMessageConverter<?>> converters = new ArrayList<>();
+        converters.add(new MappingJackson2HttpMessageConverter());
+
+        webConfigurer.extendMessageConverters(converters);
+
+        assertThat(converters).isNotEmpty();
+        assertThat(converters.get(0).getClass().getSimpleName()).isEqualTo("JsonPatchMessageConverter");
+    }
+<%_ } _%>
 }

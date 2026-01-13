@@ -31,7 +31,7 @@ import <%= importStmt %>;
 @Lazy
 @Mapper(
     componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
+    unmappedTargetPolicy = ReportingPolicy.WARN<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
     subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR<%_ } _%><%_ if (usesMappers && usesMappers.length > 0) { _%>,
     uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )

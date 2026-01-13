@@ -90,7 +90,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 @Lazy
 @Mapper(
     componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (hasMapperDependencies) { _%>,
+    unmappedTargetPolicy = ReportingPolicy.WARN<%_ if (hasMapperDependencies) { _%>,
     uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public abstract class <%- mapperName %> {
@@ -168,28 +168,7 @@ _%>
             }
         }
  <%_ } _%>
-<%_ if (isAbstract) { _%>
-<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
-            <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
-        ) {
-            return (<%- baseDtoType %>)(Object) new <%- subtype.dtoType %>();
-        }
-<%_   } _%>
-        return null;
-<%_ } else { _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- baseDtoType %>.class.getModifiers())) {
-            return new <%- baseDtoType %>();
-        }
-<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.dtoType %>.class.getModifiers()) &&
-            <%- baseDtoType %>.class.isAssignableFrom(<%- subtype.dtoType %>.class)
-        ) {
-            return (<%- baseDtoType %>)(Object) new <%- subtype.dtoType %>();
-        }
-<%_   } _%>
-        return null;
-<%_ } _%>
+        return instantiate<%- baseType %>DtoFallback();
     }
 
 <%_ if (locals.baseMethodAnnotations) { _%>
@@ -274,28 +253,7 @@ _%>
         }
    <%_ } _%>
    <%_ } _%>
-<%_ if (isAbstract) { _%>
-<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
-            <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
-        ) {
-            return new <%- subtype.domainType %>();
-        }
-<%_   } _%>
-        return null;
-<%_ } else { _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- baseDomainType %>.class.getModifiers())) {
-            return new <%- baseDomainType %>();
-        }
-<%_   for (const subtype of subtypes) { if (subtype.isDtoSubtype === false) { continue; } _%>
-        if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
-            <%- baseDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
-        ) {
-            return new <%- subtype.domainType %>();
-        }
-<%_   } _%>
-        return null;
-<%_ } _%>
+        return instantiate<%- baseType %>Fallback();
     }
 
 <%_ for (const variant of requestVariants) { 
@@ -364,19 +322,19 @@ _%>
     <%_ } _%>
 <%_     } _%>
 <%_     if (targetDomainType === baseDomainType && isAbstract) { _%>
- <%_         for (const subtype of variantSubtypesWithBase) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
+<%_         for (const subtype of variantSubtypesWithBase) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
             return new <%- subtype.domainType %>();
         }
 <%_         } _%>
-        return null;
+        return instantiate<%- baseType %>Fallback();
 <%_     } else { _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- targetDomainType %>.class.getModifiers())) {
             return new <%- targetDomainType %>();
         }
- <%_         for (const subtype of variantSubtypesWithBase) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
+<%_         for (const subtype of variantSubtypesWithBase) { if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; } _%>
         if (!java.lang.reflect.Modifier.isAbstract(<%- subtype.domainType %>.class.getModifiers()) &&
             <%- targetDomainType %>.class.isAssignableFrom(<%- subtype.domainType %>.class)
         ) {
@@ -403,5 +361,51 @@ _%>
         return targets;
     }
 <%_ } _%>
+
+    private <%- baseDtoType %> instantiate<%- baseType %>DtoFallback() {
+        <%- baseDtoType %> baseCandidate = tryInstantiate(<%- baseDtoType %>.class);
+        if (baseCandidate != null) {
+            return baseCandidate;
+        }
+<%_   const dtoSubtypes = subtypes.filter(subtype => subtype.isDtoSubtype !== false); _%>
+<%_   if (dtoSubtypes.length > 0) { _%>
+        <%- baseDtoType %> subtypeCandidate;
+<%_     for (const subtype of dtoSubtypes) { _%>
+        subtypeCandidate = tryInstantiate(<%- subtype.dtoType %>.class);
+        if (subtypeCandidate != null && <%- baseDtoType %>.class.isAssignableFrom(subtypeCandidate.getClass())) {
+            return subtypeCandidate;
+        }
+<%_     } _%>
+<%_   } _%>
+        throw new IllegalStateException("Unable to resolve <%- baseType %> DTO subtype");
+    }
+
+    private <%- baseDomainType %> instantiate<%- baseType %>Fallback() {
+        <%- baseDomainType %> baseCandidate = tryInstantiate(<%- baseDomainType %>.class);
+        if (baseCandidate != null) {
+            return baseCandidate;
+        }
+<%_   if (subtypes.length > 0) { _%>
+        <%- baseDomainType %> subtypeCandidate;
+<%_     for (const subtype of subtypes) { _%>
+        subtypeCandidate = tryInstantiate(<%- subtype.domainType %>.class);
+        if (subtypeCandidate != null && <%- baseDomainType %>.class.isAssignableFrom(subtypeCandidate.getClass())) {
+            return subtypeCandidate;
+        }
+<%_     } _%>
+<%_   } _%>
+        throw new IllegalStateException("Unable to resolve <%- baseType %> subtype");
+    }
+
+    private <T> T tryInstantiate(Class<T> type) {
+        try {
+            if (type != null && !java.lang.reflect.Modifier.isAbstract(type.getModifiers())) {
+                return type.getDeclaredConstructor().newInstance();
+            }
+        } catch (Exception ignored) {
+            // fall through to null
+        }
+        return null;
+    }
 
 }

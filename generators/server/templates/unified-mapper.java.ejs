@@ -53,7 +53,7 @@ import org.springframework.context.annotation.Lazy;
 @Lazy
 @Mapper(
     componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE,
+    unmappedTargetPolicy = ReportingPolicy.WARN,
     subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR
 )
 public interface <%- mapperName %> {
