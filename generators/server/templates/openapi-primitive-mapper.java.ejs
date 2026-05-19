@@ -10,20 +10,23 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import org.mapstruct.Mapper;
 import org.mapstruct.Named;
 import org.mapstruct.ObjectFactory;
 import org.mapstruct.ReportingPolicy;
+import org.mapstruct.TargetType;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
 
 @Lazy
-@Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.WARN)
+@Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface OpenApiPrimitiveMapper {
     default String map(Object value) {
         if (value == null) {
@@ -34,6 +37,9 @@ public interface OpenApiPrimitiveMapper {
         }
         if (value instanceof JsonNullable<?> jsonNullable) {
             return map(jsonNullable);
+        }
+        if (value instanceof Enum<?> enumValue) {
+            return enumValue.toString();
         }
         return JsonMappingSupport.writeValueAsString(value);
     }
@@ -46,7 +52,72 @@ public interface OpenApiPrimitiveMapper {
         if (resolved instanceof String stringValue) {
             return stringValue;
         }
+        if (resolved instanceof Enum<?> enumValue) {
+            return enumValue.toString();
+        }
         return JsonMappingSupport.writeValueAsString(resolved);
+    }
+
+    default Long jsonNullableToLong(JsonNullable<Long> value) {
+        return unwrap(value);
+    }
+
+    default Integer jsonNullableToInteger(JsonNullable<Integer> value) {
+        return unwrap(value);
+    }
+
+    default Double jsonNullableToDouble(JsonNullable<Double> value) {
+        return unwrap(value);
+    }
+
+    default Float jsonNullableToFloat(JsonNullable<Float> value) {
+        return unwrap(value);
+    }
+
+    default BigDecimal jsonNullableToBigDecimal(JsonNullable<BigDecimal> value) {
+        return unwrap(value);
+    }
+
+    default Boolean jsonNullableToBoolean(JsonNullable<Boolean> value) {
+        return unwrap(value);
+    }
+
+    private static <T> T unwrap(JsonNullable<T> value) {
+        return value == null || !value.isPresent() ? null : value.orElse(null);
+    }
+
+    default <E extends Enum<E>> E map(Enum<?> value, @TargetType Class<E> targetType) {
+        return mapEnumValue(value == null ? null : value.toString(), targetType);
+    }
+
+    default <E extends Enum<E>> E map(String value, @TargetType Class<E> targetType) {
+        return mapEnumValue(value, targetType);
+    }
+
+    private static <E extends Enum<E>> E mapEnumValue(String value, Class<E> targetType) {
+        if (value == null) {
+            return null;
+        }
+        final String normalizedValue = normalizeEnumToken(value);
+        for (E constant : targetType.getEnumConstants()) {
+            if (
+                constant.name().equals(value) ||
+                constant.toString().equals(value) ||
+                normalizeEnumToken(constant.name()).equals(normalizedValue) ||
+                normalizeEnumToken(constant.toString()).equals(normalizedValue)
+            ) {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException("No enum constant " + targetType.getName() + " for OpenAPI value " + value);
+    }
+
+    private static String normalizeEnumToken(String value) {
+        String normalized = value.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_").replaceAll("^_+|_+$", "");
+        if (normalized.startsWith("VALUE_")) {
+            normalized = normalized.substring("VALUE_".length());
+        }
+        return normalized;
     }
 
     @Named("jsonStringToJsonNullableMap")

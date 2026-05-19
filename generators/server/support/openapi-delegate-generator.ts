@@ -18,7 +18,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 import ejs from 'ejs';
 
@@ -137,6 +137,19 @@ type OperationContext = {
   responseEntityFqcn?: string;
   successStatus?: number;
   tmfIdAccessor?: string;
+  defaultFieldInitializers?: DefaultFieldInitializer[];
+};
+
+type DefaultFieldInitializer = {
+  accessor: string;
+  valueExpression: string;
+};
+
+type DefaultFieldCandidate = {
+  rawFieldName: string;
+  fieldName: string;
+  field?: any;
+  schema?: any;
 };
 
 type ResourceContext = {
@@ -177,6 +190,347 @@ type MapperMethodSignature = {
   parameterSimples: string[];
   parameterAnnotations: string[][];
 };
+
+type SchemaProperties = Record<string, any>;
+
+function extractSchemaRef(schema: any): string | undefined {
+  if (!schema?.$ref || typeof schema.$ref !== 'string') {
+    return undefined;
+  }
+  return schema.$ref.split('/').pop();
+}
+
+function lowerFirst(value: string): string {
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+}
+
+function toOpenApiPropertyName(fieldName: string): string {
+  if (!fieldName) {
+    return fieldName;
+  }
+  if (/^[A-Z]{2,}/.test(fieldName)) {
+    const match = fieldName.match(/^([A-Z]+)([A-Z][a-z0-9].*)$/);
+    if (match) {
+      return match[1].toLowerCase() + match[2];
+    }
+    if (/^[A-Z]+$/.test(fieldName)) {
+      return fieldName.toLowerCase();
+    }
+  }
+  return lowerFirst(fieldName);
+}
+
+function toDomainPropertyName(fieldName: string): string {
+  return toOpenApiPropertyName(fieldName);
+}
+
+function collectSchemaProperties(
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  cache = new Map<string, SchemaProperties>(),
+  visiting = new Set<string>(),
+): SchemaProperties {
+  if (!schemaName) {
+    return {};
+  }
+  if (cache.has(schemaName)) {
+    return cache.get(schemaName)!;
+  }
+  const schema = schemas[schemaName];
+  if (!schema || visiting.has(schemaName)) {
+    return {};
+  }
+  visiting.add(schemaName);
+  const properties: SchemaProperties = { ...(schema.properties ?? {}) };
+  for (const key of ['allOf', 'oneOf', 'anyOf']) {
+    for (const fragment of schema[key] ?? []) {
+      const refName = extractSchemaRef(fragment);
+      if (refName) {
+        Object.assign(properties, collectSchemaProperties(refName, schemas, cache, visiting));
+      } else if (fragment?.properties) {
+        Object.assign(properties, fragment.properties);
+      }
+    }
+  }
+  visiting.delete(schemaName);
+  cache.set(schemaName, properties);
+  return properties;
+}
+
+function collectSchemaRequiredProperties(
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  cache = new Map<string, Set<string>>(),
+  visiting = new Set<string>(),
+): Set<string> {
+  if (!schemaName) {
+    return new Set();
+  }
+  if (cache.has(schemaName)) {
+    return new Set(cache.get(schemaName)!);
+  }
+  const schema = schemas[schemaName];
+  if (!schema || visiting.has(schemaName)) {
+    return new Set();
+  }
+  visiting.add(schemaName);
+  const required = new Set<string>(Array.isArray(schema.required) ? schema.required : []);
+  for (const key of ['allOf', 'oneOf', 'anyOf']) {
+    for (const fragment of schema[key] ?? []) {
+      const refName = extractSchemaRef(fragment);
+      if (refName) {
+        for (const property of collectSchemaRequiredProperties(refName, schemas, cache, visiting)) {
+          required.add(property);
+        }
+      } else if (Array.isArray(fragment?.required)) {
+        for (const property of fragment.required) {
+          required.add(property);
+        }
+      }
+    }
+  }
+  visiting.delete(schemaName);
+  cache.set(schemaName, required);
+  return new Set(required);
+}
+
+function schemaDefaultValue(schema: any): unknown {
+  if (!schema) {
+    return undefined;
+  }
+  if (schema.default !== undefined) {
+    return schema.default;
+  }
+  if (schema.example !== undefined) {
+    return schema.example;
+  }
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+    return schema.enum[0];
+  }
+  return undefined;
+}
+
+function javaStringLiteral(value: unknown): string {
+  return JSON.stringify(String(value));
+}
+
+function buildDefaultValueExpression(field: any, value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const fieldType = typeof field?.fieldType === 'string' ? field.fieldType : '';
+  const normalizedType = fieldType.toLowerCase();
+  if (normalizedType === 'string' || normalizedType === 'textblob' || normalizedType === 'anyblob') {
+    return javaStringLiteral(value);
+  }
+  if (normalizedType === 'integer') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Integer.valueOf(${Math.trunc(numeric)})` : undefined;
+  }
+  if (normalizedType === 'long') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Long.valueOf(${Math.trunc(numeric)}L)` : undefined;
+  }
+  if (normalizedType === 'float') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Float.valueOf(${numeric}F)` : undefined;
+  }
+  if (normalizedType === 'double') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Double.valueOf(${numeric}D)` : undefined;
+  }
+  if (normalizedType === 'bigdecimal') {
+    const numeric = String(value);
+    return /^-?\d+(\.\d+)?$/.test(numeric) ? `new java.math.BigDecimal(${javaStringLiteral(numeric)})` : undefined;
+  }
+  if (normalizedType === 'boolean') {
+    if (typeof value === 'boolean') {
+      return value ? 'Boolean.TRUE' : 'Boolean.FALSE';
+    }
+    if (String(value).toLowerCase() === 'true' || String(value).toLowerCase() === 'false') {
+      return String(value).toLowerCase() === 'true' ? 'Boolean.TRUE' : 'Boolean.FALSE';
+    }
+    return undefined;
+  }
+  if (normalizedType === 'uuid') {
+    const stringValue = String(value);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stringValue)
+      ? `java.util.UUID.fromString(${javaStringLiteral(stringValue)})`
+      : undefined;
+  }
+  if (normalizedType === 'localdate') {
+    return `java.time.LocalDate.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'instant') {
+    return `java.time.Instant.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'zoneddatetime') {
+    return `java.time.ZonedDateTime.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'duration') {
+    return `java.time.Duration.parse(${javaStringLiteral(value)})`;
+  }
+  return undefined;
+}
+
+function fieldTypeFromSchema(schema: any): string | undefined {
+  const type = typeof schema?.type === 'string' ? schema.type : undefined;
+  const format = typeof schema?.format === 'string' ? schema.format : undefined;
+  if (type === 'string') {
+    if (format === 'uuid') {
+      return 'UUID';
+    }
+    if (format === 'date') {
+      return 'LocalDate';
+    }
+    if (format === 'date-time') {
+      return 'Instant';
+    }
+    return 'String';
+  }
+  if (type === 'integer') {
+    return format === 'int64' ? 'Long' : 'Integer';
+  }
+  if (type === 'number') {
+    return format === 'float' ? 'Float' : 'Double';
+  }
+  if (type === 'boolean') {
+    return 'Boolean';
+  }
+  return undefined;
+}
+
+function buildSchemaDefaultValueExpression(field: any | undefined, schema: any): string | undefined {
+  const defaultValue = schemaDefaultValue(schema);
+  const expressionField = field?.fieldType ? field : { ...(field ?? {}), fieldType: fieldTypeFromSchema(schema) };
+  return buildDefaultValueExpression(expressionField, defaultValue);
+}
+
+function buildSchemaBackedDefaultInitializers(
+  persistenceEntity: EntityInfo,
+  operation: OpenAPIOperation,
+  schemas: Record<string, any>,
+): DefaultFieldInitializer[] {
+  const fields = Array.isArray(persistenceEntity.definition?.fields) ? persistenceEntity.definition.fields : [];
+  const propertyCache = new Map<string, SchemaProperties>();
+  const requiredCache = new Map<string, Set<string>>();
+  const sourceProperties = collectSchemaProperties(operation.requestBodySchema, schemas, propertyCache);
+  const targetSchemaNames = [persistenceEntity.name, operation.responseSchema].filter((name): name is string => Boolean(name));
+  const requiredBySchema = new Set<string>();
+  const propertiesByName = new Map<string, any>();
+  for (const schemaName of targetSchemaNames) {
+    for (const property of collectSchemaRequiredProperties(schemaName, schemas, requiredCache)) {
+      requiredBySchema.add(toDomainPropertyName(property));
+    }
+    for (const [property, schema] of Object.entries(collectSchemaProperties(schemaName, schemas, propertyCache))) {
+      const normalized = toDomainPropertyName(property);
+      if (!propertiesByName.has(normalized)) {
+        propertiesByName.set(normalized, schema);
+      }
+    }
+  }
+
+  const initializers: DefaultFieldInitializer[] = [];
+  const seen = new Set<string>();
+  const candidates: DefaultFieldCandidate[] = [];
+  const candidateNames = new Set<string>();
+
+  for (const field of fields) {
+    const rawFieldName = field?.fieldName ?? field?.name;
+    if (!rawFieldName || rawFieldName === 'id') {
+      continue;
+    }
+    const fieldName = toDomainPropertyName(rawFieldName);
+    if (candidateNames.has(fieldName)) {
+      continue;
+    }
+    candidateNames.add(fieldName);
+    candidates.push({
+      rawFieldName,
+      fieldName,
+      field,
+      schema: propertiesByName.get(fieldName),
+    });
+  }
+
+  for (const [propertyName, schema] of propertiesByName.entries()) {
+    if (propertyName === 'id' || candidateNames.has(propertyName) || !requiredBySchema.has(propertyName)) {
+      continue;
+    }
+    candidateNames.add(propertyName);
+    candidates.push({
+      rawFieldName: propertyName,
+      fieldName: propertyName,
+      schema,
+    });
+  }
+
+  for (const candidate of candidates) {
+    const { rawFieldName, fieldName, field, schema } = candidate;
+    if (seen.has(fieldName)) {
+      continue;
+    }
+    const openApiName = toOpenApiPropertyName(rawFieldName);
+    if (sourceProperties[openApiName] || sourceProperties[rawFieldName] || sourceProperties[fieldName]) {
+      continue;
+    }
+    const validationRules = Array.isArray(field?.fieldValidateRules) ? field.fieldValidateRules : [];
+    if (!validationRules.includes('required') && !requiredBySchema.has(fieldName)) {
+      continue;
+    }
+    const valueExpression = buildSchemaDefaultValueExpression(field, schema);
+    if (!valueExpression) {
+      continue;
+    }
+    seen.add(fieldName);
+    initializers.push({
+      accessor: pascalize(fieldName),
+      valueExpression,
+    });
+  }
+  return initializers;
+}
+
+function parseOpenApiSourceOfTruth(
+  generator: any,
+  application: SpringBootApplication,
+  fallbackSpec: ReturnType<typeof parseOpenAPISpec>,
+): ReturnType<typeof parseOpenAPISpec> {
+  const oas3Input = (application as any).oas3Input;
+  if (typeof oas3Input !== 'string' || !oas3Input.trim()) {
+    return fallbackSpec;
+  }
+
+  const inputPath = oas3Input.trim();
+  const candidatePaths = [isAbsolute(inputPath) ? inputPath : generator.destinationPath(inputPath)];
+  if (!isAbsolute(inputPath)) {
+    candidatePaths.push(join(process.cwd(), inputPath));
+  }
+
+  for (const candidatePath of candidatePaths) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    try {
+      const content = readFileSync(candidatePath, 'utf-8');
+      return parseOpenAPISpec(content, { isFilePath: false });
+    } catch (error: any) {
+      generator.log.debug(`Unable to parse OpenAPI source ${candidatePath}: ${error?.message ?? error}`);
+    }
+  }
+
+  return fallbackSpec;
+}
+
+function findSourceOperation(operation: OpenAPIOperation, sourceSpec: ReturnType<typeof parseOpenAPISpec>): OpenAPIOperation | undefined {
+  if (operation.operationId) {
+    const byOperationId = sourceSpec.operations.find(candidate => candidate.operationId === operation.operationId);
+    if (byOperationId) {
+      return byOperationId;
+    }
+  }
+  return sourceSpec.operations.find(candidate => candidate.method === operation.method && candidate.path === operation.path);
+}
 
 export function ensureMapperDependency(
   ctx: ResourceContext,
@@ -622,6 +976,7 @@ function classifyCrudOperation(
     descriptorHasPathParams === undefined
       ? operationHasPathParams || Boolean(operation.path && operation.path.includes('{'))
       : descriptorHasPathParams;
+  const responseIsArray = Boolean(operation.responseIsArray || operation.responseSchemaObject?.type === 'array');
 
   let kind: CrudPrefix | undefined;
   let operationIdFragment: string | undefined;
@@ -634,7 +989,7 @@ function classifyCrudOperation(
       kind = 'delete';
       break;
     case 'read':
-      kind = hasPathParams ? 'retrieve' : 'list';
+      kind = responseIsArray ? 'list' : hasPathParams ? 'retrieve' : 'list';
       break;
     case 'update':
       if (method === 'PATCH' || lowerOpId.startsWith('patch') || lowerOpId.includes('patch')) {
@@ -670,7 +1025,7 @@ function classifyCrudOperation(
         kind = 'delete';
         break;
       case 'GET':
-        kind = hasPathParams ? 'retrieve' : 'list';
+        kind = responseIsArray ? 'list' : hasPathParams ? 'retrieve' : 'list';
         break;
       case 'PATCH':
         kind = 'patch';
@@ -722,6 +1077,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     generator.log.warn(`Failed to parse OpenAPI spec for delegate generation: ${error?.message || error}`);
     return;
   }
+  const sourceOfTruthSpec = parseOpenApiSourceOfTruth(generator, application, spec);
 
   if (!application.packageName) {
     generator.log.warn('Application package name missing, skipping delegate implementation generation');
@@ -1096,6 +1452,12 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         ) {
           opContext.tmfIdAccessor = pascalize(tmfIdField.fieldName ?? 'tmfId');
         }
+        const sourceOperation = findSourceOperation(operation, sourceOfTruthSpec) ?? operation;
+        opContext.defaultFieldInitializers = buildSchemaBackedDefaultInitializers(
+          persistenceEntity,
+          sourceOperation,
+          sourceOfTruthSpec.schemas,
+        );
       } else {
         opContext.willPersist = false;
       }

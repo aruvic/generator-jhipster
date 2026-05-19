@@ -22,13 +22,13 @@
     -->
     <changeSet id="<%- changelogDate %>-2" author="jhipster">
 <%_ if (entity.polymorphicChild && entity.parentEntity?.primaryKey) {
-      const inheritedField = entity.parentEntity.primaryKey.fields[0];
+      const inheritedColumnNames = entity.parentEntity.primaryKey.fields.map(field => field.columnName).join(', ');
       const constraintName = this.getFKConstraintName(entity.entityTableName, entity.parentEntity.name, prodDatabaseType);
 _%>
-        <addForeignKeyConstraint baseColumnNames="<%- inheritedField.columnName %>"
+        <addForeignKeyConstraint baseColumnNames="<%- inheritedColumnNames %>"
                                  baseTableName="<%- entity.entityTableName %>"
                                  constraintName="<%- constraintName %>"
-                                 referencedColumnNames="<%- inheritedField.columnName %>"
+                                 referencedColumnNames="<%- inheritedColumnNames %>"
                                  referencedTableName="<%- entity.parentEntity.entityTableName %>"
                                  />
 <%_ } _%>

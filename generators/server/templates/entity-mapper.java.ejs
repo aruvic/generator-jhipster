@@ -8,6 +8,9 @@
 
 package <%- packageName %>;
 
+<%_ const hasCollectionMerges = requestMappings.some(mapping => Array.isArray(mapping.collectionFields) && mapping.collectionFields.length > 0); _%>
+<%_ const hasInlineElementMappings = requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => field.useInlineElementMapping)); _%>
+
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.BeanMapping;
@@ -24,13 +27,14 @@ import org.mapstruct.ObjectFactory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.mapstruct.Named;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
 <%_ } _%>
+<%_ if (entityName === 'JsonPatch' || hasInlineElementMappings) { _%>
+import org.mapstruct.Named;
+<%_ } _%>
 
-<%_ const hasCollectionMerges = requestMappings.some(mapping => Array.isArray(mapping.collectionFields) && mapping.collectionFields.length > 0); _%>
 <%_ const mergeMappers = new Set();
     for (const mapping of requestMappings) {
       for (const field of mapping.collectionFields ?? []) {
@@ -48,13 +52,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 <%_ } _%>
 
 @Lazy
 @Mapper(
   componentModel = "spring",
-  unmappedTargetPolicy = ReportingPolicy.WARN<%_ if (usesMappers && usesMappers.length > 0) { _%>,
+  unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
   uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
 public abstract class <%- mapperName %> {
@@ -86,6 +91,9 @@ public abstract class <%- mapperName %> {
     <%- annotation %>
   <%_ } _%>
 <%_ } _%>
+<%_ for (const field of mapping.generatedUuidFields ?? []) { _%>
+    @Mapping(target = "<%- field.fieldName %>", nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+<%_ } _%>
   <%_ if (!hasIdIgnore) { _%>
     @Mapping(target = "id", ignore = true)
   <%_ } _%>
@@ -93,6 +101,26 @@ public abstract class <%- mapperName %> {
     @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
     public abstract void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
+
+<%_ } _%>
+
+<%_ for (const mapping of requestMappings.filter(mapping => (mapping.generatedUuidFields ?? []).length > 0 || (mapping.generatedDefaultFields ?? []).length > 0)) { _%>
+    @AfterMapping
+    protected void initializeGeneratedIdentifiersAfter<%- mapping.methodName.charAt(0).toUpperCase() + mapping.methodName.slice(1) %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source) {
+        if (target == null) {
+            return;
+        }
+  <%_ for (const field of mapping.generatedUuidFields ?? []) { _%>
+        if (target.get<%- field.accessor %>() == null) {
+            target.set<%- field.accessor %>(java.util.UUID.randomUUID());
+        }
+  <%_ } _%>
+  <%_ for (const field of mapping.generatedDefaultFields ?? []) { _%>
+        if (target.get<%- field.accessor %>() == null) {
+            target.set<%- field.accessor %>(<%- field.valueExpression %>);
+        }
+  <%_ } _%>
+    }
 
 <%_ } _%>
 
@@ -111,6 +139,30 @@ public abstract class <%- mapperName %> {
 <%_ } _%>
 
 <%_ if (hasCollectionMerges) { _%>
+<%_ const inlineCollectionFieldsByMethod = new Map();
+    for (const mapping of requestMappings) {
+      for (const field of mapping.collectionFields ?? []) {
+        if (field.useInlineElementMapping && field.inlineMapMethod && field.inlineUpdateMethod) {
+          inlineCollectionFieldsByMethod.set(`${field.inlineMapMethod}:${field.inlineUpdateMethod}`, field);
+        }
+      }
+    }
+    const inlineCollectionFields = Array.from(inlineCollectionFieldsByMethod.values());
+_%>
+  <%_ for (const field of inlineCollectionFields) { _%>
+  <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%- annotation %>
+  <%_ } _%>
+    @Named("<%- mapperName %>.<%- field.inlineMapMethod %>")
+    protected abstract <%- field.elementDomainType %> <%- field.inlineMapMethod %>(<%- field.elementDtoType %> source);
+
+  <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%- annotation %>
+  <%_ } _%>
+    @Named("<%- mapperName %>.<%- field.inlineUpdateMethod %>")
+    protected abstract void <%- field.inlineUpdateMethod %>(@MappingTarget <%- field.elementDomainType %> target, <%- field.elementDtoType %> source);
+
+  <%_ } _%>
   <%_ for (const mapping of requestMappings) {
         const collectionFields = mapping.collectionFields ?? [];
         if (collectionFields.length === 0) { continue; }
@@ -123,10 +175,10 @@ public abstract class <%- mapperName %> {
         }
     <%_ for (const field of collectionFields) { _%>
         Function<<%- field.elementDomainType %>, Object> <%- field.targetField %>ExistingKey = item -> {
-      <%_ const keyExpressions = field.keyExpressions ?? []; _%>
-      <%_ if (keyExpressions.length > 0) { _%>
+      <%_ const existingKeyExpressions = field.existingKeyExpressions ?? field.keyExpressions ?? []; _%>
+      <%_ if (existingKeyExpressions.length > 0) { _%>
             Object key = null;
-        <%_ for (const expr of keyExpressions) { _%>
+        <%_ for (const expr of existingKeyExpressions) { _%>
             if (key == null) {
                 Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
                 if (candidateKey != null) {
@@ -140,9 +192,10 @@ public abstract class <%- mapperName %> {
       <%_ } _%>
         };
         Function<<%- field.elementDtoType %>, Object> <%- field.targetField %>IncomingKey = item -> {
-      <%_ if (keyExpressions.length > 0) { _%>
+      <%_ const incomingKeyExpressions = field.incomingKeyExpressions ?? []; _%>
+      <%_ if (incomingKeyExpressions.length > 0) { _%>
             Object key = null;
-        <%_ for (const expr of keyExpressions) { _%>
+        <%_ for (const expr of incomingKeyExpressions) { _%>
             if (key == null) {
                 Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
                 if (candidateKey != null) {
@@ -155,7 +208,8 @@ public abstract class <%- mapperName %> {
             return null;
       <%_ } _%>
         };
-      <%_ if (keyExpressions.length > 0) { _%>
+      <%_ const hasKeyExpressions = (existingKeyExpressions?.length ?? 0) > 0 || (incomingKeyExpressions?.length ?? 0) > 0; _%>
+      <%_ if (hasKeyExpressions) { _%>
         BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard =
             (existingItem, incomingItem) -> {
                 Object existingKey = <%- field.targetField %>ExistingKey.apply(existingItem);
@@ -167,14 +221,22 @@ public abstract class <%- mapperName %> {
       <%_ } else { _%>
         BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard = null;
       <%_ } _%>
+        Consumer<<%- field.elementDomainType %>> <%- field.targetField %>Initializer =
+      <%_ if (field.hasId) { _%>
+            item -> item.setId(null);
+      <%_ } else { _%>
+            null;
+      <%_ } _%>
+        ;
         List<<%- field.elementDomainType %>> merged<%- field.targetGetter %> = mergeCollection(
             target.get<%- field.targetGetter %>(),
             source.get<%- field.sourceGetter %>(),
             <%- field.targetField %>ExistingKey,
             <%- field.targetField %>IncomingKey,
             <%- field.targetField %>Guard,
-            (existingItem, incomingItem) -> this.<%- field.mapperField %>.<%- field.updateMethod %>(existingItem, incomingItem),
-            incomingItem -> this.<%- field.mapperField %>.<%- field.mapMethod %>(incomingItem)
+            (existingItem, incomingItem) -> <%_ if (field.useInlineElementMapping) { _%>this.<%- field.inlineUpdateMethod %>(existingItem, incomingItem)<%_ } else { _%>this.<%- field.mapperField %>.<%- field.updateMethod %>(existingItem, incomingItem)<%_ } _%>,
+            incomingItem -> <%_ if (field.useInlineElementMapping) { _%>this.<%- field.inlineMapMethod %>(incomingItem)<%_ } else { _%>this.<%- field.mapperField %>.<%- field.mapMethod %>(incomingItem)<%_ } _%>,
+            <%- field.targetField %>Initializer
         );
         target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);
     <%_ } _%>
@@ -189,11 +251,59 @@ public abstract class <%- mapperName %> {
         Function<S, Object> incomingKeyResolver,
         BiConsumer<D, S> immutableGuard,
         BiConsumer<D, S> updater,
-        Function<S, D> mapper
+        Function<S, D> mapper,
+        Consumer<D> newItemInitializer
     ) {
         List<D> existingItems = current != null ? new ArrayList<>(current) : new ArrayList<>();
         if (incoming == null) {
-            return new ArrayList<>();
+            return existingItems;
+        }
+        final boolean hasKeyResolver = existingKeyResolver != null || incomingKeyResolver != null;
+        boolean hasNonNullKey = false;
+        if (existingKeyResolver != null) {
+            for (D item : existingItems) {
+                if (existingKeyResolver.apply(item) != null) {
+                    hasNonNullKey = true;
+                    break;
+                }
+            }
+        }
+        if (!hasNonNullKey && incomingKeyResolver != null) {
+            for (S incomingItem : incoming) {
+                if (incomingKeyResolver.apply(incomingItem) != null) {
+                    hasNonNullKey = true;
+                    break;
+                }
+            }
+        }
+        if (!hasKeyResolver || !hasNonNullKey) {
+            List<D> merged = new ArrayList<>();
+            int index = 0;
+            for (S incomingItem : incoming) {
+                if (index < existingItems.size()) {
+                    D existingItem = existingItems.get(index);
+                    if (immutableGuard != null) {
+                        immutableGuard.accept(existingItem, incomingItem);
+                    }
+                    if (updater != null) {
+                        updater.accept(existingItem, incomingItem);
+                    }
+                    merged.add(existingItem);
+                } else if (mapper != null) {
+                    D mappedItem = mapper.apply(incomingItem);
+                    if (mappedItem != null) {
+                        if (newItemInitializer != null) {
+                            newItemInitializer.accept(mappedItem);
+                        }
+                        merged.add(mappedItem);
+                    }
+                }
+                index++;
+            }
+            if (index < existingItems.size()) {
+                merged.addAll(existingItems.subList(index, existingItems.size()));
+            }
+            return merged;
         }
         Map<Object, D> currentByKey = new LinkedHashMap<>();
         if (existingKeyResolver != null) {
@@ -207,7 +317,12 @@ public abstract class <%- mapperName %> {
         List<D> merged = new ArrayList<>();
         Set<Object> seenKeys = new LinkedHashSet<>();
         for (S incomingItem : incoming) {
+            D mappedItem = null;
             Object incomingKey = incomingKeyResolver != null ? incomingKeyResolver.apply(incomingItem) : null;
+            if (incomingKey == null && existingKeyResolver != null && mapper != null) {
+                mappedItem = mapper.apply(incomingItem);
+                incomingKey = mappedItem != null ? existingKeyResolver.apply(mappedItem) : null;
+            }
             if (incomingKey != null && !seenKeys.add(incomingKey)) {
                 continue;
             }
@@ -222,9 +337,34 @@ public abstract class <%- mapperName %> {
                 merged.add(currentItem);
                 continue;
             }
-            D mappedItem = mapper != null ? mapper.apply(incomingItem) : null;
+            if (mappedItem == null && mapper != null) {
+                mappedItem = mapper.apply(incomingItem);
+            }
             if (mappedItem != null) {
+                if (newItemInitializer != null) {
+                    newItemInitializer.accept(mappedItem);
+                }
                 merged.add(mappedItem);
+            }
+        }
+        if (existingKeyResolver != null) {
+            for (D existingItem : existingItems) {
+                Object key = existingKeyResolver.apply(existingItem);
+                if (key != null) {
+                    if (seenKeys.contains(key)) {
+                        continue;
+                    }
+                    seenKeys.add(key);
+                }
+                if (!merged.contains(existingItem)) {
+                    merged.add(existingItem);
+                }
+            }
+        } else {
+            for (D existingItem : existingItems) {
+                if (!merged.contains(existingItem)) {
+                    merged.add(existingItem);
+                }
             }
         }
         return merged;
