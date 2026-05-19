@@ -46,6 +46,7 @@ export interface PolymorphicHelperMapperContext {
   usesMappers: string[];
   isAbstract?: boolean;
   baseMethodAnnotations?: string[];
+  hasDomainDiscriminatorAccessor?: boolean;
 }
 
 /**
@@ -70,6 +71,7 @@ export interface PolymorphicTypeMapping {
   variants: PolymorphicVariantInfo[];
   isAbstract?: boolean;
   baseMethodAnnotations?: string[];
+  hasDomainDiscriminatorAccessor?: boolean;
 }
 
 export interface SubtypeInfo {
@@ -106,6 +108,8 @@ export interface EntityMapping {
   targetSchemaName?: string;
   excludedTargets?: Set<string>;
   collectionFields?: CollectionFieldContext[];
+  generatedUuidFields?: GeneratedUuidFieldContext[];
+  generatedDefaultFields?: GeneratedDefaultFieldContext[];
 }
 
 export interface CollectionFieldContext {
@@ -124,11 +128,35 @@ export interface CollectionFieldContext {
   mapperField: string;
   mapMethod: string;
   updateMethod: string;
+  useInlineElementMapping?: boolean;
+  inlineMapMethod?: string;
+  inlineUpdateMethod?: string;
+  inlineMappingAnnotations?: string[];
   hasId: boolean;
   hasTmfId: boolean;
   referencedEntity?: string;
   keyExpressions?: string[];
+  existingKeyExpressions?: string[];
+  incomingKeyExpressions?: string[];
 }
+
+export interface GeneratedUuidFieldContext {
+  fieldName: string;
+  accessor: string;
+}
+
+export interface GeneratedDefaultFieldContext {
+  fieldName: string;
+  accessor: string;
+  valueExpression: string;
+}
+
+type DefaultFieldCandidate = {
+  rawFieldName: string;
+  fieldName: string;
+  field?: any;
+  schema?: any;
+};
 
 export interface ObjectFactoryVariantContext {
   discriminatorValue: string;
@@ -301,6 +329,24 @@ function isObjectLikeSchema(schema: any): boolean {
   if (schema.allOf || schema.oneOf || schema.anyOf) return true;
   if (schema.properties && Object.keys(schema.properties).length > 0) return true;
   return false;
+}
+
+function isSchemaComposition(schema: any): boolean {
+  return Array.isArray(schema?.allOf) || Array.isArray(schema?.oneOf) || Array.isArray(schema?.anyOf);
+}
+
+function hasSchemaObjectProperties(schema: any): boolean {
+  return Boolean(schema?.properties && Object.keys(schema.properties).length > 0);
+}
+
+function isOpenApiAliasModelSchema(schema: any): boolean {
+  if (!schema) {
+    return false;
+  }
+  if (schema.type === 'array') {
+    return true;
+  }
+  return Boolean(schema.additionalProperties && !hasSchemaObjectProperties(schema) && !isSchemaComposition(schema));
 }
 
 /**
@@ -609,6 +655,62 @@ function resolveDomainAncestors(
   return ancestors;
 }
 
+function resolveEntityDefinition(entityName: string | undefined, entityDefinitions?: Map<string, any>): any | undefined {
+  if (!entityName || !entityDefinitions) {
+    return undefined;
+  }
+  return (
+    entityDefinitions.get(entityName) ??
+    entityDefinitions.get(normalizeTypeName(entityName) ?? '') ??
+    entityDefinitions.get(normalizeEntityKey(entityName) ?? '') ??
+    entityDefinitions.get(stripDtoSuffix(entityName))
+  );
+}
+
+function collectDomainPropertyNames(
+  entityName: string | undefined,
+  entityDefinitions: Map<string, any> | undefined,
+  cache: Map<string, Set<string>>,
+  visiting = new Set<string>(),
+): Set<string> {
+  const normalized = normalizeTypeName(entityName ?? '') ?? entityName;
+  if (!normalized || !entityDefinitions) {
+    return new Set();
+  }
+  if (cache.has(normalized)) {
+    return cache.get(normalized)!;
+  }
+  if (visiting.has(normalized)) {
+    return new Set();
+  }
+  visiting.add(normalized);
+
+  const properties = new Set<string>(['id']);
+  const definition = resolveEntityDefinition(normalized, entityDefinitions);
+  for (const field of definition?.fields ?? []) {
+    const fieldName = field?.fieldName ?? field?.name;
+    if (fieldName) {
+      properties.add(toJHipsterPropertyName(fieldName));
+    }
+  }
+  for (const relationship of definition?.relationships ?? []) {
+    const relationshipName = relationship?.relationshipName ?? relationship?.fieldName;
+    if (relationshipName) {
+      properties.add(toJHipsterPropertyName(relationshipName));
+    }
+  }
+
+  const parent = definition?.extends;
+  if (parent) {
+    const parentProperties = collectDomainPropertyNames(parent, entityDefinitions, cache, visiting);
+    parentProperties.forEach(property => properties.add(property));
+  }
+
+  visiting.delete(normalized);
+  cache.set(normalized, properties);
+  return properties;
+}
+
 function normalizeNameForComparison(name?: string): string | undefined {
   if (!name) {
     return undefined;
@@ -890,6 +992,19 @@ function toOpenApiPropertyName(fieldName: string): string {
   if (!fieldName) {
     return fieldName;
   }
+  if (/^[A-Z]+$/.test(fieldName)) {
+    return fieldName;
+  }
+  if (/^[A-Z]{2,}/.test(fieldName)) {
+    return fieldName.slice(0, 2).toLowerCase() + fieldName.slice(2);
+  }
+  return lowerFirst(fieldName);
+}
+
+function toJHipsterPropertyName(fieldName: string): string {
+  if (!fieldName) {
+    return fieldName;
+  }
   // Handle acronyms at the start: HSCodes -> hsCodes, XMLParser -> xmlParser
   if (/^[A-Z]{2,}/.test(fieldName)) {
       const match = fieldName.match(/^([A-Z]+)([A-Z][a-z0-9].*)$/);
@@ -902,12 +1017,6 @@ function toOpenApiPropertyName(fieldName: string): string {
   }
   return lowerFirst(fieldName);
 }
-
-function toJHipsterPropertyName(fieldName: string): string {
-  return toOpenApiPropertyName(fieldName);
-}
-
-
 
 function buildJsonMappingAnnotations(metadata: SchemaJsonMetadata | undefined, direction: 'request' | 'response'): { annotations: string[], mappedFields: Set<string> } {
   const annotations: string[] = [];
@@ -946,7 +1055,398 @@ function buildJsonMappingAnnotations(metadata: SchemaJsonMetadata | undefined, d
   return { annotations, mappedFields };
 }
 
+function buildPropertyAliasMappingAnnotations(
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  cache: Map<string, SchemaProperties>,
+  direction: 'request' | 'response',
+  excludedFields: Set<string> = new Set(),
+): { annotations: string[]; mappedFields: Set<string> } {
+  if (!schemaName) {
+    return { annotations: [], mappedFields: new Set() };
+  }
+  const properties = collectSchemaProperties(schemaName, schemas, cache);
+  const annotations: string[] = [];
+  const mappedFields = new Set<string>();
+  for (const fieldName of Object.keys(properties)) {
+    const dtoField = toOpenApiPropertyName(fieldName);
+    const domainField = toJHipsterPropertyName(fieldName);
+    if (!dtoField || !domainField || dtoField === domainField) {
+      continue;
+    }
+    const sourceField = direction === 'request' ? dtoField : domainField;
+    const targetField = direction === 'request' ? domainField : dtoField;
+    if (excludedFields.has(targetField)) {
+      continue;
+    }
+    annotations.push(`@Mapping(source = "${sourceField}", target = "${targetField}")`);
+    mappedFields.add(targetField);
+  }
+  return { annotations, mappedFields };
+}
+
+function buildAliasModelFieldIgnoreAnnotations(
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  cache: Map<string, SchemaProperties>,
+  direction: 'request' | 'response',
+): { annotations: string[]; ignoredFields: Set<string> } {
+  if (!schemaName) {
+    return { annotations: [], ignoredFields: new Set() };
+  }
+  const properties = collectSchemaProperties(schemaName, schemas, cache);
+  const ignoredFields = new Set<string>();
+  for (const [fieldName, fieldSchema] of Object.entries<any>(properties)) {
+    const refName = extractSchemaRef(fieldSchema);
+    if (!refName) {
+      continue;
+    }
+    const resolved = schemas[refName];
+    if (!isOpenApiAliasModelSchema(resolved)) {
+      continue;
+    }
+    const targetField = direction === 'request' ? toJHipsterPropertyName(fieldName) : toOpenApiPropertyName(fieldName);
+    ignoredFields.add(targetField);
+  }
+
+  return {
+    annotations: Array.from(ignoredFields).map(field => `@Mapping(target = "${field}", ignore = true)`),
+    ignoredFields,
+  };
+}
+
+function extractMappingProperty(annotation: string, property: 'source' | 'target'): string | undefined {
+  const match = annotation.match(new RegExp(`${property}\\s*=\\s*"([^"]+)"`));
+  const value = match?.[1];
+  return value ? value.split('.')[0] : undefined;
+}
+
+function filterMappingAnnotationsByDomainProperty(
+  annotations: string[],
+  entityName: string | undefined,
+  entityDefinitions: Map<string, any> | undefined,
+  domainPropertyCache: Map<string, Set<string>>,
+  propertyRole: 'source' | 'target',
+): string[] {
+  if (!entityName || !entityDefinitions) {
+    return annotations;
+  }
+  const domainProperties = collectDomainPropertyNames(entityName, entityDefinitions, domainPropertyCache);
+  if (domainProperties.size === 0) {
+    return annotations;
+  }
+  return annotations.filter(annotation => {
+    const property = extractMappingProperty(annotation, propertyRole);
+    return !property || domainProperties.has(toJHipsterPropertyName(property));
+  });
+}
+
+function hasSchemaPropertyForField(properties: SchemaProperties, ...fieldNames: Array<string | undefined>): boolean {
+  const normalizedCandidates = new Set<string>();
+  for (const fieldName of fieldNames) {
+    if (!fieldName) {
+      continue;
+    }
+    normalizedCandidates.add(fieldName);
+    normalizedCandidates.add(toOpenApiPropertyName(fieldName));
+    normalizedCandidates.add(toJHipsterPropertyName(fieldName));
+  }
+  for (const property of Object.keys(properties)) {
+    if (
+      normalizedCandidates.has(property) ||
+      normalizedCandidates.has(toOpenApiPropertyName(property)) ||
+      normalizedCandidates.has(toJHipsterPropertyName(property))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function uniqueAnnotations(annotations: string[]): string[] {
+  return Array.from(new Set(annotations));
+}
+
 type SchemaProperties = Record<string, any>;
+
+function buildReadOnlyRequiredUuidFields(
+  targetEntity: string | undefined,
+  sourceSchemaName: string | undefined,
+  schemas: Record<string, any>,
+  schemaPropertiesCache: Map<string, SchemaProperties>,
+  entityDefinitions: Map<string, any> | undefined,
+): GeneratedUuidFieldContext[] {
+  if (!targetEntity || !sourceSchemaName || !entityDefinitions) {
+    return [];
+  }
+  const definition = resolveEntityDefinition(targetEntity, entityDefinitions);
+  const fields = Array.isArray(definition?.fields) ? definition.fields : [];
+  if (fields.length === 0) {
+    return [];
+  }
+  const properties = collectSchemaProperties(sourceSchemaName, schemas, schemaPropertiesCache);
+  const generatedFields: GeneratedUuidFieldContext[] = [];
+  for (const field of fields) {
+    const fieldName = field?.fieldName ?? field?.name;
+    if (!fieldName) {
+      continue;
+    }
+    const fieldType = typeof field?.fieldType === 'string' ? field.fieldType.toLowerCase() : '';
+    const validationRules = Array.isArray(field?.fieldValidateRules) ? field.fieldValidateRules : [];
+    if (fieldType !== 'uuid' || !validationRules.includes('required')) {
+      continue;
+    }
+    const propertyName = toOpenApiPropertyName(fieldName);
+    const propertySchema = properties[propertyName] ?? properties[fieldName];
+    if (!propertySchema?.readOnly) {
+      continue;
+    }
+    generatedFields.push({
+      fieldName: toJHipsterPropertyName(fieldName),
+      accessor: upperFirstCamelCase(toJHipsterPropertyName(fieldName)),
+    });
+  }
+  return generatedFields;
+}
+
+function collectSchemaRequiredProperties(
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  cache = new Map<string, Set<string>>(),
+  visiting = new Set<string>(),
+): Set<string> {
+  if (!schemaName) {
+    return new Set();
+  }
+  if (cache.has(schemaName)) {
+    return new Set(cache.get(schemaName)!);
+  }
+  const schema = schemas[schemaName];
+  if (!schema || visiting.has(schemaName)) {
+    return new Set();
+  }
+  visiting.add(schemaName);
+  const required = new Set<string>(Array.isArray(schema.required) ? schema.required : []);
+  for (const key of ['allOf', 'oneOf', 'anyOf']) {
+    for (const fragment of schema[key] ?? []) {
+      const refName = extractSchemaRef(fragment);
+      if (refName) {
+        for (const property of collectSchemaRequiredProperties(refName, schemas, cache, visiting)) {
+          required.add(property);
+        }
+      } else if (Array.isArray(fragment?.required)) {
+        for (const property of fragment.required) {
+          required.add(property);
+        }
+      }
+    }
+  }
+  visiting.delete(schemaName);
+  cache.set(schemaName, required);
+  return new Set(required);
+}
+
+function javaStringLiteral(value: unknown): string {
+  return JSON.stringify(String(value));
+}
+
+function schemaDefaultValue(schema: any): unknown {
+  const resolved = schema ?? {};
+  if (resolved.default !== undefined) {
+    return resolved.default;
+  }
+  if (resolved.example !== undefined) {
+    return resolved.example;
+  }
+  if (Array.isArray(resolved.enum) && resolved.enum.length > 0) {
+    return resolved.enum[0];
+  }
+  return undefined;
+}
+
+function buildDefaultValueExpression(field: any, value: unknown): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const fieldType = typeof field?.fieldType === 'string' ? field.fieldType : '';
+  const normalizedType = fieldType.toLowerCase();
+  if (normalizedType === 'string' || normalizedType === 'textblob' || normalizedType === 'anyblob') {
+    return javaStringLiteral(value);
+  }
+  if (normalizedType === 'integer') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Integer.valueOf(${Math.trunc(numeric)})` : undefined;
+  }
+  if (normalizedType === 'long') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Long.valueOf(${Math.trunc(numeric)}L)` : undefined;
+  }
+  if (normalizedType === 'float') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Float.valueOf(${numeric}F)` : undefined;
+  }
+  if (normalizedType === 'double') {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? `Double.valueOf(${numeric}D)` : undefined;
+  }
+  if (normalizedType === 'bigdecimal') {
+    const numeric = String(value);
+    return /^-?\d+(\.\d+)?$/.test(numeric) ? `new java.math.BigDecimal(${javaStringLiteral(numeric)})` : undefined;
+  }
+  if (normalizedType === 'boolean') {
+    if (typeof value === 'boolean') {
+      return value ? 'Boolean.TRUE' : 'Boolean.FALSE';
+    }
+    if (String(value).toLowerCase() === 'true' || String(value).toLowerCase() === 'false') {
+      return String(value).toLowerCase() === 'true' ? 'Boolean.TRUE' : 'Boolean.FALSE';
+    }
+    return undefined;
+  }
+  if (normalizedType === 'uuid') {
+    const stringValue = String(value);
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stringValue)
+      ? `java.util.UUID.fromString(${javaStringLiteral(stringValue)})`
+      : undefined;
+  }
+  if (normalizedType === 'localdate') {
+    return `java.time.LocalDate.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'instant') {
+    return `java.time.Instant.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'zoneddatetime') {
+    return `java.time.ZonedDateTime.parse(${javaStringLiteral(value)})`;
+  }
+  if (normalizedType === 'duration') {
+    return `java.time.Duration.parse(${javaStringLiteral(value)})`;
+  }
+  return undefined;
+}
+
+function fieldTypeFromSchema(schema: any): string | undefined {
+  const type = typeof schema?.type === 'string' ? schema.type : undefined;
+  const format = typeof schema?.format === 'string' ? schema.format : undefined;
+  if (type === 'string') {
+    if (format === 'uuid') {
+      return 'UUID';
+    }
+    if (format === 'date') {
+      return 'LocalDate';
+    }
+    if (format === 'date-time') {
+      return 'Instant';
+    }
+    return 'String';
+  }
+  if (type === 'integer') {
+    return format === 'int64' ? 'Long' : 'Integer';
+  }
+  if (type === 'number') {
+    return format === 'float' ? 'Float' : 'Double';
+  }
+  if (type === 'boolean') {
+    return 'Boolean';
+  }
+  return undefined;
+}
+
+function buildSchemaDefaultValueExpression(field: any | undefined, schema: any): string | undefined {
+  const defaultValue = schemaDefaultValue(schema);
+  const expressionField = field?.fieldType ? field : { ...(field ?? {}), fieldType: fieldTypeFromSchema(schema) };
+  return buildDefaultValueExpression(expressionField, defaultValue);
+}
+
+function buildSchemaBackedDefaultFields(
+  targetEntity: string | undefined,
+  sourceSchemaName: string | undefined,
+  targetSchemaNames: Array<string | undefined>,
+  schemas: Record<string, any>,
+  schemaPropertiesCache: Map<string, SchemaProperties>,
+  entityDefinitions: Map<string, any> | undefined,
+): GeneratedDefaultFieldContext[] {
+  if (!targetEntity || !sourceSchemaName || !entityDefinitions) {
+    return [];
+  }
+  const definition = resolveEntityDefinition(targetEntity, entityDefinitions);
+  const fields = Array.isArray(definition?.fields) ? definition.fields : [];
+  const sourceProperties = collectSchemaProperties(sourceSchemaName, schemas, schemaPropertiesCache);
+  const requiredBySchema = new Set<string>();
+  const targetPropertiesByName = new Map<string, any>();
+  const requiredCache = new Map<string, Set<string>>();
+  for (const targetSchemaName of targetSchemaNames.filter(Boolean)) {
+    const required = collectSchemaRequiredProperties(targetSchemaName, schemas, requiredCache);
+    for (const property of required) {
+      requiredBySchema.add(toJHipsterPropertyName(property));
+    }
+    const properties = collectSchemaProperties(targetSchemaName, schemas, schemaPropertiesCache);
+    for (const [property, schema] of Object.entries(properties)) {
+      const normalized = toJHipsterPropertyName(property);
+      if (!targetPropertiesByName.has(normalized)) {
+        targetPropertiesByName.set(normalized, schema);
+      }
+    }
+  }
+
+  const defaults: GeneratedDefaultFieldContext[] = [];
+  const seenFields = new Set<string>();
+  const candidates: DefaultFieldCandidate[] = [];
+  const candidateNames = new Set<string>();
+
+  for (const field of fields) {
+    const rawFieldName = field?.fieldName ?? field?.name;
+    if (!rawFieldName || rawFieldName === 'id') {
+      continue;
+    }
+    const fieldName = toJHipsterPropertyName(rawFieldName);
+    if (candidateNames.has(fieldName)) {
+      continue;
+    }
+    candidateNames.add(fieldName);
+    candidates.push({
+      rawFieldName,
+      fieldName,
+      field,
+      schema: targetPropertiesByName.get(fieldName),
+    });
+  }
+
+  for (const [propertyName, schema] of targetPropertiesByName.entries()) {
+    if (propertyName === 'id' || candidateNames.has(propertyName) || !requiredBySchema.has(propertyName)) {
+      continue;
+    }
+    candidateNames.add(propertyName);
+    candidates.push({
+      rawFieldName: propertyName,
+      fieldName: propertyName,
+      schema,
+    });
+  }
+
+  for (const candidate of candidates) {
+    const { rawFieldName, fieldName, field, schema } = candidate;
+    if (seenFields.has(fieldName)) {
+      continue;
+    }
+    if (hasSchemaPropertyForField(sourceProperties, rawFieldName, fieldName)) {
+      continue;
+    }
+    const validationRules = Array.isArray(field?.fieldValidateRules) ? field.fieldValidateRules : [];
+    if (!validationRules.includes('required') && !requiredBySchema.has(fieldName)) {
+      continue;
+    }
+    const valueExpression = buildSchemaDefaultValueExpression(field, schema);
+    if (!valueExpression) {
+      continue;
+    }
+    seenFields.add(fieldName);
+    defaults.push({
+      fieldName,
+      accessor: upperFirstCamelCase(fieldName),
+      valueExpression,
+    });
+  }
+  return defaults;
+}
 
 function collectSchemaProperties(
   schemaName: string | undefined,
@@ -1021,6 +1521,8 @@ function collectCollectionFieldContexts(
   basePackage: string,
   schemaPropertiesCache: Map<string, SchemaProperties>,
   polymorphicHelperTypes: Set<string>,
+  entityDefinitions: Map<string, any> | undefined,
+  domainPropertyCache: Map<string, Set<string>>,
   relationshipTargets?: Map<string, Map<string, string>>,
   targetEntityName?: string,
 ): CollectionFieldContext[] {
@@ -1064,6 +1566,7 @@ function collectCollectionFieldContexts(
     const relationshipTarget = normalizedTargetEntity
       ? relationshipTargets?.get(normalizedTargetEntity)?.get(targetField)
       : undefined;
+    const usesRelationshipTarget = Boolean(relationshipTarget);
     if (relationshipTarget) {
       collectionBaseEntity = relationshipTarget;
       normalizedCollectionBase = normalizeTypeName(relationshipTarget) ?? relationshipTarget;
@@ -1084,6 +1587,7 @@ function collectCollectionFieldContexts(
     const elementDtoSimple = elementDtoType.split('.').pop() ?? elementSchemaName;
     const elementDomainType = buildDomainFqcn(collectionBaseEntity, basePackage);
     const elementDomainSimple = elementDomainType.split('.').pop() ?? collectionBaseEntity;
+    const useInlineElementMapping = usesRelationshipTarget && normalizedCollectionBase !== normalizedBase;
     const isPolymorphic = polymorphicHelperTypes.has(normalizedCollectionBase);
     const mapperSimple = `${collectionBaseEntity}Mapper`;
     const mapperFqcn = `${basePackage}.web.api.mapper.${mapperSimple}`;
@@ -1093,6 +1597,9 @@ function collectCollectionFieldContexts(
     const elementSchema = schemas[elementSchemaName] ?? resolveSchema(elementSchemaName, schemas);
     const elementProperties = collectSchemaProperties(elementSchemaName, schemas, schemaPropertiesCache) ?? elementSchema?.properties ?? {};
     const hasTmfId = Boolean(elementProperties?.tmfId);
+    const hasOneOfOrAnyOf = Array.isArray(elementSchema?.oneOf) || Array.isArray(elementSchema?.anyOf);
+    const elementHasDirectProperties = elementSchema?.properties ?? itemsSchema?.properties ?? {};
+    const elementHasDirectTmfId = Boolean(elementHasDirectProperties?.tmfId);
     const mapMethod = isPolymorphic
       ? (isElementBase ? `to${collectionBaseEntity}` : `to${elementSchemaName}`)
       : `to${collectionBaseEntity}Entity`;
@@ -1101,23 +1608,93 @@ function collectCollectionFieldContexts(
       : `update${collectionBaseEntity}EntityFrom${elementDtoSimple}`;
     const referencedEntity = normalizedCollectionBase;
     const hasId = Boolean(elementProperties?.id);
-    const keyExpressions: string[] = [];
-    const registerKeyExpression = (expression: string | undefined) => {
-      if (!expression) {
-        return;
+    const elementHasDirectId = Boolean(elementHasDirectProperties?.id);
+    const existingKeyExpressions: string[] = [];
+    const incomingKeyExpressions: string[] = [];
+    const registerKeyExpression = (existingExpression: string | undefined, incomingExpression?: string | undefined) => {
+      if (existingExpression && !existingKeyExpressions.includes(existingExpression)) {
+        existingKeyExpressions.push(existingExpression);
       }
-      if (!keyExpressions.includes(expression)) {
-        keyExpressions.push(expression);
+      if (incomingExpression && !incomingKeyExpressions.includes(incomingExpression)) {
+        incomingKeyExpressions.push(incomingExpression);
       }
     };
     if (hasTmfId) {
-      registerKeyExpression('{var}.getTmfId()');
+      const incomingExpression = hasOneOfOrAnyOf && !elementHasDirectTmfId ? undefined : '{var}.getTmfId()';
+      registerKeyExpression('{var}.getTmfId()', incomingExpression);
     }
     if (hasId) {
-      registerKeyExpression('{var}.getId()');
+      const incomingExpression = hasOneOfOrAnyOf && !elementHasDirectId ? undefined : '{var}.getId()';
+      registerKeyExpression('{var}.getId()', incomingExpression);
     }
+    if (existingKeyExpressions.length === 0 && normalizedCollectionBase === 'RelatedChannel') {
+      const channelGetter = '{var}.getChannel()';
+      registerKeyExpression(`${channelGetter} != null ? ${channelGetter}.getTmfId() : null`, `${channelGetter} != null ? ${channelGetter}.getTmfId() : null`);
+      registerKeyExpression(`${channelGetter} != null ? ${channelGetter}.getId() : null`, `${channelGetter} != null ? ${channelGetter}.getId() : null`);
+    }
+    const elementRawProperties: Record<string, any> = { ...(elementSchema?.properties ?? {}) };
+    if (Array.isArray(elementSchema?.allOf)) {
+      for (const fragment of elementSchema.allOf) {
+        if (fragment?.properties) {
+          Object.assign(elementRawProperties, fragment.properties);
+        } else if (fragment?.$ref) {
+          const refName = extractSchemaRef(fragment);
+          const refSchema = refName ? schemas[refName] ?? resolveSchema(refName, schemas) : undefined;
+          Object.assign(elementRawProperties, refSchema?.properties ?? {});
+        }
+      }
+    }
+    if (existingKeyExpressions.length === 0) {
+      const nestedKeyCandidates = Object.entries(elementRawProperties).filter(
+        ([, propertySchema]) => extractSchemaRef(propertySchema) !== undefined,
+      );
+      for (const [propertyName, propertySchema] of nestedKeyCandidates) {
+        const refName = extractSchemaRef(propertySchema);
+        if (!refName) {
+          continue;
+        }
+        const refSchema = schemas[refName] ?? resolveSchema(refName, schemas);
+        const referencedProps: Record<string, any> = { ...(refSchema?.properties ?? {}) };
+        if (Array.isArray(refSchema?.allOf)) {
+          for (const fragment of refSchema.allOf) {
+            if (fragment?.properties) {
+              Object.assign(referencedProps, fragment.properties);
+            } else if (fragment?.$ref) {
+              const allOfRef = extractSchemaRef(fragment);
+              const allOfSchema = allOfRef ? schemas[allOfRef] ?? resolveSchema(allOfRef, schemas) : undefined;
+              Object.assign(referencedProps, allOfSchema?.properties ?? {});
+            }
+          }
+        }
+        if (Object.keys(referencedProps).length === 0) {
+          continue;
+        }
+        const getter = `{var}.get${upperFirstCamelCase(propertyName)}()`;
+        if (referencedProps.tmfId) {
+          const expr = `${getter} != null ? ${getter}.getTmfId() : null`;
+          registerKeyExpression(expr, expr);
+        }
+        if (referencedProps.id) {
+          const expr = `${getter} != null ? ${getter}.getId() : null`;
+          registerKeyExpression(expr, expr);
+        }
+        if (existingKeyExpressions.length > 0) {
+          break;
+        }
+      }
+    }
+    const keyExpressions = existingKeyExpressions;
     const singularTarget = singularize(targetField);
     const adderName = upperFirstCamelCase(singularTarget);
+    const inlineMappingAnnotations = useInlineElementMapping
+      ? filterMappingAnnotationsByDomainProperty(
+          buildPropertyAliasMappingAnnotations(elementSchemaName, schemas, schemaPropertiesCache, 'request').annotations,
+          collectionBaseEntity,
+          entityDefinitions,
+          domainPropertyCache,
+          'target',
+        )
+      : [];
     collectionFields.push({
       baseEntity,
       sourceField,
@@ -1134,10 +1711,16 @@ function collectCollectionFieldContexts(
       mapperField,
       mapMethod,
       updateMethod,
+      useInlineElementMapping,
+      inlineMapMethod: useInlineElementMapping ? `map${targetGetter}${elementDtoSimple}Item` : undefined,
+      inlineUpdateMethod: useInlineElementMapping ? `update${targetGetter}${elementDtoSimple}Item` : undefined,
+      inlineMappingAnnotations,
       hasId,
       hasTmfId,
       referencedEntity,
       keyExpressions,
+      existingKeyExpressions,
+      incomingKeyExpressions,
     });
   }
   return collectionFields;
@@ -1737,6 +2320,11 @@ function mapperSourceToName(sourceType: string): string {
   return sourceType.split('.').pop() ?? sourceType;
 }
 
+function schemaHasAtTypeAccessor(schemaName: string, schemas: Record<string, any>): boolean {
+  const properties = collectSchemaProperties(schemaName, schemas, new Map());
+  return Object.keys(properties).some(propertyName => propertyName === '@type' || propertyName === 'atType');
+}
+
 function buildPolymorphicMapping(
   schemaName: string,
   schema: any,
@@ -1811,6 +2399,7 @@ function buildPolymorphicMapping(
   const baseDtoFqcn = buildDtoFqcn(schemaName, basePackage);
   const baseDomainFqcn = buildDomainFqcn(baseType, basePackage);
   const isAbstract = !!schema.discriminator || !!schema.abstract || !!schema['x-abstract'] || (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) || (Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
+  const hasDomainDiscriminatorAccessor = schemaHasAtTypeAccessor(schemaName, schemas);
 
   let subtypeInfos: SubtypeInfo[] = subtypeNames
     .map((subtypeName): SubtypeInfo | undefined => {
@@ -1907,6 +2496,7 @@ function buildPolymorphicMapping(
     subtypes: uniqueSubtypeInfos,
     isAbstract,
     baseMethodAnnotations: [],
+    hasDomainDiscriminatorAccessor,
     variants: variants.map(variantName => {
       const normalized = normalizeTypeName(variantName);
       const variantSchema = schemas[variantName];
@@ -2031,11 +2621,13 @@ export function generateHybridMappers(
   const schemaVariants = new Map<string, Set<string>>();
   const requestTargetsBySchema = new Map<string, Set<string>>();
   const responseSourcesBySchema = new Map<string, Set<string>>();
+  const responseSchemasByRequestTarget = new Map<string, Set<string>>();
   const entityMetadata = collectEntityMetadata(operationDescriptors, resolveDomainMetadata, entityDefinitions);
   const relationshipTargets = new Map<string, Map<string, string>>();
   const schemaJsonMetadataCache = new Map<string, SchemaJsonMetadata>();
   const schemaPropertiesCache = new Map<string, SchemaProperties>();
   const fieldReferenceCache = new Map<string, SchemaFieldReferences>();
+  const domainPropertyCache = new Map<string, Set<string>>();
   const polymorphicFactoryFallbacks = new Map<string, PolymorphicFallbackFactoryMetadata>();
   const derivedByBase = collectAllOfDerivedSchemas(schemas);
   derivedSchemasCache = derivedByBase;
@@ -2132,6 +2724,9 @@ export function generateHybridMappers(
       const fieldSchema = properties?.[fieldName];
       const isCollection = fieldSchema?.type === 'array';
       for (const ref of refs) {
+        if (isOpenApiAliasModelSchema(schemas[ref])) {
+          continue;
+        }
         const normalized = normalizeTypeName(ref);
         if (!normalized || normalized === normalizedBase || ABSTRACT_SCHEMAS.has(normalized)) {
           continue;
@@ -2152,6 +2747,7 @@ export function generateHybridMappers(
     }
     target.get(key)!.add(value);
   };
+  const requestTargetKey = (requestSchemaName: string, targetEntityName: string) => `${stripDtoSuffix(requestSchemaName)}->${targetEntityName}`;
 
   for (const schemaName of Object.keys(schemas)) {
     const base = stripDtoSuffix(schemaName);
@@ -2176,6 +2772,9 @@ export function generateHybridMappers(
     if (resourceEntity) {
       if (requestSchema) {
         recordUsage(requestTargetsBySchema, stripDtoSuffix(requestSchema), resourceEntity);
+        if (responseSchema) {
+          recordUsage(responseSchemasByRequestTarget, requestTargetKey(requestSchema, resourceEntity), responseSchema);
+        }
       }
       if (responseSchema) {
         recordUsage(responseSourcesBySchema, stripDtoSuffix(responseSchema), resourceEntity);
@@ -2207,6 +2806,9 @@ export function generateHybridMappers(
     if (!isObjectLikeSchema(schema)) {
       continue;
     }
+    if (isOpenApiAliasModelSchema(schema)) {
+      continue;
+    }
     const baseEntity = stripDtoSuffix(schemaName);
     if (!baseEntity || ABSTRACT_SCHEMAS.has(baseEntity)) {
       continue;
@@ -2234,6 +2836,7 @@ export function generateHybridMappers(
   for (const [schemaName, schema] of Object.entries(schemas)) {
     if (isEnumSchema(schema)) continue;
     if (!isObjectLikeSchema(schema)) continue;
+    if (isOpenApiAliasModelSchema(schema)) continue;
 
     const baseEntity = stripDtoSuffix(schemaName);
     if (ABSTRACT_SCHEMAS.has(baseEntity)) continue;
@@ -2276,6 +2879,9 @@ export function generateHybridMappers(
         continue;
     }
     if (!isObjectLikeSchema(schema)) {
+        continue;
+    }
+    if (isOpenApiAliasModelSchema(schema)) {
         continue;
     }
 
@@ -2328,8 +2934,18 @@ export function generateHybridMappers(
       }
 
       const baseJsonMetadata = collectSchemaJsonMetadata(baseEntity, schemas, schemaJsonMetadataCache, schemaPropertiesCache);
-      const { annotations: baseRequestJsonAnnotations } = buildJsonMappingAnnotations(baseJsonMetadata, 'request');
-      const { annotations: baseResponseJsonAnnotations } = buildJsonMappingAnnotations(baseJsonMetadata, 'response');
+      const { annotations: baseRequestJsonAnnotations, mappedFields: baseRequestJsonMappedFields } = buildJsonMappingAnnotations(
+        baseJsonMetadata,
+        'request',
+      );
+      const { annotations: baseResponseJsonAnnotations, mappedFields: baseResponseJsonMappedFields } = buildJsonMappingAnnotations(
+        baseJsonMetadata,
+        'response',
+      );
+      const { annotations: baseRequestAliasAnnotations, ignoredFields: baseRequestAliasIgnoredFields } =
+        buildAliasModelFieldIgnoreAnnotations(baseEntity, schemas, schemaPropertiesCache, 'request');
+      const { annotations: baseResponseAliasAnnotations, ignoredFields: baseResponseAliasIgnoredFields } =
+        buildAliasModelFieldIgnoreAnnotations(baseEntity, schemas, schemaPropertiesCache, 'response');
 
       const variants = Array.from(operationVariants).sort((a, b) => {
         const normalizedA = normalizeTypeName(a);
@@ -2383,6 +2999,10 @@ export function generateHybridMappers(
         const variantJsonMetadata = collectSchemaJsonMetadata(variant, schemas, schemaJsonMetadataCache, schemaPropertiesCache);
         const { annotations: requestJsonAnnotations, mappedFields: requestMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'request');
         const { annotations: responseJsonAnnotations, mappedFields: responseMappedFields } = buildJsonMappingAnnotations(variantJsonMetadata, 'response');
+        const { annotations: requestAliasAnnotations, ignoredFields: requestAliasIgnoredFields } =
+          buildAliasModelFieldIgnoreAnnotations(variant, schemas, schemaPropertiesCache, 'request');
+        const { annotations: responseAliasAnnotations, ignoredFields: responseAliasIgnoredFields } =
+          buildAliasModelFieldIgnoreAnnotations(variant, schemas, schemaPropertiesCache, 'response');
         const { annotations: requestCycleAnnotations, ignoredFields: requestCycleIgnoredFields } = buildCycleMappingAnnotations(
           variant,
           schemas,
@@ -2401,8 +3021,34 @@ export function generateHybridMappers(
           'response',
           shouldIgnoreReference,
         );
-        const requestExcludedFields = new Set<string>([...requestMappedFields, ...requestCycleIgnoredFields]);
-        const responseExcludedFields = new Set<string>([...responseMappedFields, ...responseCycleIgnoredFields]);
+        const { annotations: requestPropertyAliasAnnotations, mappedFields: requestPropertyAliasMappedFields } =
+          buildPropertyAliasMappingAnnotations(
+            variant,
+            schemas,
+            schemaPropertiesCache,
+            'request',
+            new Set<string>([...requestMappedFields, ...requestAliasIgnoredFields, ...requestCycleIgnoredFields]),
+          );
+        const { annotations: responsePropertyAliasAnnotations, mappedFields: responsePropertyAliasMappedFields } =
+          buildPropertyAliasMappingAnnotations(
+            variant,
+            schemas,
+            schemaPropertiesCache,
+            'response',
+            new Set<string>([...responseMappedFields, ...responseAliasIgnoredFields, ...responseCycleIgnoredFields]),
+          );
+        const requestExcludedFields = new Set<string>([
+          ...requestMappedFields,
+          ...requestPropertyAliasMappedFields,
+          ...requestAliasIgnoredFields,
+          ...requestCycleIgnoredFields,
+        ]);
+        const responseExcludedFields = new Set<string>([
+          ...responseMappedFields,
+          ...responsePropertyAliasMappedFields,
+          ...responseAliasIgnoredFields,
+          ...responseCycleIgnoredFields,
+        ]);
         const {
           annotations: requestAbstractAnnotations,
           abstractTargets: requestAbstractTargets,
@@ -2429,12 +3075,35 @@ export function generateHybridMappers(
         responseAbstractTargets.forEach(target => addReferencedTarget(target));
 
         if (isFVO || isMVO || isBaseVariant) {
-          const annotations = [
-            ...(isFVO ? ['@Mapping(target = "id", ignore = true)'] : []),
-            ...requestJsonAnnotations,
-            ...requestAbstractAnnotations,
-            ...requestCycleAnnotations,
-          ];
+          const generatedUuidFields = buildReadOnlyRequiredUuidFields(
+            baseEntity,
+            variant,
+            schemas,
+            schemaPropertiesCache,
+            entityDefinitions,
+          );
+          const generatedDefaultFields = buildSchemaBackedDefaultFields(
+            baseEntity,
+            variant,
+            [baseEntity],
+            schemas,
+            schemaPropertiesCache,
+            entityDefinitions,
+          );
+          const annotations = filterMappingAnnotationsByDomainProperty(
+            uniqueAnnotations([
+              ...(isFVO ? ['@Mapping(target = "id", ignore = true)'] : []),
+              ...requestJsonAnnotations,
+              ...requestPropertyAliasAnnotations,
+              ...requestAliasAnnotations,
+              ...requestAbstractAnnotations,
+              ...requestCycleAnnotations,
+            ]),
+            baseEntity,
+            entityDefinitions,
+            domainPropertyCache,
+            'target',
+          );
           const methodName = buildVariantMappingMethodName(baseEntity, variant);
           addRequestMapping({
             methodName,
@@ -2442,16 +3111,31 @@ export function generateHybridMappers(
             targetType: domainType,
             annotations,
             sourceSchemaName: variant,
+            generatedUuidFields,
+            generatedDefaultFields,
           });
         }
 
         if (isBaseVariant || (!hasBaseVariant && isFVO)) {
           const responseMethodName = isBaseVariant ? `to${variant}Dto` : `to${variant}`;
+          const annotations = filterMappingAnnotationsByDomainProperty(
+            uniqueAnnotations([
+              ...responseJsonAnnotations,
+              ...responsePropertyAliasAnnotations,
+              ...responseAliasAnnotations,
+              ...responseAbstractAnnotations,
+              ...responseCycleAnnotations,
+            ]),
+            baseEntity,
+            entityDefinitions,
+            domainPropertyCache,
+            'source',
+          );
           addResponseMapping({
             methodName: responseMethodName,
             sourceType: domainType,
             targetType: variantDtoType,
-            annotations: [...responseJsonAnnotations, ...responseAbstractAnnotations, ...responseCycleAnnotations],
+            annotations,
             targetSchemaName: variant,
           });
         }
@@ -2477,6 +3161,14 @@ export function generateHybridMappers(
             'request',
             shouldIgnoreReference,
           );
+          const { annotations: baseRequestPropertyAliasAnnotations, mappedFields: baseRequestPropertyAliasMappedFields } =
+            buildPropertyAliasMappingAnnotations(
+              baseEntity,
+              schemas,
+              schemaPropertiesCache,
+              'request',
+              new Set<string>([...baseRequestJsonMappedFields, ...baseRequestAliasIgnoredFields, ...baseCycleIgnoredFields]),
+            );
           const {
             annotations: fallbackAbstractAnnotations,
             abstractTargets: fallbackRequestTargets,
@@ -2485,21 +3177,53 @@ export function generateHybridMappers(
             schemas,
             schemaPropertiesCache,
             'request',
-            new Set<string>([...baseCycleIgnoredFields]),
+            new Set<string>([
+              ...baseRequestJsonMappedFields,
+              ...baseRequestPropertyAliasMappedFields,
+              ...baseRequestAliasIgnoredFields,
+              ...baseCycleIgnoredFields,
+            ]),
             resolvableAbstractTargets,
           );
           fallbackRequestTargets.forEach(target => addReferencedTarget(target));
+          const generatedUuidFields = buildReadOnlyRequiredUuidFields(
+            targetEntity,
+            baseEntity,
+            schemas,
+            schemaPropertiesCache,
+            entityDefinitions,
+          );
+          const generatedDefaultFields = buildSchemaBackedDefaultFields(
+            targetEntity,
+            baseEntity,
+            [targetEntity, ...(responseSchemasByRequestTarget.get(requestTargetKey(baseEntity, targetEntity)) ?? [])],
+            schemas,
+            schemaPropertiesCache,
+            entityDefinitions,
+          );
+          const annotations = filterMappingAnnotationsByDomainProperty(
+            uniqueAnnotations([
+              '@Mapping(target = "id", ignore = true)',
+              ...baseRequestJsonAnnotations,
+              ...baseRequestPropertyAliasAnnotations,
+              ...baseRequestAliasAnnotations,
+              ...fallbackAbstractAnnotations,
+              ...baseCycleAnnotations,
+            ]),
+            targetEntity,
+            entityDefinitions,
+            domainPropertyCache,
+            'target',
+          );
           addRequestMapping({
             methodName,
             sourceType,
             targetType,
-            annotations: [
-              '@Mapping(target = "id", ignore = true)',
-              ...baseRequestJsonAnnotations,
-              ...fallbackAbstractAnnotations,
-              ...baseCycleAnnotations,
-            ],
+            annotations,
             sourceSchemaName: baseEntity,
+            targetSchemaName: targetEntity,
+            generatedUuidFields,
+            generatedDefaultFields,
           });
         }
       }
@@ -2524,6 +3248,14 @@ export function generateHybridMappers(
             'response',
             shouldIgnoreReference,
           );
+          const { annotations: baseResponsePropertyAliasAnnotations, mappedFields: baseResponsePropertyAliasMappedFields } =
+            buildPropertyAliasMappingAnnotations(
+              baseEntity,
+              schemas,
+              schemaPropertiesCache,
+              'response',
+              new Set<string>([...baseResponseJsonMappedFields, ...baseResponseAliasIgnoredFields, ...baseCycleIgnoredFields]),
+            );
           const {
             annotations: fallbackAbstractAnnotations,
             abstractTargets: fallbackResponseTargets,
@@ -2532,15 +3264,33 @@ export function generateHybridMappers(
             schemas,
             schemaPropertiesCache,
             'response',
-            new Set<string>([...baseCycleIgnoredFields]),
+            new Set<string>([
+              ...baseResponseJsonMappedFields,
+              ...baseResponsePropertyAliasMappedFields,
+              ...baseResponseAliasIgnoredFields,
+              ...baseCycleIgnoredFields,
+            ]),
             resolvableAbstractTargets,
           );
           fallbackResponseTargets.forEach(target => addReferencedTarget(target));
+          const annotations = filterMappingAnnotationsByDomainProperty(
+            uniqueAnnotations([
+              ...baseResponseJsonAnnotations,
+              ...baseResponsePropertyAliasAnnotations,
+              ...baseResponseAliasAnnotations,
+              ...fallbackAbstractAnnotations,
+              ...baseCycleAnnotations,
+            ]),
+            sourceEntity,
+            entityDefinitions,
+            domainPropertyCache,
+            'source',
+          );
           addResponseMapping({
             methodName,
             sourceType,
             targetType,
-            annotations: [...baseResponseJsonAnnotations, ...fallbackAbstractAnnotations, ...baseCycleAnnotations],
+            annotations,
             targetSchemaName: baseEntity,
           });
         }
@@ -2645,6 +3395,7 @@ export function generateHybridMappers(
       usesMappers: Array.from(subtypeMapperFqcns).sort(),
       isAbstract: poly.isAbstract,
       baseMethodAnnotations: poly.baseMethodAnnotations,
+      hasDomainDiscriminatorAccessor: poly.hasDomainDiscriminatorAccessor,
     } satisfies PolymorphicHelperMapperContext;
   });
 
@@ -2660,6 +3411,8 @@ export function generateHybridMappers(
         basePackage,
         schemaPropertiesCache,
         polymorphicHelperTypes,
+        entityDefinitions,
+        domainPropertyCache,
         relationshipTargets,
         mapping.targetSchemaName ?? mapper.entityName,
       )

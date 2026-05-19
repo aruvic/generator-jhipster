@@ -413,6 +413,21 @@ function createPolymorphicMapping(
     }
   }
 
+  // MapStruct applies @SubclassMapping declarations in order. To avoid
+  // warnings about broad supertypes shadowing their concrete subtypes
+  // (e.g., PartyRole before Supplier/Producer/Consumer), push the
+  // common supertype entries to the end of the list. Use a lightweight
+  // heuristic based on simple class names so we don't need the full
+  // inheritance graph here.
+  const specificity = (fqcn: string) => {
+    const simple = fqcn.substring(fqcn.lastIndexOf('.') + 1);
+    // PartyRole* acts as a base for several generated variants; keep it last.
+    if (simple.includes('PartyRole')) return 0;
+    // Longer names tend to be more specific (e.g., BusinessPartner > Party).
+    return simple.length;
+  };
+  subtypes.sort((a, b) => specificity(b.targetType) - specificity(a.targetType));
+
   if (subtypes.length === 0) {
     return null;
   }

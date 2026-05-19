@@ -114,9 +114,7 @@ _%>
         return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
 <%_ } else { _%>
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.CREATED);
-        // Persisting a new resource should return a creation status even if the contract advertises 204.
-        // This keeps TMF create/event handlers aligned with Location header expectations.
-        final HttpStatus resolvedStatus = successStatus == HttpStatus.NO_CONTENT ? HttpStatus.CREATED : successStatus;
+        final HttpStatus resolvedStatus = successStatus;
         LOG.info("Creating <%= resolvedResourceSlug %>");
         <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
         if (entity == null) {
@@ -125,6 +123,11 @@ _%>
 <%_ if (op.tmfIdAccessor) { _%>
         if (entity.get<%= op.tmfIdAccessor %>() == null) {
             entity.set<%= op.tmfIdAccessor %>(java.util.UUID.randomUUID());
+        }
+<%_ } _%>
+<%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
+        if (entity.get<%= field.accessor %>() == null) {
+            entity.set<%= field.accessor %>(<%- field.valueExpression %>);
         }
 <%_ } _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);

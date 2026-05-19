@@ -443,6 +443,99 @@ describe('Hybrid mapper generator', () => {
     );
   });
 
+  it('keeps incoming key expressions for collection merges when identifiers are present', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/parents/{id}',
+          method: 'PUT',
+          requestBodySchema: 'ParentMVO',
+          responseSchema: 'Parent',
+        },
+      ],
+      schemas: {
+        Child: {
+          type: 'object',
+          properties: {
+            tmfId: { type: 'string' },
+            id: { type: 'string' },
+          },
+        },
+        Parent: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            children: { type: 'array', items: { $ref: '#/components/schemas/Child' } },
+          },
+        },
+        ParentMVO: {
+          type: 'object',
+          properties: {
+            children: { type: 'array', items: { $ref: '#/components/schemas/Child' } },
+          },
+        },
+      },
+    };
+
+    const { entityMappers } = generateHybridMappers(spec, 'com.example');
+    const mapper = entityMappers.find(entry => entry.entityName === 'Parent');
+    expect(mapper).toBeDefined();
+    const requestMapping = mapper?.requestMappings.find(entry => entry.sourceType.endsWith('ParentMVO'));
+    const childrenField = requestMapping?.collectionFields?.find(field => field.targetField === 'children');
+    expect(childrenField?.existingKeyExpressions).toEqual(['{var}.getTmfId()', '{var}.getId()']);
+    expect(childrenField?.incomingKeyExpressions).toEqual(['{var}.getTmfId()', '{var}.getId()']);
+  });
+
+  it('derives merge keys from referenced identifiers when element has none', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/party-interaction/{id}',
+          method: 'PATCH',
+          requestBodySchema: 'PartyInteractionMVO',
+          responseSchema: 'PartyInteraction',
+        },
+      ],
+      schemas: {
+        ChannelRef: {
+          type: 'object',
+          properties: {
+            tmfId: { type: 'string' },
+          },
+        },
+        RelatedChannel: {
+          type: 'object',
+          properties: {
+            role: { type: 'string' },
+            channel: { $ref: '#/components/schemas/ChannelRef' },
+          },
+        },
+        PartyInteraction: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            relatedChannels: { type: 'array', items: { $ref: '#/components/schemas/RelatedChannel' } },
+          },
+        },
+        PartyInteractionMVO: {
+          type: 'object',
+          properties: {
+            relatedChannels: { type: 'array', items: { $ref: '#/components/schemas/RelatedChannel' } },
+          },
+        },
+      },
+    };
+
+    const { entityMappers } = generateHybridMappers(spec, 'eu.example');
+    const mapper = entityMappers.find(entry => entry.entityName === 'PartyInteraction');
+    expect(mapper).toBeDefined();
+    const requestMapping = mapper?.requestMappings.find(entry => entry.sourceType.endsWith('PartyInteractionMVO'));
+    const relatedChannelsField = requestMapping?.collectionFields?.find(field => field.targetField === 'relatedChannels');
+    const expectedExpr = '{var}.getChannel() != null ? {var}.getChannel().getTmfId() : null';
+    expect(relatedChannelsField?.existingKeyExpressions).toEqual([expectedExpr]);
+    expect(relatedChannelsField?.incomingKeyExpressions).toEqual([expectedExpr]);
+  });
+
   it('ignores nested fields backed by abstract RefOrValue schemas so MapStruct compiles', () => {
     const spec: ParsedOpenAPISpec = {
       operations: [
