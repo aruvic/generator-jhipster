@@ -65,6 +65,7 @@ const BASE_TEMPLATE_IMPORTS = new Set([
   'java.net.URI',
   'java.nio.charset.StandardCharsets',
   'java.util.HashSet',
+  'java.util.Iterator',
   'java.util.List',
   'java.util.Optional',
   'java.util.Set',
@@ -136,8 +137,12 @@ type OperationContext = {
   responseEntityName?: string;
   responseEntityFqcn?: string;
   successStatus?: number;
-  tmfIdAccessor?: string;
+  generatedUuidInitializers?: GeneratedUuidInitializer[];
   defaultFieldInitializers?: DefaultFieldInitializer[];
+};
+
+type GeneratedUuidInitializer = {
+  accessor: string;
 };
 
 type DefaultFieldInitializer = {
@@ -404,6 +409,28 @@ function buildSchemaDefaultValueExpression(field: any | undefined, schema: any):
   const defaultValue = schemaDefaultValue(schema);
   const expressionField = field?.fieldType ? field : { ...(field ?? {}), fieldType: fieldTypeFromSchema(schema) };
   return buildDefaultValueExpression(expressionField, defaultValue);
+}
+
+function isIdentifierFieldName(fieldName?: string): boolean {
+  if (!fieldName) {
+    return false;
+  }
+  return fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName) || /(?:Id|ID)$/.test(fieldName);
+}
+
+function buildRequiredUuidInitializers(persistenceEntity: EntityInfo): GeneratedUuidInitializer[] {
+  const fields = Array.isArray(persistenceEntity.definition?.fields) ? persistenceEntity.definition.fields : [];
+  const initializers: GeneratedUuidInitializer[] = [];
+  for (const field of fields) {
+    const fieldName = field?.fieldName ?? field?.name;
+    const fieldType = typeof field?.fieldType === 'string' ? field.fieldType.toLowerCase() : '';
+    const validationRules = Array.isArray(field?.fieldValidateRules) ? field.fieldValidateRules : [];
+    if (!fieldName || fieldType !== 'uuid' || !validationRules.includes('required') || !isIdentifierFieldName(fieldName)) {
+      continue;
+    }
+    initializers.push({ accessor: pascalize(toDomainPropertyName(fieldName)) });
+  }
+  return initializers;
 }
 
 function buildSchemaBackedDefaultInitializers(
@@ -702,6 +729,9 @@ function matchesTypeSignature(candidate: string, expectedFqcn?: string, expected
     if (normalizedCandidate && normalizedExpected && normalizedCandidate === normalizedExpected) {
       return true;
     }
+    if (normalizedExpected && !normalizedExpected.includes('.')) {
+      return candidateSimple === normalizedExpected;
+    }
     const expectedSimpleFromFqcn = extractSimpleType(expectedFqcn);
     if (expectedSimpleFromFqcn && normalizedCandidate && !normalizedCandidate.includes('.')) {
       return candidateSimple === expectedSimpleFromFqcn;
@@ -937,20 +967,26 @@ function resolveResponseMapperMethod(
     method =>
       !isCollectionTypeSignature(method.returnType) &&
       matchesTypeSignature(method.returnType, responseReturnFqcn, responseEntityName) &&
-      (method.parameterTypes.length === 0 ||
-        method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName))),
+      method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName)),
   );
   if (preferred) {
     return preferred.name;
   }
 
-  const fallbackCandidates = [`to${responseEntityName}Dto`, `to${responseEntityName}`];
+  const responseReturnSimple = extractSimpleType(responseReturnFqcn);
+  const fallbackCandidates = Array.from(
+    new Set([
+      responseReturnSimple ? `to${responseReturnSimple}` : undefined,
+      responseReturnSimple ? `to${responseReturnSimple}Dto` : undefined,
+      `to${responseEntityName}Dto`,
+      `to${responseEntityName}`,
+    ].filter((candidate): candidate is string => Boolean(candidate))),
+  );
 
   const bestFallback = fallbackCandidates.find(candidate =>
     methods.some(method =>
       method.name === candidate &&
-      (method.parameterTypes.length === 0 ||
-        method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName)))
+      method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName))
     )
   );
 
@@ -958,9 +994,7 @@ function resolveResponseMapperMethod(
     return bestFallback;
   }
 
-  return fallbackCandidates.find(candidate =>
-    methods.some(method => method.name === candidate),
-  );
+  return undefined;
 }
 
 function classifyCrudOperation(
@@ -995,7 +1029,7 @@ function classifyCrudOperation(
       if (method === 'PATCH' || lowerOpId.startsWith('patch') || lowerOpId.includes('patch')) {
         kind = 'patch';
       } else if (method === 'PUT' || lowerOpId.includes('update')) {
-        kind = 'patch';
+        kind = hasPathParams ? 'patch' : 'create';
       }
       break;
     default:
@@ -1031,7 +1065,7 @@ function classifyCrudOperation(
         kind = 'patch';
         break;
       case 'PUT':
-        kind = 'patch';
+        kind = hasPathParams ? 'patch' : 'create';
         break;
       default:
         break;
@@ -1440,18 +1474,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           }
         }
         opContext.willPersist = true;
-        const tmfIdField = persistenceEntity?.definition?.fields?.find(
-          (field: any) => field?.fieldName?.toLowerCase() === 'tmfid',
-        );
-        if (
-          tmfIdField &&
-          typeof tmfIdField.fieldType === 'string' &&
-          tmfIdField.fieldType.toLowerCase() === 'uuid' &&
-          Array.isArray(tmfIdField.fieldValidateRules) &&
-          tmfIdField.fieldValidateRules.includes('required')
-        ) {
-          opContext.tmfIdAccessor = pascalize(tmfIdField.fieldName ?? 'tmfId');
-        }
+        opContext.generatedUuidInitializers = buildRequiredUuidInitializers(persistenceEntity);
         const sourceOperation = findSourceOperation(operation, sourceOfTruthSpec) ?? operation;
         opContext.defaultFieldInitializers = buildSchemaBackedDefaultInitializers(
           persistenceEntity,
@@ -1468,8 +1491,22 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           primary: responseEntity.name === context.resourceName,
         });
         const responseReturnType =
-          opContext.responseResolvedType?.fullType ?? (dtoPackage ? `${dtoPackage}.${opContext.responseType}` : undefined);
+          opContext.responseResolvedType?.componentType?.fullType ??
+          opContext.responseResolvedType?.fullType ??
+          (dtoPackage ? `${dtoPackage}.${opContext.responseType}` : undefined);
         const responseMapperMethods = mapperMethodsByName.get(responseMapper.simpleName);
+        const acceptsPersistenceSource = (methods: MapperMethodSignature[] | undefined, methodName: string | undefined): boolean => {
+          if (!methods || !methodName) {
+            return true;
+          }
+          const method = methods.find(candidate => candidate.name === methodName);
+          return Boolean(
+            method &&
+              method.parameterTypes.some(param =>
+                matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+              ),
+          );
+        };
         const responseMapperMethod = resolveResponseMapperMethod(
           responseMapper.simpleName,
           responseEntity.name,
@@ -1487,18 +1524,16 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
             const resolvedMethod = responseMapperMethods.find(method => method.name === responseMapperMethod);
             const acceptsSource =
               resolvedMethod &&
-              (!resolvedMethod.parameterTypes?.length ||
-                resolvedMethod.parameterTypes.some(param =>
-                  matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
-                ));
+              resolvedMethod.parameterTypes.some(param =>
+                matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+              );
             if (!acceptsSource) {
               const alternative = responseMapperMethods.find(
                 method =>
                   matchesTypeSignature(method.returnType, responseReturnType, responseEntity.name) &&
-                  (method.parameterTypes.length === 0 ||
-                    method.parameterTypes.some(param =>
-                      matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
-                    )),
+                  method.parameterTypes.some(param =>
+                    matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+                  ),
               );
               if (alternative) {
                 opContext.responseMapperMethod = alternative.name;
@@ -1510,14 +1545,36 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
               const candidateMatches =
                 candidate &&
                 matchesTypeSignature(candidate.returnType, responseReturnType, responseEntity.name) &&
-                (candidate.parameterTypes.length === 0 ||
-                  candidate.parameterTypes.some(param =>
-                    matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
-                  ));
+                candidate.parameterTypes.some(param =>
+                  matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+                );
               if (candidateMatches) {
                 opContext.responseMapperMethod = candidateName;
               }
             }
+          }
+        }
+        if (
+          (!opContext.responseMapperMethod || !acceptsPersistenceSource(responseMapperMethods, opContext.responseMapperMethod)) &&
+          responseEntity.name !== persistenceEntity.name
+        ) {
+          const persistenceMapper = ensureMapperDependencyContext(context, persistenceEntity.name, {
+            primary: persistenceEntity.name === context.resourceName,
+          });
+          const persistenceMapperMethods = mapperMethodsByName.get(persistenceMapper.simpleName);
+          const persistenceResponseMethod = resolveResponseMapperMethod(
+            persistenceMapper.simpleName,
+            responseEntity.name,
+            responseReturnType,
+            opContext.persistenceEntityFqcn,
+            opContext.persistenceEntityName,
+            mapperMethodsByName,
+          );
+          if (persistenceResponseMethod && acceptsPersistenceSource(persistenceMapperMethods, persistenceResponseMethod)) {
+            opContext.responseMapperField = persistenceMapper.fieldName;
+            opContext.responseMapperMethod = persistenceResponseMethod;
+            opContext.responseEntityName = persistenceEntity.name;
+            opContext.responseEntityFqcn = persistenceEntity.fqcn;
           }
         }
       }
@@ -1820,9 +1877,10 @@ function buildOperationContext(
     }
   } else {
     const pathParams = parameters.filter(param => param.in === 'path');
-    const otherParams = parameters.filter(param => param.in !== 'path');
+    const requiredParams = parameters.filter(param => param.in !== 'path' && (param.required ?? false));
+    const optionalParams = parameters.filter(param => param.in !== 'path' && !(param.required ?? false));
 
-    for (const param of [...pathParams, ...otherParams]) {
+    const addParameterContext = (param: OpenAPIParameter) => {
       const sanitizedVarName = toJavaParamName(param.name ?? 'param', { usedNames: paramNameSet });
       const resolvedType = param.schema ? resolveJavaType(param.schema, resolverContext, resolverOptions) : undefined;
       const required = param.required ?? param.in === 'path';
@@ -1836,9 +1894,12 @@ function buildOperationContext(
         required,
         orderIndex: paramOrder++,
       });
-    }
+    };
 
-    if (operation.requestBodySchemaObject) {
+    const addBodyParameterContext = () => {
+      if (!operation.requestBodySchemaObject) {
+        return;
+      }
       const bodyType = resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions);
       const bodyVarName = toJavaParamName(operation.requestBodySchema ?? 'body', { usedNames: paramNameSet, fallback: 'body' });
       parameterContexts.push({
@@ -1851,6 +1912,22 @@ function buildOperationContext(
         required: operation.requestBodyRequired,
         orderIndex: paramOrder++,
       });
+    };
+
+    for (const param of pathParams) {
+      addParameterContext(param);
+    }
+    for (const param of requiredParams) {
+      addParameterContext(param);
+    }
+    if (operation.requestBodyRequired) {
+      addBodyParameterContext();
+    }
+    for (const param of optionalParams) {
+      addParameterContext(param);
+    }
+    if (!operation.requestBodyRequired) {
+      addBodyParameterContext();
     }
   }
 
@@ -1858,10 +1935,6 @@ function buildOperationContext(
     ? resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions)
     : undefined;
   tagRequestBodyParameter(parameterContexts, operation, resolvedRequestBodyType);
-
-  if (!parsedSignature) {
-    sortParameterContexts(parameterContexts);
-  }
 
   const bodyParam = parameterContexts.find(param => param.in === 'body');
   const requestBodyResolvedType = resolvedRequestBodyType ?? bodyParam?.resolvedType;
@@ -1915,7 +1988,7 @@ function determineParamLocation(annotations: string[] = []): string | undefined 
 
 function removeModifiers(type: string): string {
   return type
-    .replace(/\bfinal\b/g, '')
+    .replace(/\b(?:public|protected|private|abstract|static|final|default|synchronized|native|strictfp)\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1940,42 +2013,6 @@ function replaceVarNameInDeclaration(declaration: string, newName: string): stri
     return newName;
   }
   return `${trimmed.substring(0, lastSpace + 1)}${newName}`;
-}
-
-const PARAMETER_LOCATION_ORDER: Record<string, number> = {
-  path: 0,
-  query: 1,
-  header: 2,
-  cookie: 3,
-  body: 4,
-  form: 5,
-  unknown: 6,
-};
-
-function sortParameterContexts(parameters: ParameterContext[]): void {
-  parameters.sort((left, right) => {
-    const requiredRank = (value?: boolean): number => (value ? 0 : 1);
-    const leftRequired = requiredRank(left.required);
-    const rightRequired = requiredRank(right.required);
-    if (leftRequired !== rightRequired) {
-      return leftRequired - rightRequired;
-    }
-
-    const locationRank = (value?: string): number => {
-      if (!value) {
-        return PARAMETER_LOCATION_ORDER.unknown;
-      }
-      return PARAMETER_LOCATION_ORDER[value] ?? PARAMETER_LOCATION_ORDER.unknown;
-    };
-
-    const leftLocation = locationRank(left.in);
-    const rightLocation = locationRank(right.in);
-    if (leftLocation !== rightLocation) {
-      return leftLocation - rightLocation;
-    }
-
-    return (left.orderIndex ?? 0) - (right.orderIndex ?? 0);
-  });
 }
 
 function tagRequestBodyParameter(parameters: ParameterContext[], operation: OpenAPIOperation, resolvedType?: JavaResolvedType): void {

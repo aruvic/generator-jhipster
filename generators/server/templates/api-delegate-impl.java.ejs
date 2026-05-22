@@ -18,6 +18,7 @@ import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -105,6 +106,7 @@ _%>
     const responseField = responseMapperField(op);
     const responseMethod = responseMapperMethod(op);
     const hasResponseBody = Boolean(op.responseType);
+    const canMapResponseBody = Boolean(responseField && responseMethod);
     const persistenceTypeFqcn = persistenceType(op);
 _%>
     @Transactional
@@ -120,9 +122,9 @@ _%>
         if (entity == null) {
             return <%= interfaceName %>.super.<%= op.methodName %>(<%- superArgs %>);
         }
-<%_ if (op.tmfIdAccessor) { _%>
-        if (entity.get<%= op.tmfIdAccessor %>() == null) {
-            entity.set<%= op.tmfIdAccessor %>(java.util.UUID.randomUUID());
+<%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
+        if (entity.get<%= field.accessor %>() == null) {
+            entity.set<%= field.accessor %>(java.util.UUID.randomUUID());
         }
 <%_ } _%>
 <%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
@@ -132,21 +134,25 @@ _%>
 <%_ } _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(entity);
         LOG.info(
-            "Created <%= resolvedResourceSlug %> id={} tmfId={}",
-            saved != null ? saved.getId() : null<%_ if (op.tmfIdAccessor) { _%>,
-            saved != null ? saved.get<%= op.tmfIdAccessor %>() : null<%_ } else { _%>, null<%_ } _%>
+            "Created <%= resolvedResourceSlug %> id={}",
+            saved != null ? saved.getId() : null
         );
 <%_ if (!hasResponseBody) { _%>
         if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).build();
         }
         return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
-<%_ } else { _%>
+<%_ } else if (canMapResponseBody) { _%>
         <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = this.<%= responseField %>.<%= responseMethod %>(saved);
         if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);
         }
         return ResponseEntity.status(resolvedStatus).body(responseBody);
+<%_ } else { _%>
+        if (resolvedStatus == HttpStatus.CREATED) {
+            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(null);
+        }
+        return ResponseEntity.status(resolvedStatus).body(null);
 <%_ } _%>
 <%_ } _%>
     }
@@ -310,13 +316,13 @@ _%>
         <%= persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
 <%_ if (updateMethod) { _%>
         LOG.info("Patching <%= resolvedResourceSlug %> id={}", parsedId.orElse(null));
-        <%- payloadType %> currentPayload = convertValue(this.<%= responseField %>.<%= responseMethod %>(existing), <%- payloadType %>.class);
-        JsonNode baseNode = toJsonObject(currentPayload);
-        JsonNode patchNode = readPatchNode(<%= bodyParam.varName %>);
+        JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(this.<%= responseField %>.<%= responseMethod %>(existing)));
+        JsonNode patchNode = normalizePatchDiscriminators(readPatchNode(<%= bodyParam.varName %>));
         PatchFormat patchFormat = resolvePatchFormat(resolveContentType(), patchNode);
         JsonNode patchedNode = applyPatchedNode(baseNode, patchNode, patchFormat);
         enforceImmutableIdentifiers(baseNode, patchedNode);
-        <%- payloadType %> mergedPayload = convertAndValidate(patchedNode, <%- payloadType %>.class);
+        convertAndValidate(patchedNode, <%- payloadType %>.class);
+        <%- payloadType %> mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), <%- payloadType %>.class);
         try {
             this.<%= mapperField %>.<%= updateMethod %>(existing, mergedPayload);
         } catch (IllegalArgumentException ex) {
@@ -338,9 +344,8 @@ _%>
 <%_ if (hasPatchMapping) { _%>
         <%= persistenceTypeFqcn %> saved = this.<%= repoField %>.save(existing);
         LOG.info(
-            "Patched <%= resolvedResourceSlug %> id={} tmfId={}",
-            saved != null ? saved.getId() : null<%_ if (op.tmfIdAccessor) { _%>,
-            saved != null ? saved.get<%= op.tmfIdAccessor %>() : null<%_ } else { _%>, null<%_ } _%>
+            "Patched <%= resolvedResourceSlug %> id={}",
+            saved != null ? saved.getId() : null
         );
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Object' %>) null);
@@ -463,6 +468,31 @@ _%>
         return node;
     }
 
+    private JsonNode normalizePatchDiscriminators(JsonNode node) {
+        if (node instanceof ObjectNode objectNode) {
+            JsonNode typeNode = objectNode.get("@type");
+            if (typeNode != null && typeNode.isTextual()) {
+                String normalizedType = normalizeDtoRoleDiscriminator(typeNode.asText());
+                if (!normalizedType.equals(typeNode.asText())) {
+                    objectNode.put("@type", normalizedType);
+                }
+            }
+            Iterator<JsonNode> children = objectNode.elements();
+            while (children.hasNext()) {
+                normalizePatchDiscriminators(children.next());
+            }
+        } else if (node instanceof ArrayNode arrayNode) {
+            for (JsonNode child : arrayNode) {
+                normalizePatchDiscriminators(child);
+            }
+        }
+        return node;
+    }
+
+    private String normalizeDtoRoleDiscriminator(String value) {
+        return value != null ? value.replaceFirst("_(?:FVO|MVO|RES)$", "") : "";
+    }
+
     private PatchFormat resolvePatchFormat(String contentType, JsonNode patchNode) {
         final String normalized = contentType != null ? contentType.toLowerCase() : "";
         if (normalized.contains("json-patch-query")) {
@@ -494,6 +524,82 @@ _%>
             return applyStandardJsonPatch(baseNode, patchArray);
         }
         return applyMergePatch(baseNode, patchNode);
+    }
+
+    private JsonNode pruneUnpatchedComplexFields(JsonNode patchedNode, JsonNode patchNode, PatchFormat format) {
+        if (!(patchedNode instanceof ObjectNode patchedObject)) {
+            return patchedNode;
+        }
+        if (replacesWholeDocument(patchNode, format)) {
+            return patchedNode;
+        }
+        Set<String> patchedFields = topLevelPatchedFields(patchNode, format);
+        ObjectNode mappingNode = patchedObject.deepCopy();
+        List<String> fieldsToRemove = new ArrayList<>();
+        Iterator<Map.Entry<String, JsonNode>> fields = mappingNode.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> entry = fields.next();
+            if (!patchedFields.contains(entry.getKey()) && isComplexPatchField(entry.getValue())) {
+                fieldsToRemove.add(entry.getKey());
+            }
+        }
+        fieldsToRemove.forEach(mappingNode::remove);
+        return mappingNode;
+    }
+
+    private boolean isComplexPatchField(JsonNode node) {
+        return node != null && (node.isObject() || node.isArray());
+    }
+
+    private boolean replacesWholeDocument(JsonNode patchNode, PatchFormat format) {
+        if (format == PatchFormat.MERGE_PATCH) {
+            return patchNode != null && !patchNode.isObject();
+        }
+        if (!(patchNode instanceof ArrayNode patchArray)) {
+            return false;
+        }
+        for (JsonNode operation : patchArray) {
+            JsonNode path = operation.get("path");
+            if (path != null && path.isTextual() && path.asText().isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Set<String> topLevelPatchedFields(JsonNode patchNode, PatchFormat format) {
+        Set<String> fields = new LinkedHashSet<>();
+        if (format == PatchFormat.MERGE_PATCH) {
+            if (patchNode instanceof ObjectNode patchObject) {
+                patchObject.fieldNames().forEachRemaining(fields::add);
+            }
+            return fields;
+        }
+        if (patchNode instanceof ArrayNode patchArray) {
+            for (JsonNode operation : patchArray) {
+                JsonNode path = operation.get("path");
+                if (path != null && path.isTextual()) {
+                    String field = topLevelJsonPointerField(path.asText());
+                    if (!field.isBlank()) {
+                        fields.add(field);
+                    }
+                }
+            }
+        }
+        return fields;
+    }
+
+    private String topLevelJsonPointerField(String pointer) {
+        if (pointer == null || pointer.isBlank() || !pointer.startsWith("/")) {
+            return "";
+        }
+        int nextSlash = pointer.indexOf('/', 1);
+        String encoded = nextSlash >= 0 ? pointer.substring(1, nextSlash) : pointer.substring(1);
+        return decodeJsonPointerSegment(encoded);
+    }
+
+    private String decodeJsonPointerSegment(String segment) {
+        return segment.replace("~1", "/").replace("~0", "~");
     }
 
     private JsonNode applyMergePatch(JsonNode baseNode, JsonNode patchNode) {
@@ -759,51 +865,45 @@ _%>
 
     private void enforceImmutableRecursive(JsonNode original, JsonNode patched, boolean isRoot) {
         if (original.isObject() && patched.isObject()) {
-            JsonNode originalTmfId = original.get("tmfId");
-            JsonNode patchedTmfId = patched.get("tmfId");
-            if (!isNullOrMissing(originalTmfId) && !isNullOrMissing(patchedTmfId) && !originalTmfId.equals(patchedTmfId)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field 'tmfId' is immutable");
-            }
-            if (isRoot || isNullOrMissing(originalTmfId)) {
-                JsonNode originalId = original.get("id");
-                JsonNode patchedId = patched.get("id");
-                if (!isNullOrMissing(originalId) && !isNullOrMissing(patchedId) && !originalId.equals(patchedId)) {
-                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field 'id' is immutable");
-                }
-            }
             original.fieldNames().forEachRemaining(field -> {
-                if ("id".equals(field) || "tmfId".equals(field)) {
-                    return;
-                }
                 JsonNode originalChild = original.get(field);
                 JsonNode patchedChild = patched.get(field);
+                if (isIdentifierField(field)) {
+                    if (!isNullOrMissing(originalChild) && !isNullOrMissing(patchedChild) && !originalChild.equals(patchedChild)) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field '" + field + "' is immutable");
+                    }
+                    return;
+                }
                 if (originalChild != null && patchedChild != null) {
                     enforceImmutableRecursive(originalChild, patchedChild, false);
                 }
             });
         } else if (original.isArray() && patched.isArray()) {
-            Map<String, JsonNode> patchedByTmfId = new LinkedHashMap<>();
-            Map<String, JsonNode> patchedById = new LinkedHashMap<>();
+            Map<String, JsonNode> patchedByIdentifier = new LinkedHashMap<>();
             patched.forEach(node -> {
-                JsonNode tmfIdNode = node.get("tmfId");
-                if (!isNullOrMissing(tmfIdNode)) {
-                    patchedByTmfId.put(tmfIdNode.asText(), node);
-                }
-                JsonNode idNode = node.get("id");
-                if (!isNullOrMissing(idNode)) {
-                    patchedById.put(idNode.asText(), node);
+                if (node != null && node.isObject()) {
+                    node.fieldNames().forEachRemaining(field -> {
+                        if (isIdentifierField(field)) {
+                            JsonNode identifierNode = node.get(field);
+                            if (!isNullOrMissing(identifierNode)) {
+                                patchedByIdentifier.put(identifierKey(field, identifierNode), node);
+                            }
+                        }
+                    });
                 }
             });
             original.forEach(node -> {
                 JsonNode match = null;
-                JsonNode tmfIdNode = node.get("tmfId");
-                if (!isNullOrMissing(tmfIdNode)) {
-                    match = patchedByTmfId.get(tmfIdNode.asText());
-                }
-                if (match == null) {
-                    JsonNode idNode = node.get("id");
-                    if (!isNullOrMissing(idNode)) {
-                        match = patchedById.get(idNode.asText());
+                if (node != null && node.isObject()) {
+                    Iterator<String> fields = node.fieldNames();
+                    while (fields.hasNext() && match == null) {
+                        String field = fields.next();
+                        if (isIdentifierField(field)) {
+                            JsonNode identifierNode = node.get(field);
+                            if (!isNullOrMissing(identifierNode)) {
+                                match = patchedByIdentifier.get(identifierKey(field, identifierNode));
+                            }
+                        }
                     }
                 }
                 if (match != null) {
@@ -811,6 +911,14 @@ _%>
                 }
             });
         }
+    }
+
+    private boolean isIdentifierField(String fieldName) {
+        return fieldName != null && ("id".equals(fieldName) || fieldName.matches("(?i)(^|.*[_-])id$") || fieldName.endsWith("Id") || fieldName.endsWith("ID"));
+    }
+
+    private String identifierKey(String fieldName, JsonNode value) {
+        return fieldName + "=" + value.asText();
     }
 
     private boolean isNullOrMissing(JsonNode node) {

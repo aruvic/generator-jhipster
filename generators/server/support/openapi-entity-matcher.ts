@@ -82,8 +82,10 @@ const VARIANT_SUFFIXES = new Set([
   'command',
   'dto',
   'input',
+  'model',
   'output',
   'resource',
+  'schema',
   'id',
   'ids',
 ]);
@@ -159,8 +161,8 @@ export class OpenApiEntityMatcher {
       matchedEntity = this.matchBySchemas([...requestSchemaNames, ...responseSchemaNames]);
     }
 
-    const requestEntityMatch = this.matchPreferredEntity(requestSchemaNames, matchedEntity);
-    const responseEntityMatch = this.matchPreferredEntity(responseSchemaNames, matchedEntity);
+    const requestEntityMatch = this.matchPreferredEntity(requestSchemaNames, matchedEntity, spec);
+    const responseEntityMatch = this.matchPreferredEntity(responseSchemaNames, matchedEntity, spec);
 
     let resourceName = matchedEntity?.name;
     let resourceToken = matchedEntity ? undefined : this.derivePrimaryToken(operation);
@@ -216,7 +218,7 @@ export class OpenApiEntityMatcher {
     return descriptor;
   }
 
-  private matchPreferredEntity(schemaNames: string[], fallback?: EntitySummary): EntitySummary | undefined {
+  private matchPreferredEntity(schemaNames: string[], fallback?: EntitySummary, spec?: ParsedOpenAPISpec): EntitySummary | undefined {
     let directMatch: EntitySummary | undefined;
     let bestMatch: EntitySummary | undefined;
 
@@ -236,6 +238,10 @@ export class OpenApiEntityMatcher {
       }
     }
 
+    if (directMatch && fallback && directMatch.canonical !== fallback.canonical && this.isComposedAliasOfEntity(schemaNames[0], fallback, spec)) {
+      return fallback;
+    }
+
     if (directMatch) {
       return directMatch;
     }
@@ -245,6 +251,25 @@ export class OpenApiEntityMatcher {
     }
 
     return undefined;
+  }
+
+  private isComposedAliasOfEntity(schemaName: string | undefined, entity: EntitySummary, spec?: ParsedOpenAPISpec): boolean {
+    if (!schemaName || !spec?.schemas) {
+      return false;
+    }
+    const schema = spec.schemas[schemaName] ?? spec.schemas[normalizeTypeName(schemaName)];
+    if (!schema || schema.properties || schema.additionalProperties) {
+      return false;
+    }
+
+    const composition = Array.isArray(schema.allOf) ? schema.allOf : undefined;
+    if (!composition || composition.length !== 1) {
+      return false;
+    }
+
+    const ref = extractSchemaRef(composition[0]);
+    const refCanonical = this.canonicalize(stripDtoSuffix(normalizeTypeName(ref ?? '')));
+    return Boolean(refCanonical && refCanonical === entity.canonical);
   }
 
   private registerEntityAliases(summary: EntitySummary, entity: any): void {
@@ -366,6 +391,12 @@ export class OpenApiEntityMatcher {
     }
     const normalized = normalizeTypeName(schemaName);
     const candidates = new Set<string>();
+
+    const rawStripped = stripDtoSuffix(schemaName);
+    const canonicalRawStripped = this.canonicalize(rawStripped);
+    if (canonicalRawStripped) {
+      candidates.add(canonicalRawStripped);
+    }
 
     const canonicalMain = this.canonicalize(normalized);
     if (canonicalMain) {

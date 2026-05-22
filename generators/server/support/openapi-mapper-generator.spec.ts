@@ -60,6 +60,10 @@ describe('OpenAPI Mapper Generator', () => {
       expect(stripDtoSuffix('PartyRoleMVO')).toBe('PartyRole');
     });
 
+    it('should strip separated response DTO role suffix', () => {
+      expect(stripDtoSuffix('Resource_RES')).toBe('Resource');
+    });
+
     it('should strip DTO suffix', () => {
       expect(stripDtoSuffix('PartyDTO')).toBe('Party');
     });

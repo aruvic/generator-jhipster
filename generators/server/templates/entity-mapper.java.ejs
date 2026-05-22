@@ -9,7 +9,11 @@
 package <%- packageName %>;
 
 <%_ const hasCollectionMerges = requestMappings.some(mapping => Array.isArray(mapping.collectionFields) && mapping.collectionFields.length > 0); _%>
+<%_ const hasResponseCollectionMappings = responseMappings.some(mapping => Array.isArray(mapping.responseCollectionFields) && mapping.responseCollectionFields.length > 0); _%>
 <%_ const hasInlineElementMappings = requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => field.useInlineElementMapping)); _%>
+<%_ const needsOpenApiPrimitiveMapperField = [...requestMappings, ...responseMappings].some(mapping =>
+      (mapping.annotations ?? []).some(annotation => annotation.includes('openApiPrimitiveMapper.'))
+    ); _%>
 
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -23,15 +27,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 import org.mapstruct.ObjectFactory;
 <%_ } _%>
-<%_ if (entityName === 'JsonPatch') { _%>
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-import org.openapitools.jackson.nullable.JsonNullable;
-<%_ } _%>
-<%_ if (entityName === 'JsonPatch' || hasInlineElementMappings) { _%>
+<%_ if (hasInlineElementMappings) { _%>
 import org.mapstruct.Named;
 <%_ } _%>
 
@@ -41,14 +37,21 @@ import org.mapstruct.Named;
         mergeMappers.add(field.mapperFqcn);
       }
     }
+    for (const mapping of responseMappings) {
+      for (const field of mapping.responseCollectionFields ?? []) {
+        mergeMappers.add(field.mapperFqcn);
+      }
+    }
     const mergeMappersList = Array.from(mergeMappers);
-    const needsMergeHelpers = hasCollectionMerges && mergeMappersList.length > 0;
+    const needsMapperHelpers = (hasCollectionMerges || hasResponseCollectionMappings) && mergeMappersList.length > 0;
 _%>
+<%_ if (hasCollectionMerges || hasResponseCollectionMappings) { _%>
+import java.util.List;
+<%_ } _%>
 <%_ if (hasCollectionMerges) { _%>
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
@@ -64,10 +67,15 @@ import java.util.function.Function;
 )
 public abstract class <%- mapperName %> {
 
-<%_ if (needsMergeHelpers) { mergeMappersList.forEach(fqcn => { _%>
+<%_ if (needsMapperHelpers) { mergeMappersList.forEach(fqcn => { _%>
     @Autowired
     protected <%- fqcn %> <%- fqcn.split('.').pop().charAt(0).toLowerCase() + fqcn.split('.').pop().slice(1) %>;
 <%_ }); } _%>
+<%_ if (needsOpenApiPrimitiveMapperField) { _%>
+    @Autowired
+    protected <%- packageName %>.OpenApiPrimitiveMapper openApiPrimitiveMapper;
+
+<%_ } _%>
 
     // ========== Request Mappings (DTO -> Domain) ==========
 <%_ for (const mapping of requestMappings) { _%>
@@ -79,9 +87,6 @@ public abstract class <%- mapperName %> {
   <%_ const hasIdIgnore = (mapping.annotations || []).some(annotation => annotation.includes('target = "id"')); _%>
   <%_ if (!hasIdIgnore) { _%>
     @Mapping(target = "id", ignore = true)
-  <%_ } _%>
-  <%_ if (entityName === 'JsonPatch') { _%>
-    @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
     public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
@@ -96,9 +101,6 @@ public abstract class <%- mapperName %> {
 <%_ } _%>
   <%_ if (!hasIdIgnore) { _%>
     @Mapping(target = "id", ignore = true)
-  <%_ } _%>
-  <%_ if (entityName === 'JsonPatch') { _%>
-    @Mapping(target = "value", qualifiedByName = "unwrapJsonPatchValue")
   <%_ } _%>
     public abstract void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
 
@@ -116,7 +118,7 @@ public abstract class <%- mapperName %> {
         }
   <%_ } _%>
   <%_ for (const field of mapping.generatedDefaultFields ?? []) { _%>
-        if (target.get<%- field.accessor %>() == null) {
+        if (target.get<%- field.accessor %>() == null<%_ if (field.presenceAccessor) { _%> && target.get<%- field.presenceAccessor %>() != null<%_ } _%>) {
             target.set<%- field.accessor %>(<%- field.valueExpression %>);
         }
   <%_ } _%>
@@ -126,9 +128,6 @@ public abstract class <%- mapperName %> {
 
     // ========== Response Mappings (Domain -> DTO) ==========
 <%_ for (const mapping of responseMappings) { _%>
-  <%_ if (entityName === 'JsonPatch') { _%>
-    @Mapping(target = "value", qualifiedByName = "wrapJsonPatchValue")
-  <%_ } _%>
   <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
     <%_ for (const annotation of mapping.annotations) { _%>
     <%- annotation %>
@@ -136,6 +135,30 @@ public abstract class <%- mapperName %> {
   <%_ } _%>
     public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
+<%_ } _%>
+
+<%_ if (hasResponseCollectionMappings) { _%>
+<%_ const responseCollectionFieldsByMethod = new Map();
+    for (const mapping of responseMappings) {
+      for (const field of mapping.responseCollectionFields ?? []) {
+        if (field.responseListMapMethod && field.responseMapMethod) {
+          responseCollectionFieldsByMethod.set(`${field.responseListMapMethod}:${field.mapperFqcn}:${field.elementDomainType}:${field.elementDtoType}`, field);
+        }
+      }
+    }
+    const responseCollectionFields = Array.from(responseCollectionFieldsByMethod.values());
+_%>
+  <%_ for (const field of responseCollectionFields) { _%>
+    protected List<<%- field.elementDtoType %>> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
+        if (source == null) {
+            return null;
+        }
+        return source.stream()
+            .map(this.<%- field.mapperField %>::<%- field.responseMapMethod %>)
+            .toList();
+    }
+
+  <%_ } _%>
 <%_ } _%>
 
 <%_ if (hasCollectionMerges) { _%>
@@ -380,8 +403,8 @@ _%>
       return null;
     }
 <%_     if (factory.discriminatorAccessor) { _%>
-    final String rawDiscriminator = <%- factory.discriminatorAccessor %>;
-    final String discriminator = rawDiscriminator != null ? rawDiscriminator : <%- factory.fallbackAccessor %>;
+    final Object rawDiscriminator = <%- factory.discriminatorAccessor %>;
+    final String discriminator = rawDiscriminator != null ? rawDiscriminator.toString() : <%- factory.fallbackAccessor %>;
 <%_     } else { _%>
     final String discriminator = <%- factory.fallbackAccessor %>;
 <%_     } _%>
@@ -400,84 +423,4 @@ _%>
 <%_   } _%>
 <%_ } _%>
 
-<%_ if (entityName === 'JsonPatch') { _%>
-  @Named("unwrapJsonPatchValue")
-  protected String unwrapJsonPatchValue(JsonNullable<Object> value) {
-    if (value == null || !value.isPresent()) {
-      return null;
-    }
-    return JsonPatchValueSupport.toJsonString(value.orElse(null));
-  }
-
-  @Named("wrapJsonPatchValue")
-  protected JsonNullable<Object> wrapJsonPatchValue(Object value) {
-    if (value == null) {
-      return JsonNullable.undefined();
-    }
-    return JsonNullable.of(JsonPatchValueSupport.toStructuredValue(value));
-  }
-
-  private static final class JsonPatchValueSupport {
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-
-    private JsonPatchValueSupport() {}
-
-    static Object toStructuredValue(Object value) {
-      if (value == null) {
-        return null;
-      }
-      if (value instanceof JsonNode) {
-        return value;
-      }
-      if (value instanceof String stringValue) {
-        String trimmed = stringValue.trim();
-        if (trimmed.isEmpty()) {
-          return stringValue;
-        }
-        try {
-          return OBJECT_MAPPER.readTree(trimmed);
-        } catch (JsonProcessingException ex) {
-          throw badRequest("Unable to deserialize JSON Patch value", ex);
-        }
-      }
-      return value;
-    }
-
-    static String toJsonString(Object value) {
-      if (value == null) {
-        return null;
-      }
-      try {
-        if (value instanceof String stringValue) {
-          String trimmed = stringValue.trim();
-          if (trimmed.isEmpty()) {
-            return OBJECT_MAPPER.writeValueAsString(stringValue);
-          }
-          if (looksLikeJson(trimmed)) {
-            return OBJECT_MAPPER.writeValueAsString(OBJECT_MAPPER.readTree(trimmed));
-          }
-          return OBJECT_MAPPER.writeValueAsString(stringValue);
-        }
-        if (value instanceof JsonNode node) {
-          return OBJECT_MAPPER.writeValueAsString(node);
-        }
-        return OBJECT_MAPPER.writeValueAsString(OBJECT_MAPPER.valueToTree(value));
-      } catch (JsonProcessingException ex) {
-        throw badRequest("Unable to serialize JSON Patch value", ex);
-      }
-    }
-
-    private static boolean looksLikeJson(String value) {
-      if (value.isEmpty()) {
-        return false;
-      }
-      char first = value.charAt(0);
-      return first == '{' || first == '[' || first == '"' || first == '\'' || Character.isDigit(first) || first == '-';
-    }
-
-    private static ResponseStatusException badRequest(String message, Exception ex) {
-      return new ResponseStatusException(HttpStatus.BAD_REQUEST, message, ex);
-    }
-  }
-<%_ } _%>
 }

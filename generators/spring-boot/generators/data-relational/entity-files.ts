@@ -37,6 +37,11 @@ const domainFiles = asWriteFilesBlock([
     templates: ['domain/_persistClass_.java.jhi.hibernate_cache'],
   },
   {
+    condition: generator => !generator.reactive && generator.entityDomainLayer,
+    ...javaMainPackageTemplatesBlock('_entityPackage_'),
+    templates: ['domain/_persistClass_.java.jhi.uuid_identifier_initializer'],
+  },
+  {
     condition: generator => generator.reactive && generator.entityDomainLayer,
     ...javaMainPackageTemplatesBlock('_entityPackage_'),
     templates: ['domain/_persistClass_.java.jhi.spring_data_reactive'],

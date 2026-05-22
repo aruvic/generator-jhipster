@@ -35,7 +35,7 @@ const attachmentRoot = {
     values: 'Attachment->Attachment, AttachmentRef->AttachmentRef',
   },
   fields: [
-    { fieldName: 'tmfId', fieldType: 'UUID', fieldValidateRules: ['required'] },
+    { fieldName: 'externalId', fieldType: 'UUID', fieldValidateRules: ['required'] },
     { fieldName: 'name', fieldType: 'String' },
   ],
   relationships: [],

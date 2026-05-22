@@ -44,7 +44,7 @@ const schemas = {
         type: 'object',
         properties: {
           id: { type: 'integer', format: 'int64' },
-          tmfId: { type: 'string', format: 'uuid' },
+          externalId: { type: 'string', format: 'uuid' },
         },
       },
     ],
