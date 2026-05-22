@@ -309,7 +309,7 @@ export function extractSchemaRef(schemaObj: any): string | undefined {
 
 /**
  * Normalize schema/type names by removing separators that may appear in OpenAPI refs
- * e.g., `Hub_FVO` -> `HubFVO`, `party-interaction` -> `partyinteraction`
+ * e.g., `Hub_FVO` -> `HubFVO`, `sample-resource` -> `sampleresource`
  */
 export function normalizeTypeName(name: string): string {
   if (!name) return name;
@@ -431,12 +431,17 @@ export function findNestedSchemas(rootSchema: string, graph: Map<string, SchemaN
 }
 
 /**
- * Extract schema name without DTO suffixes (FVO, MVO, DTO, etc.)
+ * Extract schema name without generated OpenAPI DTO role suffixes.
  */
 export function stripDtoSuffix(dtoName: string): string {
   if (!dtoName) return dtoName;
+  const separatedRoleSuffix = dtoName.match(/^(.*?)[^A-Za-z0-9]+(FVO|MVO|RES|DTO)$/);
+  if (separatedRoleSuffix?.[1]) {
+    return normalizeTypeName(separatedRoleSuffix[1]);
+  }
+
   const normalized = normalizeTypeName(dtoName);
-  const suffixes = ['FVO', 'MVO', 'DTO', 'Dto', 'Fvo', 'Mvo'];
+  const suffixes = ['FVO', 'MVO', 'RES', 'DTO', 'Dto', 'Fvo', 'Mvo'];
   for (const suffix of suffixes) {
     if (normalized.endsWith(suffix)) {
       return normalized.substring(0, normalized.length - suffix.length);

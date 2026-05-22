@@ -303,7 +303,45 @@ export async function generateMapStructMappers(generator: any, application: Spri
     generator.log.ok(`MapStruct: generated mapper: ${context.mapperName}`);
   }
 
+  writeOpenApiOneOfDeserializerConfiguration(generator, javaPackageDir, application.packageName!);
+
   generator.log.ok(`MapStruct: successfully generated ${mapperContexts.length} MapStruct mappers`);
+}
+
+function writeOpenApiOneOfDeserializerConfiguration(generator: any, javaPackageDir: string, packageName: string): void {
+  const relativeTemplatePath = join('server', 'templates', 'openapi-oneof-deserializer-configuration.java.ejs');
+  let templatePath: string | undefined;
+
+  if (generator.blueprintGenerators) {
+    for (const bp of generator.blueprintGenerators) {
+      if (bp.generatorPath) {
+        const bpPath = join(bp.generatorPath, relativeTemplatePath);
+        if (existsSync(bpPath)) {
+          templatePath = bpPath;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!templatePath) {
+    const bundledPath = generator.fetchFromInstalledJHipster(relativeTemplatePath);
+    if (bundledPath && existsSync(bundledPath)) {
+      templatePath = bundledPath;
+    }
+  }
+
+  if (!templatePath) {
+    generator.log.warn(`MapStruct: could not resolve template at ${relativeTemplatePath}, skipping OpenAPI oneOf deserializer configuration`);
+    return;
+  }
+
+  const configDirFull = generator.destinationPath(join(javaPackageDir, 'config'));
+  mkdirSync(configDirFull, { recursive: true });
+  const templateContent = readFileSync(templatePath, 'utf-8');
+  const rendered = ejs.render(templateContent, { packageName });
+  generator.fs.write(join(configDirFull, 'OpenApiOneOfDeserializerConfiguration.java'), rendered);
+  generator.log.ok('MapStruct: generated OpenAPI oneOf deserializer configuration');
 }
 
 function inspectDomainClass(generator: any, javaPackageDir: string, entityName: string): { isAbstract?: boolean } | undefined {

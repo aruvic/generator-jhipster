@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import java.math.BigDecimal;
 import java.util.Collections;
 import java.util.List;
@@ -24,10 +25,24 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import org.openapitools.jackson.nullable.JsonNullable;
+import org.openapitools.jackson.nullable.JsonNullableModule;
 
 @Lazy
 @Mapper(componentModel = "spring", unmappedTargetPolicy = ReportingPolicy.IGNORE)
 public interface OpenApiPrimitiveMapper {
+    @Named("uriToString")
+    default String uriToString(java.net.URI value) {
+        return value == null ? null : value.toString();
+    }
+
+    @Named("stringToUri")
+    default java.net.URI stringToUri(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return java.net.URI.create(value);
+    }
+
     default String map(Object value) {
         if (value == null) {
             return null;
@@ -120,6 +135,41 @@ public interface OpenApiPrimitiveMapper {
         return normalized;
     }
 
+    default <E extends Enum<E>> List<E> enumToSingletonList(Object value, Class<E> targetType) {
+        E mapped = value instanceof Enum<?> enumValue ? map(enumValue, targetType) : map(value == null ? null : value.toString(), targetType);
+        return mapped == null ? null : Collections.singletonList(mapped);
+    }
+
+    default <E extends Enum<E>> E firstEnumFromList(List<?> value, Class<E> targetType) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        Object first = value.get(0);
+        if (first instanceof Enum<?> enumValue) {
+            return map(enumValue, targetType);
+        }
+        return map(first == null ? null : first.toString(), targetType);
+    }
+
+    default String firstTokenFromList(List<?> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        Object first = value.get(0);
+        return first == null ? null : first.toString();
+    }
+
+    default <T> List<T> scalarToSingletonList(T value) {
+        return value == null ? null : Collections.singletonList(value);
+    }
+
+    default <T> T firstFromList(List<T> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return value.get(0);
+    }
+
     @Named("jsonStringToJsonNullableMap")
     default JsonNullable<Map<String, Object>> jsonStringToJsonNullableMap(String value) {
         if (value == null || value.isBlank()) {
@@ -134,6 +184,22 @@ public interface OpenApiPrimitiveMapper {
             return JsonNullable.undefined();
         }
         return JsonNullable.of(JsonMappingSupport.readStringList(value));
+    }
+
+    @Named("jsonStringToJsonNullableList")
+    default <T> JsonNullable<List<T>> jsonStringToJsonNullableList(String value) {
+        if (value == null || value.isBlank()) {
+            return JsonNullable.undefined();
+        }
+        return JsonNullable.of(JsonMappingSupport.readList(value));
+    }
+
+    @Named("jsonStringToJsonNullableObject")
+    default JsonNullable<Object> jsonStringToJsonNullableObject(String value) {
+        if (value == null || value.isBlank()) {
+            return JsonNullable.undefined();
+        }
+        return JsonNullable.of(JsonMappingSupport.readObject(value));
     }
 
     @Named("jsonNullableMapToString")
@@ -152,12 +218,37 @@ public interface OpenApiPrimitiveMapper {
         return JsonMappingSupport.writeValueAsString(value.orElse(null));
     }
 
+    @Named("jsonNullableListToString")
+    default String jsonNullableListToString(JsonNullable<? extends List<?>> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value.orElse(null));
+    }
+
+    @Named("jsonNullableObjectToString")
+    default String jsonNullableObjectToString(JsonNullable<?> value) {
+        if (value == null || !value.isPresent()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value.orElse(null));
+    }
+
     @Named("jsonStringToMap")
-    default Map<String, Object> jsonStringToMap(String value) {
+    @SuppressWarnings("unchecked")
+    default <T> Map<String, T> jsonStringToMap(String value) {
         if (value == null || value.isBlank()) {
             return Collections.emptyMap();
         }
-        return JsonMappingSupport.readMap(value);
+        return (Map<String, T>) JsonMappingSupport.readMap(value);
+    }
+
+    @Named("jsonStringToObject")
+    default Object jsonStringToObject(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return JsonMappingSupport.readObject(value);
     }
 
     @Named("mapToJsonString")
@@ -168,6 +259,11 @@ public interface OpenApiPrimitiveMapper {
         return JsonMappingSupport.writeValueAsString(value);
     }
 
+    @Named("objectToJsonString")
+    default String objectToJsonString(Object value) {
+        return mapToJsonString(value);
+    }
+
     @Named("jsonStringToStringList")
     default List<String> jsonStringToStringList(String value) {
         if (value == null || value.isBlank()) {
@@ -176,8 +272,24 @@ public interface OpenApiPrimitiveMapper {
         return JsonMappingSupport.readStringList(value);
     }
 
+    @Named("jsonStringToList")
+    default <T> List<T> jsonStringToList(String value) {
+        if (value == null || value.isBlank()) {
+            return Collections.emptyList();
+        }
+        return JsonMappingSupport.readList(value);
+    }
+
     @Named("stringListToJsonString")
     default String stringListToJsonString(List<String> value) {
+        if (value == null || value.isEmpty()) {
+            return null;
+        }
+        return JsonMappingSupport.writeValueAsString(value);
+    }
+
+    @Named("listToJsonString")
+    default String listToJsonString(List<?> value) {
         if (value == null || value.isEmpty()) {
             return null;
         }
@@ -209,10 +321,13 @@ public interface OpenApiPrimitiveMapper {
 
     final class JsonMappingSupport {
         private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+            .registerModule(new JavaTimeModule())
+            .registerModule(new JsonNullableModule())
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
             .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
         private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
+        private static final TypeReference<List<Object>> LIST_TYPE = new TypeReference<>() {};
         private static final TypeReference<List<String>> STRING_LIST_TYPE = new TypeReference<>() {};
 
         private JsonMappingSupport() {}
@@ -230,6 +345,23 @@ public interface OpenApiPrimitiveMapper {
                 return OBJECT_MAPPER.readValue(value, STRING_LIST_TYPE);
             } catch (JsonProcessingException ex) {
                 throw badRequest("Unable to deserialize JSON to List", ex);
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        static <T> List<T> readList(String value) {
+            try {
+                return (List<T>) OBJECT_MAPPER.readValue(value, LIST_TYPE);
+            } catch (JsonProcessingException ex) {
+                throw badRequest("Unable to deserialize JSON to List", ex);
+            }
+        }
+
+        static Object readObject(String value) {
+            try {
+                return OBJECT_MAPPER.readValue(value, Object.class);
+            } catch (JsonProcessingException ex) {
+                throw badRequest("Unable to deserialize JSON", ex);
             }
         }
 

@@ -272,7 +272,9 @@ public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitia
         if (mediaType == null) {
             return false;
         }
-        return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(mediaType::isCompatibleWith);
+        return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(patchMediaType ->
+            patchMediaType.getType().equalsIgnoreCase(mediaType.getType()) && patchMediaType.getSubtype().equalsIgnoreCase(mediaType.getSubtype())
+        );
     }
 
     private static final class JsonPatchMessageConverter extends MappingJackson2HttpMessageConverter {
@@ -340,7 +342,9 @@ public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitia
             if (mediaType == null) {
                 return false;
             }
-            return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(mediaType::isCompatibleWith);
+            return JSON_PATCH_MEDIA_TYPES.stream().anyMatch(patchMediaType ->
+                patchMediaType.getType().equalsIgnoreCase(mediaType.getType()) && patchMediaType.getSubtype().equalsIgnoreCase(mediaType.getSubtype())
+            );
         }
 
         private Object instantiateEmpty(Class<?> clazz) {

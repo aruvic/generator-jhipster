@@ -27,6 +27,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.web.embedded.undertow.UndertowServletWebServerFactory;
 <%_ } _%>
 <%_ if (!reactive) { _%>
+import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 <%_ } _%>
@@ -173,6 +174,19 @@ class WebConfigurerTest {
 
         assertThat(converters).isNotEmpty();
         assertThat(converters.get(0).getClass().getSimpleName()).isEqualTo("JsonPatchMessageConverter");
+    }
+
+    @Test
+    void shouldKeepWildcardJsonSupportOnJacksonConverters() {
+        MappingJackson2HttpMessageConverter jacksonConverter = new MappingJackson2HttpMessageConverter();
+        List<HttpMessageConverter<?>> converters = new ArrayList<>();
+        converters.add(jacksonConverter);
+
+        webConfigurer.extendMessageConverters(converters);
+
+        assertThat(jacksonConverter.getSupportedMediaTypes()).contains(MediaType.valueOf("application/*+json"));
+        assertThat(jacksonConverter.getSupportedMediaTypes()).doesNotContain(MediaType.valueOf("application/json-patch+json"));
+        assertThat(jacksonConverter.getSupportedMediaTypes()).doesNotContain(MediaType.valueOf("application/json-patch-query+json"));
     }
 <%_ } _%>
 }

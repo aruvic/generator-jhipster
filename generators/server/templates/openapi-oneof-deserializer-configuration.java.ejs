@@ -1,0 +1,174 @@
+package <%= packageName %>.config;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.Module;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.AnnotatedBeanDefinition;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.type.filter.AssignableTypeFilter;
+import org.springframework.core.type.filter.TypeFilter;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
+
+@Configuration
+public class OpenApiOneOfDeserializerConfiguration {
+
+    private static final String DTO_PACKAGE = "<%= packageName %>.service.api.dto";
+
+    @Bean
+    public Module openApiOneOfDeserializersModule() {
+        SimpleModule module = new SimpleModule("openApiOneOfDeserializers");
+        for (Map.Entry<Class<?>, List<Class<?>>> entry : discoverOpenApiInterfaces().entrySet()) {
+            @SuppressWarnings({ "rawtypes", "unchecked" })
+            Class rawType = entry.getKey();
+            module.addDeserializer(rawType, new ShapeBasedInterfaceDeserializer(entry.getKey(), entry.getValue()));
+        }
+        return module;
+    }
+
+    private static Map<Class<?>, List<Class<?>>> discoverOpenApiInterfaces() {
+        Map<Class<?>, List<Class<?>>> mappings = new HashMap<>();
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        for (BeanDefinition definition : findInterfaces()) {
+            String className = definition.getBeanClassName();
+            if (className == null) {
+                continue;
+            }
+            try {
+                Class<?> interfaceType = Class.forName(className, false, classLoader);
+                List<Class<?>> implementations = findImplementations(interfaceType);
+                if (!implementations.isEmpty()) {
+                    mappings.put(interfaceType, implementations);
+                }
+            } catch (ClassNotFoundException ignored) {
+                // Generated OpenAPI classes may not exist in every build profile.
+            }
+        }
+        return mappings;
+    }
+
+    private static Set<BeanDefinition> findInterfaces() {
+        ClassPathScanningCandidateComponentProvider scanner = newOpenApiDtoScanner();
+        TypeFilter interfaceFilter = (metadataReader, metadataReaderFactory) -> metadataReader.getClassMetadata().isInterface();
+        scanner.addIncludeFilter(interfaceFilter);
+        return scanner.findCandidateComponents(DTO_PACKAGE);
+    }
+
+    private static List<Class<?>> findImplementations(Class<?> interfaceType) {
+        ClassPathScanningCandidateComponentProvider scanner = new ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter(new AssignableTypeFilter(interfaceType));
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        List<Class<?>> implementations = new ArrayList<>();
+        for (BeanDefinition definition : scanner.findCandidateComponents(DTO_PACKAGE)) {
+            String className = definition.getBeanClassName();
+            if (className == null || className.equals(interfaceType.getName())) {
+                continue;
+            }
+            try {
+                Class<?> candidate = Class.forName(className, false, classLoader);
+                if (interfaceType.isAssignableFrom(candidate) && !candidate.isInterface() && !Modifier.isAbstract(candidate.getModifiers())) {
+                    implementations.add(candidate);
+                }
+            } catch (ClassNotFoundException ignored) {
+                // Ignore stale scan entries.
+            }
+        }
+        return implementations;
+    }
+
+    private static ClassPathScanningCandidateComponentProvider newOpenApiDtoScanner() {
+        return new ClassPathScanningCandidateComponentProvider(false) {
+            @Override
+            protected boolean isCandidateComponent(AnnotatedBeanDefinition beanDefinition) {
+                return beanDefinition.getMetadata().isIndependent();
+            }
+        };
+    }
+
+    private static final class ShapeBasedInterfaceDeserializer extends JsonDeserializer<Object> {
+
+        private final Class<?> interfaceType;
+        private final List<Class<?>> implementations;
+        private final Map<Class<?>, Set<String>> propertiesByImplementation = new HashMap<>();
+
+        private ShapeBasedInterfaceDeserializer(Class<?> interfaceType, List<Class<?>> implementations) {
+            this.interfaceType = interfaceType;
+            this.implementations = implementations;
+            for (Class<?> implementation : implementations) {
+                propertiesByImplementation.put(implementation, collectJsonProperties(implementation));
+            }
+        }
+
+        @Override
+        public Object deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+            JsonNode node = parser.getCodec().readTree(parser);
+            Class<?> targetType = selectTargetType(node);
+            if (targetType == null) {
+                throw JsonMappingException.from(parser, "Unable to select concrete type for " + interfaceType.getName());
+            }
+            return parser.getCodec().treeToValue(node, targetType);
+        }
+
+        private Class<?> selectTargetType(JsonNode node) {
+            if (!node.isObject()) {
+                return implementations.size() == 1 ? implementations.get(0) : null;
+            }
+
+            Set<String> incomingProperties = new LinkedHashSet<>();
+            node.fieldNames().forEachRemaining(incomingProperties::add);
+            Class<?> bestType = null;
+            int bestScore = -1;
+            for (Class<?> implementation : implementations) {
+                Set<String> candidateProperties = propertiesByImplementation.getOrDefault(implementation, Set.of());
+                int score = 0;
+                for (String property : incomingProperties) {
+                    if (candidateProperties.contains(property)) {
+                        score++;
+                    }
+                }
+                if (score == incomingProperties.size() && score > 0) {
+                    return implementation;
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestType = implementation;
+                }
+            }
+            return bestScore > 0 ? bestType : (implementations.size() == 1 ? implementations.get(0) : null);
+        }
+
+        private static Set<String> collectJsonProperties(Class<?> type) {
+            Set<String> properties = new LinkedHashSet<>();
+            for (Field field : type.getDeclaredFields()) {
+                JsonProperty jsonProperty = field.getAnnotation(JsonProperty.class);
+                if (jsonProperty != null && !jsonProperty.value().isBlank()) {
+                    properties.add(jsonProperty.value());
+                }
+                properties.add(field.getName());
+            }
+            for (Method method : type.getMethods()) {
+                JsonProperty jsonProperty = method.getAnnotation(JsonProperty.class);
+                if (jsonProperty != null && !jsonProperty.value().isBlank()) {
+                    properties.add(jsonProperty.value());
+                }
+            }
+            return properties;
+        }
+    }
+}

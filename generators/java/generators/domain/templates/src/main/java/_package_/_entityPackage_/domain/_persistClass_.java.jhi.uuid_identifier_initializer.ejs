@@ -22,22 +22,26 @@
 -%>
 <&_ if (fragment.classAdditionalFieldsMethodsSection) { -&>
 <%_
-const tmfIdField = fields?.find(
+const isIdentifierFieldName = fieldName =>
+  fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName ?? '') || /(?:Id|ID)$/.test(fieldName ?? '');
+const generatedUuidFields = fields?.filter(
   field =>
-    field?.fieldName?.toLowerCase() === 'tmfid' &&
+    isIdentifierFieldName(field?.fieldName) &&
     typeof field.fieldType === 'string' &&
     field.fieldType.toLowerCase() === 'uuid' &&
     Array.isArray(field.fieldValidateRules) &&
     field.fieldValidateRules.includes('required')
-);
-if (tmfIdField) {
+) ?? [];
+if (generatedUuidFields.length > 0) {
 _%>
 
     @PrePersist
-    protected void ensure<%= tmfIdField.fieldInJavaBeanMethod %>() {
-        if (this.<%= tmfIdField.fieldName %> == null) {
-            this.<%= tmfIdField.fieldName %> = java.util.UUID.randomUUID();
+    protected void ensureGeneratedUuidIdentifiers() {
+<%_ for (const field of generatedUuidFields) { _%>
+        if (this.get<%= field.fieldInJavaBeanMethod %>() == null) {
+            this.set<%= field.fieldInJavaBeanMethod %>(java.util.UUID.randomUUID());
         }
+<%_ } _%>
     }
 
 <%_ } _%>

@@ -65,7 +65,7 @@ describe(`generator - ${generator}`, () => {
   describe('with custom oas3 input', () => {
     const customSpec = `openapi: 3.0.3
 info:
-  title: Custom TMF683
+  title: Custom External API
   version: 1.2.3
 paths:
   /sample:
@@ -83,13 +83,13 @@ paths:
         .withMockedSource()
         .withSharedApplication({})
         .inTmpDir(async dir => {
-          await writeFile(join(dir, 'TMF683.yaml'), customSpec);
+          await writeFile(join(dir, 'external-api.yaml'), customSpec);
         })
-        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'TMF683.yaml' });
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'external-api.yaml' });
     });
 
     it('should copy the provided specification to api.yml without altering its contents', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: Custom TMF683');
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: Custom External API');
       result.assertNoFileContent('src/main/resources/swagger/api.yml', '<% if (authenticationTypeJwt) { %>');
     });
   });
@@ -97,7 +97,7 @@ paths:
   describe('with custom oas3 input referencing a .jdl file', () => {
     const customSpec = `openapi: 3.0.3
 info:
-  title: External TMF683
+  title: External Sibling API
   version: 9.9.9
 paths: {}
 `;
@@ -109,17 +109,259 @@ paths: {}
         .withMockedSource()
         .withSharedApplication({})
         .inTmpDir(async dir => {
-          await writeFile(join(dir, 'TMF683-Party_Interaction.oas.yaml'), customSpec);
+          await writeFile(join(dir, 'external-sibling.oas.yaml'), customSpec);
         })
         .withJHipsterConfig({
           buildTool: 'maven',
           addOpenapiGeneratorPlugin: true,
-          oas3Input: 'TMF683-Party_Interaction.oas.jdl',
+          oas3Input: 'external-sibling.oas.jdl',
         });
     });
 
     it('should resolve the sibling OpenAPI specification file', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: External TMF683');
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: External Sibling API');
+    });
+  });
+
+  describe('with custom oas3 input containing component schema names rejected by OpenAPI Generator', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Spaced Schemas
+  version: 1.0.0
+paths:
+  /vessel-voyages:
+    get:
+      operationId: listVesselVoyages
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Vessel Voyage'
+components:
+  schemas:
+    Vessel Voyage:
+      title: Vessel Voyage
+      type: object
+      properties:
+        vesselName:
+          type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'spaced.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'spaced.yaml' });
+    });
+
+    it('should normalize component keys and matching refs in the copied api.yml', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'VesselVoyage:');
+      result.assertFileContent('src/main/resources/swagger/api.yml', '$ref: "#/components/schemas/VesselVoyage"');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Vessel Voyage:');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', '#/components/schemas/Vessel Voyage');
+    });
+  });
+
+  describe('with custom oas3 input containing component schema names that collide with generated Java types', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Type Collision Schemas
+  version: 1.0.0
+paths:
+  /schedules:
+    get:
+      operationId: listSchedules
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Schedule'
+components:
+  schemas:
+    Schedule:
+      type: object
+      properties:
+        timestamps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Timestamp'
+    Timestamp:
+      title: Timestamp
+      type: object
+      properties:
+        eventDateTime:
+          type: string
+          format: date-time
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'collision.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'collision.yaml' });
+    });
+
+    it('should rename colliding component keys and matching refs in the copied api.yml', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'TimestampModel:');
+      result.assertFileContent('src/main/resources/swagger/api.yml', '$ref: "#/components/schemas/TimestampModel"');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Timestamp:');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', '#/components/schemas/Timestamp"');
+    });
+  });
+
+  describe('with custom oas3 input whose discriminator property is declared on variants', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Variant Discriminator Property
+  version: 1.0.0
+paths:
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnedItem'
+      responses:
+        '201':
+          description: created
+components:
+  schemas:
+    OwnedItem:
+      type: object
+      properties:
+        label:
+          type: string
+      discriminator:
+        propertyName: owned
+        mapping:
+          'true': '#/components/schemas/OwnedVariant'
+          'false': '#/components/schemas/ReferencedVariant'
+      oneOf:
+        - $ref: '#/components/schemas/OwnedVariant'
+        - $ref: '#/components/schemas/ReferencedVariant'
+    OwnedVariant:
+      type: object
+      required:
+        - owned
+      properties:
+        owned:
+          type: boolean
+        name:
+          type: string
+    ReferencedVariant:
+      type: object
+      required:
+        - owned
+      properties:
+        owned:
+          type: boolean
+        reference:
+          type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'variant-discriminator.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'variant-discriminator.yaml' });
+    });
+
+    it('should add the discriminator property shape to the base schema and drop unsupported non-string discriminator metadata', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'owned:\n          type: boolean');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'propertyName: owned');
+    });
+  });
+
+  describe('with custom oas3 input whose discriminator variants narrow a string property with enum values', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Enum Discriminator Variant
+  version: 1.0.0
+paths:
+  /places:
+    get:
+      operationId: listPlaces
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaceRefOrValue'
+components:
+  schemas:
+    PlaceRefOrValue:
+      type: object
+      discriminator:
+        propertyName: '@type'
+        mapping:
+          GeographicLocation: '#/components/schemas/GeographicLocation'
+      oneOf:
+        - $ref: '#/components/schemas/GeographicLocation'
+    Place:
+      type: object
+      properties:
+        '@type':
+          type: string
+    GeographicLocation:
+      allOf:
+        - $ref: '#/components/schemas/Place'
+        - type: object
+          properties:
+            '@type':
+              type: string
+              enum:
+                - GeoJsonPoint
+            bbox:
+              type: array
+              items:
+                type: number
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'enum-discriminator-variant.yaml'), customSpec);
+        })
+        .withJHipsterConfig({
+          buildTool: 'maven',
+          addOpenapiGeneratorPlugin: true,
+          oas3Input: 'enum-discriminator-variant.yaml',
+        });
+    });
+
+    it('should keep discriminator properties as strings so generated Java subtype getters stay compatible', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', '"@type":\n          type: string');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'GeoJsonPoint');
     });
   });
 });

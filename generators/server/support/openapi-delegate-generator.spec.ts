@@ -169,11 +169,388 @@ describe('OpenAPI delegate generator', () => {
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final BookingRepository repository;');
       expect(output).toContain('private final BookingMapper mapper;');
-      expect(output).toContain('private final CreateBookingRepository createBookingRepository;');
       expect(output).toContain('private final CreateBookingMapper createBookingMapper;');
-      expect(output).not.toContain('CreateBookingResponseMapper');
-      expect(output).toContain('return BookingApiDelegate.super.createBooking(createBooking);');
+      expect(output).toContain('private final CreateBookingResponseMapper createBookingResponseMapper;');
+      expect(output).not.toContain('CreateBookingRepository');
+      expect(output).toContain('com.example.domain.Booking entity = this.createBookingMapper.toBookingEntity(createBooking);');
+      expect(output).toContain('CreateBookingResponse responseBody = this.createBookingResponseMapper.toCreateBookingResponse(saved);');
       expect(output).toContain('entities.stream().map(this.mapper::toBookingDto).toList()');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the persistence mapper when an operation response DTO differs from the persisted entity', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+          `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /services:\n` +
+          `    get:\n` +
+          `      operationId: listService\n` +
+          `      responses:\n` +
+          `        '200':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                type: array\n` +
+          `                items:\n` +
+          `                  $ref: '#/components/schemas/Service_RES'\n` +
+          `    post:\n` +
+          `      operationId: createService\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              $ref: '#/components/schemas/Service_FVO'\n` +
+          `      responses:\n` +
+          `        '201':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/Service_RES'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    Service:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: string\n` +
+          `    Service_FVO:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: string\n` +
+          `    Service_RES:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: string\n`,
+      );
+
+      const interfaceDir = join(tempDir, 'src/main/java/com/example/web/api');
+      mkdirSync(interfaceDir, { recursive: true });
+      writeFileSync(
+        join(interfaceDir, 'ServiceApiDelegate.java'),
+        `package com.example.web.api;\n\n` +
+          `import java.util.List;\n` +
+          `import org.springframework.http.ResponseEntity;\n` +
+          `import org.springframework.web.bind.annotation.RequestBody;\n` +
+          `import com.example.service.api.dto.ServiceFVO;\n` +
+          `import com.example.service.api.dto.ServiceRES;\n\n` +
+          `public interface ServiceApiDelegate {\n` +
+          `    default ResponseEntity<List<ServiceRES>> listService() {\n` +
+          `        return ResponseEntity.ok(List.of());\n` +
+          `    }\n\n` +
+          `    default ResponseEntity<ServiceRES> createService(@RequestBody ServiceFVO serviceFVO) {\n` +
+          `        return ResponseEntity.status(201).body(new ServiceRES());\n` +
+          `    }\n` +
+          `}\n`,
+      );
+
+      const mapperDir = join(tempDir, 'src/main/java/com/example/web/api/mapper');
+      mkdirSync(mapperDir, { recursive: true });
+      writeFileSync(
+        join(mapperDir, 'ServiceMapper.java'),
+        `package com.example.web.api.mapper;\n\n` +
+          `public abstract class ServiceMapper {\n` +
+          `    public abstract com.example.domain.Service toServiceEntity(com.example.service.api.dto.ServiceFVO source);\n` +
+          `    public abstract com.example.service.api.dto.ServiceRES toServiceRES(com.example.domain.Service source);\n` +
+          `}\n`,
+      );
+      writeFileSync(
+        join(mapperDir, 'ServiceResMapper.java'),
+        `package com.example.web.api.mapper;\n\n` +
+          `public abstract class ServiceResMapper {\n` +
+          `    public abstract com.example.service.api.dto.ServiceRES toServiceResDto(com.example.domain.ServiceRes source);\n` +
+          `    public abstract com.example.service.api.dto.ServiceRES instantiateServiceResDtoFallback();\n` +
+          `}\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Service',
+              entityClass: 'Service',
+              entityAbsoluteClass: 'com.example.domain.Service',
+              entityInstance: 'service',
+              entityNameCapitalized: 'Service',
+            },
+          },
+          {
+            definition: {
+              name: 'ServiceRes',
+              entityClass: 'ServiceRes',
+              entityAbsoluteClass: 'com.example.domain.ServiceRes',
+              entityInstance: 'serviceRes',
+              entityNameCapitalized: 'ServiceRes',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/ServiceApiDelegateImpl.java');
+      const output = writes.get(outputPath) ?? '';
+      expect(output).toContain('private final ServiceMapper mapper;');
+      expect(output).not.toContain('private final ServiceResMapper serviceResMapper;');
+      expect(output).toContain('ServiceRES responseBody = this.mapper.toServiceRES(saved);');
+      expect(output).toContain('entities.stream().map(this.mapper::toServiceRES).toList()');
+      expect(output).not.toContain('this.serviceResMapper.toServiceResDto(saved)');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves OpenAPI parameter order when generated delegate signatures are not available yet', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /v1/port-schedules:\n` +
+          `    get:\n` +
+          `      operationId: getV1PortSchedules\n` +
+          `      parameters:\n` +
+          `        - name: UNLocationCode\n` +
+          `          in: query\n` +
+          `          required: true\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `        - name: API-Version\n` +
+          `          in: header\n` +
+          `          required: false\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `        - name: limit\n` +
+          `          in: query\n` +
+          `          required: false\n` +
+          `          schema:\n` +
+          `            type: integer\n` +
+          `            format: int32\n` +
+          `      responses:\n` +
+          `        '200':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                type: array\n` +
+          `                items:\n` +
+          `                  $ref: '#/components/schemas/PortSchedule'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    PortSchedule:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: string\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'PortSchedule',
+              entityClass: 'PortSchedule',
+              entityAbsoluteClass: 'com.example.domain.PortSchedule',
+              entityInstance: 'portSchedule',
+              entityInstancePlural: 'portSchedules',
+              entityNameCapitalized: 'PortSchedule',
+              entityNamePlural: 'PortSchedules',
+              entityNameKebabCase: 'port-schedule',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const output = Array.from(writes.values()).join('\n');
+      const signatureStart = output.indexOf('public ResponseEntity<List<PortSchedule>> getV1PortSchedules(');
+      expect(signatureStart).toBeGreaterThanOrEqual(0);
+      const signature = output.slice(signatureStart, output.indexOf(') {', signatureStart));
+      expect(signature.indexOf('String unlocationCode')).toBeLessThan(signature.indexOf('String apiVersion'));
+      expect(signature.indexOf('String apiVersion')).toBeLessThan(signature.indexOf('Integer limit'));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('places required request bodies before optional parameters when generated delegate signatures are not available yet', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /bookings:\n` +
+          `    post:\n` +
+          `      operationId: createBookings\n` +
+          `      parameters:\n` +
+          `        - name: API-Version\n` +
+          `          in: header\n` +
+          `          required: false\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              $ref: '#/components/schemas/CreateBooking'\n` +
+          `      responses:\n` +
+          `        '202':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/CreateBookingResponse'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    CreateBooking:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        carrierBookingRequestReference:\n` +
+          `          type: string\n` +
+          `    CreateBookingResponse:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        carrierBookingRequestReference:\n` +
+          `          type: string\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Booking',
+              entityClass: 'Booking',
+              entityAbsoluteClass: 'com.example.domain.Booking',
+              entityInstance: 'booking',
+              entityInstancePlural: 'bookings',
+              entityNameCapitalized: 'Booking',
+              entityNamePlural: 'Bookings',
+              entityNameKebabCase: 'booking',
+            },
+          },
+          {
+            definition: {
+              name: 'CreateBooking',
+              entityClass: 'CreateBooking',
+              entityAbsoluteClass: 'com.example.domain.CreateBooking',
+              entityInstance: 'createBooking',
+            },
+          },
+          {
+            definition: {
+              name: 'CreateBookingResponse',
+              entityClass: 'CreateBookingResponse',
+              entityAbsoluteClass: 'com.example.domain.CreateBookingResponse',
+              entityInstance: 'createBookingResponse',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const output = Array.from(writes.values()).join('\n');
+      const signatureStart = output.indexOf('public ResponseEntity<CreateBookingResponse> createBookings(');
+      expect(signatureStart).toBeGreaterThanOrEqual(0);
+      const signature = output.slice(signatureStart, output.indexOf(') {', signatureStart));
+      expect(signature.indexOf('CreateBooking createBooking')).toBeLessThan(signature.indexOf('String apiVersion'));
+      expect(output).toContain('.super.createBookings(createBooking, apiVersion)');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -301,12 +678,119 @@ describe('OpenAPI delegate generator', () => {
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final ReferenceRepository repository;');
       expect(output).toContain('private final ReferenceMapper mapper;');
-      expect(output).toContain('Reference entity = this.mapper.toReference(reference);');
-      expect(output).toContain('return ResponseEntity.created(buildLocation(saved)).body(this.mapper.toReferenceDto(saved));');
+      expect(output).toContain('Reference entity = this.mapper.toReferenceEntity(reference);');
+      expect(output).toContain('Reference responseBody = this.mapper.toReferenceDto(saved);');
+      expect(output).toContain('return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);');
       expect(output).toContain('ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();');
-      expect(output).toContain('String.format("/reference/%s", idValue)');
-      expect(output).toContain('this.mapper.toReference(reference)');
-      expect(output).toContain('return ResponseEntity.ok(this.mapper.toReferenceDto(saved));');
+      expect(output).toContain('String.format("/%s/%s", "reference", idValue)');
+      expect(output).toContain('this.mapper.toReferenceEntity(reference)');
+      expect(output).toContain('convertAndValidate(patchedNode, Reference.class);');
+      expect(output).toContain(
+        'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), Reference.class);',
+      );
+      expect(output).toContain('return ResponseEntity.status(successStatus).body(this.mapper.toReferenceDto(saved));');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('persists no-id PUT request bodies as create-style mutations', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /v3/issuance-requests:\n` +
+          `    put:\n` +
+          `      operationId: putIssuanceRequests\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              $ref: '#/components/schemas/IssuanceRequest'\n` +
+          `      responses:\n` +
+          `        '204':\n` +
+          `          description: accepted\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    IssuanceRequest:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        documentReference:\n` +
+          `          type: string\n`,
+      );
+
+      const interfaceDir = join(tempDir, 'src/main/java/com/example/web/api');
+      mkdirSync(interfaceDir, { recursive: true });
+      writeFileSync(
+        join(interfaceDir, 'V3ApiDelegate.java'),
+        `package com.example.web.api;\n\n` +
+          `import org.springframework.http.ResponseEntity;\n` +
+          `import org.springframework.web.bind.annotation.RequestBody;\n` +
+          `import com.example.service.api.dto.IssuanceRequest;\n\n` +
+          `public interface V3ApiDelegate {\n` +
+          `    default ResponseEntity<Void> putIssuanceRequests(@RequestBody IssuanceRequest issuanceRequest) {\n` +
+          `        return ResponseEntity.status(501).build();\n` +
+          `    }\n` +
+          `}\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'IssuanceRequest',
+              entityClass: 'IssuanceRequest',
+              entityAbsoluteClass: 'com.example.domain.IssuanceRequest',
+              entityInstance: 'issuanceRequest',
+              entityInstancePlural: 'issuanceRequests',
+              entityNameCapitalized: 'IssuanceRequest',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/V3ApiDelegateImpl.java');
+      const output = writes.get(outputPath) ?? '';
+      expect(output).toContain('private final IssuanceRequestRepository repository;');
+      expect(output).toContain('private final IssuanceRequestMapper mapper;');
+      expect(output).toContain('public ResponseEntity<Void> putIssuanceRequests(@RequestBody IssuanceRequest issuanceRequest)');
+      expect(output).toContain('com.example.domain.IssuanceRequest entity = this.mapper.toIssuanceRequestEntity(issuanceRequest);');
+      expect(output).toContain('com.example.domain.IssuanceRequest saved = this.repository.save(entity);');
+      expect(output).toContain('return ResponseEntity.status(resolvedStatus).body((Void) null);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

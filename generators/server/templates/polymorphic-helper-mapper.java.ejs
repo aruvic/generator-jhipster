@@ -1,9 +1,14 @@
 <%
     const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
-    const requestVariants = variants.filter(variant => variant.requiresHelperMapping ?? !variant.isBase);
+    const isResponseRoleVariant = variant => variant.isResponseVariant && !variant.isRequestVariant && String(variant.dtoSimpleName || '').endsWith('RES');
+    const requestVariants = variants.filter(variant => !isResponseRoleVariant(variant) && (variant.requiresHelperMapping ?? !variant.isBase));
+    const responseVariants = variants.filter(variant => variant.isResponseVariant && !variant.isBase);
+    const requiresRequestIdIgnore = true;
     const requiresMappingImport = Boolean(
+        requiresRequestIdIgnore ||
         (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Mapping('))) ||
-        variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Mapping(')))
+        variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Mapping('))) ||
+        variants.some(variant => Array.isArray(variant.responseAnnotations) && variant.responseAnnotations.some(annotation => annotation.includes('@Mapping(')))
     );
     const requiresNamedImport = Boolean(
         (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Named'))) ||
@@ -28,18 +33,7 @@
                 return false;
             }
             const variantEffectiveSubtypes = (candidate.subtypes && candidate.subtypes.length > 0) ? candidate.subtypes : subtypes;
-            const variantSuffix = candidate.dtoSimpleName.replace(baseType, '');
-            const normalizedVariantSuffix = variantSuffix.replace(/_/g, '');
-
-            return variantEffectiveSubtypes.some(subtype => {
-                let subtypeDtoType = subtype.dtoType;
-                if (normalizedVariantSuffix === 'FVO' && !subtype.dtoSimpleName.endsWith(normalizedVariantSuffix)) {
-                    const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
-                    const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
-                    subtypeDtoType = `${packagePart}.${subtypeBase}${normalizedVariantSuffix}`;
-                }
-                return subtypeDtoType === dtoType;
-            });
+            return variantEffectiveSubtypes.some(subtype => subtype.dtoType === dtoType);
         });
     };
     const baseDtoSimpleName = baseDtoType.substring(baseDtoType.lastIndexOf('.') + 1);
@@ -51,19 +45,7 @@
             }
             return subtype.dtoType;
         }
-        const usesBaseSubtypes = !variant.subtypes || variant.subtypes.length === 0;
-        if (!usesBaseSubtypes) {
-            return subtype.dtoType;
-        }
-        let subtypeDtoType = subtype.dtoType;
-        const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
-        const normalizedVariantSuffix = variantSuffix.replace(/_/g, '');
-        if (normalizedVariantSuffix && !subtype.dtoSimpleName.endsWith(normalizedVariantSuffix)) {
-            const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
-            const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
-            subtypeDtoType = `${packagePart}.${subtypeBase}${normalizedVariantSuffix}`;
-        }
-        return subtypeDtoType;
+        return subtype.dtoType;
     };
 %>
 /**
@@ -123,9 +105,10 @@ _%>
             return null;
         }
         <%- baseDomainType %> unwrapped = unwrapHibernateProxy(source);
-<%_ if (hasDomainDiscriminatorAccessor) { _%>
+<%_ if (domainDiscriminatorAccessor) { _%>
         String discriminator = null;
-        discriminator = unwrapped.getAtType();
+        Object discriminatorValue = <%- domainDiscriminatorAccessor %>;
+        discriminator = discriminatorValue != null ? discriminatorValue.toString() : null;
 <%_ for (const subtype of orderedSubtypes) { 
       if (subtype.isCompatible === false) { continue; }
       if (subtype.isDtoSubtype === false) { continue; }
@@ -181,6 +164,10 @@ _%>
 <%_ for (const annotation of baseMethodAnnotations) { _%>
     <%- annotation %>
 <%_ } _%>
+<%_ } _%>
+<%_ const baseHasIdIgnore = (baseMethodAnnotations || []).some(annotation => annotation.includes('target = "id"')); _%>
+<%_ if (!baseHasIdIgnore) { _%>
+    @Mapping(target = "id", ignore = true)
 <%_ } _%>
 <%_ for (const subtype of orderedSubtypes) { 
       if (subtype.isCompatible === false) { continue; }
@@ -244,6 +231,18 @@ _%>
 
 <%_ } _%>
 
+<%_ for (const variant of responseVariants) {
+      const variantMappingMethodName = `to${variant.dtoSimpleName}`;
+_%>
+<%_ if (variant.responseAnnotations && variant.responseAnnotations.length > 0) { _%>
+<%_ for (const annotation of variant.responseAnnotations) { _%>
+    <%- annotation %>
+<%_ } _%>
+<%_ } _%>
+    public abstract <%- variant.dtoType %> <%- variantMappingMethodName %>(<%- baseDomainType %> source);
+
+<%_ } _%>
+
     @ObjectFactory
     protected <%- baseDomainType %> create<%- baseType %>(<%- baseDtoType %> source) {
         if (source == null) {
@@ -274,33 +273,50 @@ _%>
       const hasNamedAnnotation = Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Named'));
       const shouldAddNamedAnnotation = !hasNamedAnnotation && isDtoTypeUsedInSubclassMappings(variant.dtoType);
       const subtypeQualifier = subtypeDtoType => mappingQualifierForSubtype(subtypeDtoType);
+      const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1);
+      const targetMapperSimpleName = variant.targetDomainSimpleName ? `${variant.targetDomainSimpleName}Mapper` : undefined;
+      const targetMapperField = targetMapperSimpleName ? lowerFirst(targetMapperSimpleName) : undefined;
+      const canDelegateToConcreteMapper = Boolean(
+        targetMapperSimpleName &&
+        targetMapperField &&
+        mapperFields.some(field => field.simpleName === targetMapperSimpleName) &&
+        targetDomainType !== baseDomainType &&
+        !variantDtoSimpleName.startsWith(baseType) &&
+        !variant.usesHelperMapper
+      );
+      const methodAnnotations = canDelegateToConcreteMapper
+        ? (variant.annotations ?? []).filter(annotation => annotation.includes('@Named'))
+        : (variant.annotations ?? []);
+      const methodHasIdIgnore = methodAnnotations.some(annotation => annotation.includes('target = "id"'));
 _%>
-<%_ if (variant.annotations && variant.annotations.length > 0) { _%>
-<%_ for (const annotation of variant.annotations) { _%>
+<%_ if (methodAnnotations.length > 0) { _%>
+<%_ for (const annotation of methodAnnotations) { _%>
     <%- annotation %>
 <%_ } _%>
 <%_ } _%>
 <%_ if (shouldAddNamedAnnotation) { _%>
     @Named("<%- variantMappingMethodName %>")
 <%_ } _%>
-<%_   const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1); _%>
+<%_ if (!canDelegateToConcreteMapper && !methodHasIdIgnore) { _%>
+    @Mapping(target = "id", ignore = true)
+<%_ } _%>
 <%_   if (variantDtoSimpleName.startsWith(baseType)) { _%>
 <%_   for (const subtype of variantOrderedSubtypes) { 
         if (subtype.isDtoSubtype === false) { continue; }
-        let subtypeDtoType = subtype.dtoType;
-        const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
-        const normalizedVariantSuffix = variantSuffix.replace(/_/g, '');
-        if (normalizedVariantSuffix === 'FVO' && !subtype.dtoSimpleName.endsWith(normalizedVariantSuffix)) {
-            const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
-            const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
-            subtypeDtoType = `${packagePart}.${subtypeBase}${normalizedVariantSuffix}`;
-        }
+        const subtypeDtoType = subtype.dtoType;
    _%>
     @SubclassMapping(source = <%- subtypeDtoType %>.class, target = <%- subtype.domainType %>.class<%- subtypeQualifier(subtypeDtoType) ? `, qualifiedByName = "${subtypeQualifier(subtypeDtoType)}"` : '' %>)
 <%_   } _%>
 <%_   } _%>
+<%_ if (canDelegateToConcreteMapper) { _%>
+    public <%- targetDomainType %> <%- variantMappingMethodName %>(<%- variant.dtoType %> source) {
+        return this.<%- targetMapperField %>.to<%- variant.targetDomainSimpleName %>Entity(source);
+    }
+<%_ } else { _%>
     public abstract <%- targetDomainType %> <%- variantMappingMethodName %>(<%- variant.dtoType %> source);
+<%_ } _%>
 
+<%_ if (variant.generateObjectFactory !== false) { _%>
     @ObjectFactory
     protected <%- targetDomainType %> instantiate<%- baseType %>From<%- variant.dtoSimpleName %>(<%- variant.dtoType %> source) {
         if (source == null) {
@@ -309,15 +325,7 @@ _%>
 <%_ 
         for (const subtype of variantOrderedSubtypes) {
             if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; }
-            let subtypeDtoType = subtype.dtoType;
-            if (!variant.subtypes || variant.subtypes.length === 0) {
-                const variantSuffix = variant.dtoSimpleName.replace(baseType, '');
-                if (variantSuffix) {
-                    const subtypeBase = subtype.dtoSimpleName.replace(/DTO$/, '');
-                    const packagePart = subtype.dtoType.substring(0, subtype.dtoType.lastIndexOf('.'));
-                    subtypeDtoType = `${packagePart}.${subtypeBase}${variantSuffix}`;
-                }
-            }
+            const subtypeDtoType = subtype.dtoType;
 _%>
     <%_ if (subtype.isCompatible) { _%>
         if ((Object) source instanceof <%- subtypeDtoType %>) {
@@ -352,6 +360,7 @@ _%>
         return null;
 <%_     } _%>
     }
+<%_ } _%>
 
     protected java.util.List<<%- baseDomainType %>> map<%- variant.dtoSimpleName %>ListTo<%- baseType %>List(
         java.util.List<<%- variant.dtoType %>> source

@@ -129,6 +129,15 @@ import org.hibernate.type.SqlTypes;
       <%_ if (relationship.relationshipValidate && relationship.relationshipRequired) { _%>
     @NotNull
       <%_ } _%>
+      <%_ if (relationship.otherEntity.primaryKey.fields.length === 1) { _%>
+    @JoinColumn(name = "<%= relationship.joinColumnNames[0] %>")
+      <%_ } else { _%>
+    @JoinColumns({
+        <%_ relationship.otherEntity.primaryKey.fields.forEach((field, idx) => { _%>
+        <%= idx === 0 ? '' : ',' %>@JoinColumn(name = "<%= relationship.joinColumnNames[idx] %>", referencedColumnName = "<%= field.columnName %>")
+        <%_ }); _%>
+    })
+      <%_ } _%>
   <%_ } else if (relationship.relationshipManyToMany) { -%>
     @ManyToMany(fetch = FetchType.LAZY<% if (!relationship.ownerSide) { %>, mappedBy = "<%= relationship.otherRelationship.propertyName %>"<% } %><% if (enableSwaggerCodegen) { %>, cascade = CascadeType.ALL<% } %>)
       <%_ if (relationship.ownerSide) { _%>
@@ -162,10 +171,10 @@ import org.hibernate.type.SqlTypes;
         <%_ } _%>
         <%_ if (relationship.id) { %>
     @MapsId
-    @JoinColumn(name = "<%= relationship.otherEntity.primaryKey.fields[0].columnName %>")
-        <%_ } else { _%>
-    @JoinColumn(unique = true)
-        <%_ } _%>
+	    @JoinColumn(name = "<%= relationship.otherEntity.primaryKey.fields[0].columnName %>")
+	        <%_ } else { _%>
+    @JoinColumn(name = "<%= relationship.joinColumnNames[0] %>", unique = true)
+	        <%_ } _%>
       <%_ } else { _%>
     @OneToOne(fetch = FetchType.LAZY, mappedBy = "<%= relationship.otherEntityRelationshipName %>"<% if (enableSwaggerCodegen) { %>, cascade = CascadeType.ALL<% } %>)
       <%_ } -%>

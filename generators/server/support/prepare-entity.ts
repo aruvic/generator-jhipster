@@ -32,6 +32,11 @@ import { hibernateSnakeCase } from './string.ts';
 const { NO: NO_SEARCH_ENGINE, ELASTICSEARCH } = searchEngineTypes;
 const { COUCHBASE } = databaseTypes;
 
+function getFieldColumnName(field: SpringBootField): string | undefined {
+  const databaseField = field as SpringBootField & DatabaseField;
+  return databaseField.columnName ?? field.fieldNameAsDatabaseColumn;
+}
+
 export function loadRequiredConfigDerivedProperties(entity: any) {
   entity.searchEngineCouchbase = entity.searchEngine === COUCHBASE;
   entity.searchEngineElasticsearch = entity.searchEngine === ELASTICSEARCH;
@@ -49,6 +54,8 @@ export function preparePostEntityServerDerivedProperties(
   });
   disableWritableDuplicateColumnFields(entity);
 
+  ensureUniqueSqlRelationshipColumnNames(entity);
+
   if (entity.primaryKey?.derived) {
     entity.isUsingMapsId = true;
     entity.mapsIdAssoc = entity.relationships.find(rel => rel.id);
@@ -62,11 +69,56 @@ export function preparePostEntityServerDerivedProperties(
   if (entity.databaseType === 'sql') {
     for (const relationship of entity.relationships) {
       if (!relationship.otherEntity.embedded) {
+        const relationshipColumnName = (relationship as DatabaseRelationship).columnName ?? hibernateSnakeCase(relationship.relationshipName);
         (relationship as DatabaseRelationship).joinColumnNames = relationship.otherEntity.primaryKey!.fields.map(
           otherField =>
-            `${relationship.id && relationship.relationshipOneToOne ? '' : `${hibernateSnakeCase(relationship.relationshipName)}_`}${(otherField as DatabaseField).columnName}`,
+            `${relationship.id && relationship.relationshipOneToOne ? '' : `${relationshipColumnName}_`}${(otherField as DatabaseField).columnName}`,
         );
       }
+    }
+  }
+}
+
+function ensureUniqueSqlRelationshipColumnNames(
+  entity: SpringBootEntity<SpringBootField, RelationshipWithEntity<SpringBootRelationship, SpringBootEntity>>,
+) {
+  if (entity.databaseType !== 'sql') {
+    return;
+  }
+
+  const usedColumnNames = new Set(entity.fields.map(getFieldColumnName).filter(Boolean));
+  const joinColumnNamesFor = (relationship: RelationshipWithEntity<SpringBootRelationship, SpringBootEntity>, columnName: string) =>
+    relationship.otherEntity.primaryKey!.fields.map(
+      otherField =>
+        `${relationship.id && relationship.relationshipOneToOne ? '' : `${columnName}_`}${(otherField as DatabaseField).columnName}`,
+    );
+
+  for (const relationship of entity.relationships) {
+    if (!relationship.otherEntity || relationship.otherEntity.embedded) {
+      continue;
+    }
+
+    const relationshipUsesJoinColumn =
+      relationship.relationshipManyToOne || (relationship.relationshipOneToOne && relationship.ownerSide && !relationship.id);
+    if (!relationshipUsesJoinColumn) {
+      continue;
+    }
+
+    const databaseRelationship = relationship as SpringBootRelationship & DatabaseRelationship;
+    const originalColumnName = databaseRelationship.columnName ?? hibernateSnakeCase(relationship.relationshipName);
+    let columnName = originalColumnName;
+    let joinColumnNames = joinColumnNamesFor(relationship, columnName);
+    let suffix = 0;
+
+    while (joinColumnNames.some(joinColumnName => usedColumnNames.has(joinColumnName))) {
+      suffix += 1;
+      columnName = suffix === 1 ? `${originalColumnName}_rel` : `${originalColumnName}_rel_${suffix}`;
+      joinColumnNames = joinColumnNamesFor(relationship, columnName);
+    }
+
+    databaseRelationship.columnName = columnName;
+    for (const joinColumnName of joinColumnNames) {
+      usedColumnNames.add(joinColumnName);
     }
   }
 }
@@ -78,11 +130,6 @@ function disableWritableDuplicateColumnFields(
     return;
   }
   const columns = new Map<string, SpringBootField[]>();
-  const getFieldColumnName = (field: SpringBootField): string | undefined => {
-    const databaseField = field as SpringBootField & DatabaseField;
-    return databaseField.columnName ?? field.fieldNameAsDatabaseColumn;
-  };
-
   for (const field of entity.fields) {
     const columnName = getFieldColumnName(field);
     if (!columnName) {
