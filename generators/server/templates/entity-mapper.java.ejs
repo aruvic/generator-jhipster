@@ -11,6 +11,7 @@ package <%- packageName %>;
 <%_ const hasCollectionMerges = requestMappings.some(mapping => Array.isArray(mapping.collectionFields) && mapping.collectionFields.length > 0); _%>
 <%_ const hasResponseCollectionMappings = responseMappings.some(mapping => Array.isArray(mapping.responseCollectionFields) && mapping.responseCollectionFields.length > 0); _%>
 <%_ const hasInlineElementMappings = requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => field.useInlineElementMapping)); _%>
+<%_ const hasNamedHelperMethods = hasInlineElementMappings || hasResponseCollectionMappings; _%>
 <%_ const needsOpenApiPrimitiveMapperField = [...requestMappings, ...responseMappings].some(mapping =>
       (mapping.annotations ?? []).some(annotation => annotation.includes('openApiPrimitiveMapper.'))
     ); _%>
@@ -27,7 +28,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 import org.mapstruct.ObjectFactory;
 <%_ } _%>
-<%_ if (hasInlineElementMappings) { _%>
+<%_ if (hasNamedHelperMethods) { _%>
 import org.mapstruct.Named;
 <%_ } _%>
 
@@ -42,7 +43,9 @@ import org.mapstruct.Named;
         mergeMappers.add(field.mapperFqcn);
       }
     }
-    const mergeMappersList = Array.from(mergeMappers);
+    const currentMapperFqcn = `${packageName}.${mapperName}`;
+    const mergeMappersList = Array.from(mergeMappers).filter(fqcn => fqcn !== currentMapperFqcn);
+    const mapperReceiver = field => field.mapperFqcn === currentMapperFqcn ? 'this' : `this.${field.mapperField}`;
     const needsMapperHelpers = (hasCollectionMerges || hasResponseCollectionMappings) && mergeMappersList.length > 0;
 _%>
 <%_ if (hasCollectionMerges || hasResponseCollectionMappings) { _%>
@@ -149,12 +152,13 @@ public abstract class <%- mapperName %> {
     const responseCollectionFields = Array.from(responseCollectionFieldsByMethod.values());
 _%>
   <%_ for (const field of responseCollectionFields) { _%>
+    @Named("<%- mapperName %>.<%- field.responseListMapMethod %>")
     protected List<<%- field.elementDtoType %>> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
         if (source == null) {
             return null;
         }
         return source.stream()
-            .map(this.<%- field.mapperField %>::<%- field.responseMapMethod %>)
+            .map(<%- mapperReceiver(field) %>::<%- field.responseMapMethod %>)
             .toList();
     }
 
@@ -257,8 +261,8 @@ _%>
             <%- field.targetField %>ExistingKey,
             <%- field.targetField %>IncomingKey,
             <%- field.targetField %>Guard,
-            (existingItem, incomingItem) -> <%_ if (field.useInlineElementMapping) { _%>this.<%- field.inlineUpdateMethod %>(existingItem, incomingItem)<%_ } else { _%>this.<%- field.mapperField %>.<%- field.updateMethod %>(existingItem, incomingItem)<%_ } _%>,
-            incomingItem -> <%_ if (field.useInlineElementMapping) { _%>this.<%- field.inlineMapMethod %>(incomingItem)<%_ } else { _%>this.<%- field.mapperField %>.<%- field.mapMethod %>(incomingItem)<%_ } _%>,
+            (existingItem, incomingItem) -> <% if (field.useInlineElementMapping) { %>this.<%- field.inlineUpdateMethod %>(existingItem, incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.updateMethod %>(existingItem, incomingItem)<% } %>,
+            incomingItem -> <% if (field.useInlineElementMapping) { %>this.<%- field.inlineMapMethod %>(incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.mapMethod %>(incomingItem)<% } %>,
             <%- field.targetField %>Initializer
         );
         target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);

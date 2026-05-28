@@ -18,6 +18,9 @@
 -%>
 package <%= packageName %>.config;
 
+<%_ if (enableSwaggerCodegen) { _%>
+import com.fasterxml.jackson.annotation.JsonInclude;
+<%_ } _%>
 <%_ if (databaseTypeSql && !reactive) { _%>
 import com.fasterxml.jackson.datatype.hibernate6.Hibernate6Module;
 import com.fasterxml.jackson.datatype.hibernate6.Hibernate6Module.Feature;
@@ -32,6 +35,9 @@ import java.io.IOException;
 import java.time.LocalTime;
 
 import org.openapitools.jackson.nullable.JsonNullableModule;
+<%_ if (enableSwaggerCodegen) { _%>
+import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilderCustomizer;
+<%_ } _%>
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -63,6 +69,13 @@ public class JacksonConfiguration {
     public JsonNullableModule jsonNullableModule() {
         return new JsonNullableModule();
     }
+<%_ if (enableSwaggerCodegen) { _%>
+
+    @Bean
+    public Jackson2ObjectMapperBuilderCustomizer openApiJsonSerializationCustomizer() {
+        return builder -> builder.serializationInclusion(JsonInclude.Include.NON_NULL);
+    }
+<%_ } _%>
 <%_ if (databaseTypeSql && !reactive) { _%>
 
     /*

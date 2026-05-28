@@ -24,10 +24,10 @@ while IFS=$'\t' read -r name app_dir jdl_file _yaml_file _db_user _db_name _base
     cd "$app_dir"
     node "$GENERATOR_ROOT/dist/cli/jhipster.cjs" jdl "$jdl_file" --no-insight --force --skip-install < /dev/null
   )
-  echo "=== [$name] compile ==="
+  echo "=== [$name] compile including test support ==="
   (
     cd "$app_dir"
-    ./mvnw clean compile -DskipTests=true -P'!webapp' < /dev/null
+    ./mvnw clean test-compile -DskipTests=true -P'!webapp' < /dev/null
   )
 done < <(
   node "$SCRIPT_DIR/artifact-utils.mjs" list \

@@ -253,6 +253,9 @@ if (addSpringMilestoneRepository) { _%>
     implementation "org.springframework.retry:spring-retry"
 <%_ } _%>
     testImplementation "org.springframework.security:spring-security-test"
+<%_ if (enableSwaggerCodegen) { _%>
+    testImplementation "org.evomaster:evomaster-client-java-controller:${evomasterVersion}"
+<%_ } _%>
     // jhipster-needle-gradle-dependency - JHipster will add additional dependencies here
 <%_ if (reactive) { _%>
     OperatingSystem os = org.gradle.nativeplatform.platform.internal.DefaultNativePlatform.getCurrentOperatingSystem();

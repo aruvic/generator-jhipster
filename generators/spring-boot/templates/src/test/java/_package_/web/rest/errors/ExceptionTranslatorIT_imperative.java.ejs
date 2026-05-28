@@ -86,6 +86,16 @@ class ExceptionTranslatorIT {
     }
 
     @Test
+    void testConstraintViolationException() throws Exception {
+        mockMvc.perform(get("/api/exception-translator-test/constraint-violation").param("param", "abcd")<% if (authenticationUsesCsrf) { %>.with(csrf())<% } %>)
+            .andExpect(status().isBadRequest())
+            .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.message").value(ErrorConstants.ERR_VALIDATION))
+            .andExpect(jsonPath("$.fieldErrors.[0].field").value("param"))
+            .andExpect(jsonPath("$.fieldErrors.[0].message").value("size must be between 0 and 3"));
+    }
+
+    @Test
     void testAccessDenied() throws Exception {
         mockMvc.perform(get("/api/exception-translator-test/access-denied")<% if (authenticationUsesCsrf) { %>.with(csrf())<% } %>)
             .andExpect(status().isForbidden())

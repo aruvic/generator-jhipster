@@ -364,4 +364,139 @@ components:
       result.assertNoFileContent('src/main/resources/swagger/api.yml', 'GeoJsonPoint');
     });
   });
+
+  describe('with custom oas3 input whose allOf child repeats compatible inherited properties', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Inherited Property Overrides
+  version: 1.0.0
+paths:
+  /children:
+    get:
+      operationId: listChildren
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Child'
+components:
+  schemas:
+    Base:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        href:
+          type: string
+    Child:
+      allOf:
+        - $ref: '#/components/schemas/Base'
+        - type: object
+          required:
+            - id
+            - childOnly
+          properties:
+            id:
+              type: string
+              format: uuid
+              readOnly: true
+              description: Duplicate inherited id
+            href:
+              type: string
+              description: Duplicate inherited href
+            childOnly:
+              type: integer
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'inherited-overrides.yaml'), customSpec);
+        })
+        .withJHipsterConfig({
+          buildTool: 'maven',
+          addOpenapiGeneratorPlugin: true,
+          oas3Input: 'inherited-overrides.yaml',
+        });
+    });
+
+    it('should remove compatible duplicated child properties so generated DTOs do not override validated inherited getters', () => {
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Duplicate inherited id');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Duplicate inherited href');
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'childOnly:');
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'required:\n            - childOnly');
+    });
+  });
+
+  describe('with custom oas3 input containing inline anyOf required alternatives', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Inline Alternative Required
+  version: 1.0.0
+paths:
+  /contacts:
+    post:
+      operationId: createContact
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Contact'
+      responses:
+        '201':
+          description: created
+components:
+  schemas:
+    Contact:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+      anyOf:
+        - type: object
+          required:
+            - phone
+          properties:
+            phone:
+              type: string
+        - type: object
+          required:
+            - email
+          properties:
+            email:
+              type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'inline-anyof.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'inline-anyof.yaml' });
+    });
+
+    it('should preserve root required fields but not turn alternatives into unconditional DTO required fields', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'required:\n        - name');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - phone');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - email');
+    });
+  });
 });

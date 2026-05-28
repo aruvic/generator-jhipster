@@ -66,6 +66,9 @@
 <%_ } _%>
         <archunit-junit5.version><%- javaDependencies['archunit-junit5'] %></archunit-junit5.version>
         <mapstruct.version><%- javaDependencies.mapstruct %></mapstruct.version>
+<%_ if (enableSwaggerCodegen) { _%>
+        <evomaster.version><%- javaDependencies.evomaster ?? '6.0.0' %></evomaster.version>
+<%_ } _%>
         <git-commit-id-maven-plugin.version><%- javaDependencies['git-commit-id-maven-plugin'] %></git-commit-id-maven-plugin.version>
         <build-helper-maven-plugin.version><%- springBootDependencies['build-helper-maven-plugin'] %></build-helper-maven-plugin.version>
         <lifecycle-mapping.version><%- javaDependencies['lifecycle-mapping'] %></lifecycle-mapping.version>
@@ -330,6 +333,14 @@
             <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+<%_ if (enableSwaggerCodegen) { _%>
+        <dependency>
+            <groupId>org.evomaster</groupId>
+            <artifactId>evomaster-client-java-controller</artifactId>
+            <version>${evomaster.version}</version>
+            <scope>test</scope>
+        </dependency>
+<%_ } _%>
     </dependencies>
 
     <build>
@@ -385,8 +396,8 @@
                         <delegatePattern>true</delegatePattern>
                         <title><%= dasherizedBaseName %></title>
                         <useSpringBoot3>true</useSpringBoot3>
-                        <useBeanValidation>false</useBeanValidation>
-                        <performBeanValidation>false</performBeanValidation>
+                        <useBeanValidation>true</useBeanValidation>
+                        <performBeanValidation>true</performBeanValidation>
                     </configOptions>
                     <typeMappings>
                         <typeMapping>date=LocalDate</typeMapping>

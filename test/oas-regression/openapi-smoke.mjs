@@ -69,6 +69,19 @@ function operationParameters(pathItem, operation) {
   return [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].map(parameter => deref(parameter));
 }
 
+function operationRequestHeaders(pathItem, operation) {
+  const headers = {};
+  for (const parameter of operationParameters(pathItem, operation)) {
+    if (parameter?.in !== 'header' || !parameter.required) continue;
+    const name = String(parameter.name ?? '');
+    if (/^(authorization|content-type|accept)$/i.test(name)) continue;
+    const value = payloadFor(parameter.schema ?? {}, { mode: 'header', full: false });
+    if (value === undefined) continue;
+    headers[name] = Array.isArray(value) ? value.join(',') : String(value);
+  }
+  return headers;
+}
+
 function requestBodyFor(operation) {
   return deref(operation.requestBody);
 }
@@ -168,6 +181,34 @@ function backfillRequiredPayload(output, source, schema, options = {}) {
           ? unknownRequiredPayload(property)
           : source[sourceKey] ?? unknownRequiredPayload(property);
     }
+  }
+}
+
+function shouldBackfillSafeOptionalProperty(propertySchema) {
+  propertySchema = deref(propertySchema);
+  if (!propertySchema) return false;
+  if (schemaType(propertySchema) === 'array' && (propertySchema.minItems ?? 0) > 0) return true;
+  if (schemaType(propertySchema) === 'object' && (propertySchema.minProperties ?? 0) > 0) return true;
+  return false;
+}
+
+function backfillSafeOptionalPayload(output, source, schema, options = {}) {
+  const mode = options.mode ?? 'create';
+  const full = options.full ?? mode !== 'patch';
+  if (!isRequestPayloadMode(mode)) return;
+  const seen = options.seen ?? new Set();
+  const properties = collectProperties(schema);
+  for (const [property, propertySchema] of Object.entries(properties)) {
+    const resolvedPropertySchema = deref(propertySchema);
+    if (!shouldBackfillSafeOptionalProperty(resolvedPropertySchema)) continue;
+    if (resolvedPropertySchema?.readOnly) continue;
+    if (output[property] !== undefined) continue;
+    const sourceKey = matchingPropertyName(property, source);
+    const value =
+      sourceKey === undefined
+        ? payloadFor(propertySchema, { mode, full, seen })
+        : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen });
+    if (value !== undefined) output[property] = value;
   }
 }
 
@@ -380,6 +421,15 @@ function normalizePrimitive(value) {
     .toLowerCase();
 }
 
+function nameTokens(value) {
+  return String(value)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .map(normalizePrimitive)
+    .filter(Boolean);
+}
+
 function patternExample(pattern, minLength = 1, maxLength = 64) {
   const candidates = ['ABC123', 'ABC', 'AA', 'A1', '1', 'sample', 'sample-value', '2026-05-20'];
   let re;
@@ -451,6 +501,8 @@ function payloadFor(schema, options = {}) {
         .map(part => payloadFor(part, { mode, full, seen }))
         .filter(value => value !== undefined)
         .reduce(mergeObjects, {});
+      backfillRequiredPayload(output, {}, schema, { mode, full, seen });
+      backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen });
       return ensureDiscriminatorValue(output, schema, schemaName);
     }
     const variant = chooseVariant(schema);
@@ -492,6 +544,7 @@ function payloadFor(schema, options = {}) {
         output[property] = unknownRequiredPayload(property);
       }
     }
+    backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen });
     if (!Object.keys(output).length && schema.additionalProperties) {
       output.additionalProperty = schema.additionalProperties === true ? 'sample' : payloadFor(schema.additionalProperties, { mode, full, seen });
     }
@@ -535,6 +588,7 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
         if (sanitizedValue !== undefined) output[property] = sanitizedValue;
       }
       backfillRequiredPayload(output, value, schema, { mode, full, seen });
+      backfillSafeOptionalPayload(output, value, schema, { mode, full, seen });
       return ensureDiscriminatorValue(output, schema, schemaName);
     }
     const variant = chooseVariant(schema, value);
@@ -574,6 +628,7 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
     }
     const shouldBackfill = full || mode !== 'patch';
     backfillRequiredPayload(output, value, schema, { mode, full: shouldBackfill, seen });
+    backfillSafeOptionalPayload(output, value, schema, { mode, full: shouldBackfill, seen });
     return ensureDiscriminatorValue(output, schema, schemaName);
   } finally {
     if (visitKey) seen.delete(visitKey);
@@ -726,6 +781,16 @@ function identityValueFor(paramName, json, locationHeader) {
   if (exact) return exact.value;
   const suffix = properties.find(property => normalizePrimitive(property.name).endsWith(normalizedParam));
   if (suffix) return suffix.value;
+  const paramTokens = nameTokens(paramName);
+  const tokenCompatible = properties.find(property => {
+    const propertyTokens = nameTokens(property.name);
+    return (
+      paramTokens.length > 1 &&
+      propertyTokens.at(-1) === paramTokens.at(-1) &&
+      paramTokens.every(token => propertyTokens.includes(token))
+    );
+  });
+  if (tokenCompatible) return tokenCompatible.value;
   if (normalizedParam === 'id') {
     const idLike = properties.find(property => /(^|[_-])id$/i.test(property.name) || /id$/i.test(property.name) || /reference$/i.test(property.name));
     if (idLike) return idLike.value;
@@ -805,10 +870,25 @@ function urlFor(resolvedPath) {
   return `${trimmedBase}${resolvedPath}`;
 }
 
-async function request(method, resolvedPath, body) {
-  const headers = { Accept: 'application/json' };
+function serializeError(error) {
+  if (!error || typeof error !== 'object') return { message: String(error) };
+  return {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    errno: error.errno,
+    syscall: error.syscall,
+    address: error.address,
+    port: error.port,
+    stack: error.stack,
+    cause: error.cause ? serializeError(error.cause) : undefined,
+  };
+}
+
+async function request(method, resolvedPath, body, requestHeaders = {}) {
+  const headers = { Accept: 'application/json', Connection: 'close', ...requestHeaders };
   if (token && token !== '-') headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (body !== undefined && !Object.keys(headers).some(header => /^content-type$/i.test(header))) headers['Content-Type'] = 'application/json';
   const response = await fetch(urlFor(resolvedPath), {
     method: method.toUpperCase(),
     headers,
@@ -868,10 +948,14 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
         ? sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch' })
         : payloadFor(schema, { mode: bodyMode, full: bodyMode !== 'patch' })
       : undefined;
+  const requestHeaders = operationRequestHeaders(pathItem, operation);
   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
   evidenceSequence += 1;
   const key = operationKey(method, rawPath, operation);
   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);
+  const headersFile = Object.keys(requestHeaders).length
+    ? writeJson(path.join(outputDir, 'payloads', `${key}.headers.json`), requestHeaders)
+    : undefined;
   if (schema && payload !== undefined) {
     const requestErrors = validateValue(payload, schema, { mode: 'request' });
     if (requestErrors.length) {
@@ -881,12 +965,28 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
         command: `${method.toUpperCase()} ${urlFor(resolvedPath)}`,
         endpoint: resolvedPath,
         requestJson: requestFile,
+        requestHeaders,
         requestValidation: requestErrors,
       });
       throw new Error(`${appName} generated invalid request for ${method.toUpperCase()} ${resolvedPath}: ${requestErrors.join('; ')}`);
     }
   }
-  const response = await request(method, resolvedPath, payload);
+  let response;
+  try {
+    response = await request(method, resolvedPath, payload, requestHeaders);
+  } catch (error) {
+    const networkError = serializeError(error);
+    writeJson(path.join(outputDir, 'failure.json'), {
+      appName,
+      artifact: yamlPath,
+      command: `${method.toUpperCase()} ${urlFor(resolvedPath)}`,
+      endpoint: resolvedPath,
+      requestJson: requestFile,
+      requestHeaders,
+      networkError,
+    });
+    throw new Error(`${appName} ${method.toUpperCase()} ${resolvedPath} request failed: ${networkError.message}`, { cause: error });
+  }
   const responseFile = writeJson(path.join(outputDir, 'responses', `${key}.json`), {
     status: response.status,
     body: response.json ?? response.text,
@@ -898,6 +998,8 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
     status: response.status,
     expected,
     requestFile,
+    headersFile,
+    requestHeaders,
     responseFile,
   };
   results.push(result);
@@ -908,6 +1010,7 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
       command: `${method.toUpperCase()} ${urlFor(resolvedPath)}`,
       endpoint: resolvedPath,
       requestJson: requestFile,
+      requestHeaders,
       responseStatus: response.status,
       responseBody: response.json ?? response.text,
     });
@@ -924,6 +1027,7 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
         command: `${method.toUpperCase()} ${urlFor(resolvedPath)}`,
         endpoint: resolvedPath,
         requestJson: requestFile,
+        requestHeaders,
         responseStatus: response.status,
         responseBody: response.json,
         responseValidation: responseErrors,

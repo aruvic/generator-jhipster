@@ -69,6 +69,58 @@ describe(`generator - ${generator}`, () => {
     });
   });
 
+  describe('with required blob fields', () => {
+    before(async () => {
+      await helpers.runJHipster(generator).withJHipsterConfig({}, [
+        {
+          name: 'Document',
+          fields: [
+            { fieldName: 'description', fieldType: 'TextBlob', fieldValidateRules: ['required'] },
+            { fieldName: 'content', fieldType: 'Blob', fieldValidateRules: ['required'] },
+          ],
+        },
+      ]);
+    });
+
+    it('should add bean validation before database null constraints', () => {
+      result.assertFileContent('src/main/java/com/mycompany/myapp/domain/Document.java', '@NotNull');
+      result.assertFileContent('src/main/java/com/mycompany/myapp/domain/Document.java', 'private String description;');
+      result.assertFileContent('src/main/java/com/mycompany/myapp/domain/Document.java', 'private byte[] content;');
+    });
+  });
+
+  describe('with JavaBean acronym-style properties', () => {
+    before(async () => {
+      await helpers.runJHipster(generator).withJHipsterConfig({}, [
+        {
+          name: 'SupportingDocument',
+          fields: [{ fieldName: 'name', fieldType: 'String' }],
+        },
+        {
+          name: 'IssuanceManifest',
+          fields: [{ fieldName: 'eBLVisualisationByCarrierChecksum', fieldType: 'String' }],
+        },
+        {
+          name: 'IssuanceRequest',
+          relationships: [
+            {
+              relationshipType: 'many-to-one',
+              relationshipName: 'eBLVisualisationByCarrier',
+              otherEntityName: 'SupportingDocument',
+            },
+          ],
+        },
+      ]);
+    });
+
+    it('should use generated JavaBean accessor suffixes in domain test helpers', () => {
+      result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java', 'seteBLVisualisationByCarrierChecksum');
+      result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java', 'setEBLVisualisationByCarrierChecksum');
+      result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'getEBLVisualisationByCarrier');
+      result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'geteBLVisualisationByCarrier');
+    });
+  });
+
   describe('with jakarta and enums disabled', () => {
     before(async () => {
       await helpers

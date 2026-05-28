@@ -38,6 +38,8 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.HeadersConfigurer.FrameOptionsConfig;
 <%_ } _%>
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.firewall.HttpFirewall;
+import org.springframework.security.web.firewall.StrictHttpFirewall;
 <%_ if (!skipClient || authenticationUsesCsrf) { _%>
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 <%_ } _%>
@@ -151,6 +153,15 @@ public class SecurityConfiguration {
         return new BCryptPasswordEncoder();
     }
 <%_ } _%>
+
+    @Bean
+    public HttpFirewall strictHttpFirewall() {
+        StrictHttpFirewall firewall = new StrictHttpFirewall();
+        firewall.setAllowUrlEncodedPercent(true);
+        firewall.setAllowBackSlash(true);
+        firewall.setAllowSemicolon(true);
+        return firewall;
+    }
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {

@@ -18,7 +18,18 @@
 -%>
 package <%= packageName %>.config;
 
+import com.fasterxml.jackson.annotation.JsonSubTypes;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.springdoc.core.models.GroupedOpenApi;
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.media.Discriminator;
+import io.swagger.v3.oas.models.media.Schema;
+import io.swagger.v3.oas.models.media.StringSchema;
+import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.info.License;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 
 import org.springframework.context.annotation.Bean;
@@ -34,6 +45,7 @@ import tech.jhipster.config.apidoc.customizer.JHipsterOpenApiCustomizer;
 public class OpenApiConfiguration {
 
     public static final String API_FIRST_PACKAGE = "<%= packageName %>.web.api";
+    private static final String API_FIRST_DTO_PACKAGE = "<%= packageName %>.service.api.dto";
 
     @Bean
     @ConditionalOnMissingBean(name = "apiFirstGroupedOpenAPI")
@@ -45,8 +57,109 @@ public class OpenApiConfiguration {
         return GroupedOpenApi.builder()
             .group("openapi")
             .addOpenApiCustomizer(jhipsterOpenApiCustomizer)
+            .addOpenApiCustomizer(this::ensureLicenseMetadata)
+            .addOpenApiCustomizer(this::normalizeDiscriminatorSchemas)
             .packagesToScan(API_FIRST_PACKAGE)
             .pathsToMatch(properties.getDefaultIncludePattern())
             .build();
+    }
+
+    private void ensureLicenseMetadata(OpenAPI openApi) {
+        Info info = openApi.getInfo();
+        if (info == null) {
+            info = new Info();
+            openApi.setInfo(info);
+        }
+        License license = info.getLicense();
+        if (license == null) {
+            license = new License();
+            info.setLicense(license);
+        }
+        if (license.getName() == null || license.getName().isBlank()) {
+            license.setName("Unspecified");
+        }
+        if (license.getIdentifier() == null || license.getIdentifier().isBlank()) {
+            license.setIdentifier("LicenseRef-Unspecified");
+        }
+    }
+
+    private void normalizeDiscriminatorSchemas(OpenAPI openApi) {
+        if (openApi.getComponents() == null || openApi.getComponents().getSchemas() == null) {
+            return;
+        }
+        Map<String, Schema> schemas = openApi.getComponents().getSchemas();
+        schemas.forEach((schemaName, schema) -> {
+            Discriminator discriminator = schema.getDiscriminator();
+            if (discriminator == null || discriminator.getPropertyName() == null || discriminator.getPropertyName().isBlank()) {
+                return;
+            }
+            ensureDiscriminatorProperty(schema, discriminator.getPropertyName());
+            applyJacksonSubtypeMappings(schemaName, discriminator, schemas);
+        });
+    }
+
+    private void ensureDiscriminatorProperty(Schema schema, String propertyName) {
+        if (schema.getType() == null || schema.getType().isBlank()) {
+            schema.setType("object");
+        }
+        if (schema.getTypes() == null || !schema.getTypes().contains("object")) {
+            schema.addType("object");
+        }
+        Map<String, Schema> properties = schema.getProperties();
+        if (properties == null) {
+            properties = new LinkedHashMap<>();
+            schema.setProperties(properties);
+        }
+
+        Schema propertySchema = properties.get(propertyName);
+        if (propertySchema == null) {
+            properties.put(propertyName, new StringSchema());
+        } else if (propertySchema.get$ref() == null && (propertySchema.getType() == null || !propertySchema.getType().equals("string"))) {
+            propertySchema.setType("string");
+            propertySchema.addType("string");
+        }
+
+        List<String> required = schema.getRequired();
+        if (required == null) {
+            required = new ArrayList<>();
+            schema.setRequired(required);
+        }
+        if (!required.contains(propertyName)) {
+            required.add(propertyName);
+        }
+    }
+
+    private void applyJacksonSubtypeMappings(String schemaName, Discriminator discriminator, Map<String, Schema> schemas) {
+        Class<?> dtoClass = findDtoClass(schemaName);
+        if (dtoClass == null) {
+            return;
+        }
+        JsonSubTypes subTypes = dtoClass.getAnnotation(JsonSubTypes.class);
+        if (subTypes == null) {
+            return;
+        }
+        Map<String, String> mapping = discriminator.getMapping();
+        if (mapping == null) {
+            mapping = new LinkedHashMap<>();
+            discriminator.setMapping(mapping);
+        }
+        for (JsonSubTypes.Type subType : subTypes.value()) {
+            String discriminatorValue = subType.name();
+            if (discriminatorValue == null || discriminatorValue.isBlank()) {
+                discriminatorValue = subType.value().getSimpleName();
+            }
+            String targetSchemaName = subType.value().getSimpleName();
+            if (schemas.containsKey(targetSchemaName)) {
+                mapping.putIfAbsent(discriminatorValue, "#/components/schemas/" + targetSchemaName);
+            }
+        }
+    }
+
+    private Class<?> findDtoClass(String schemaName) {
+        try {
+            return Class.forName(API_FIRST_DTO_PACKAGE + "." + schemaName);
+        } catch (ClassNotFoundException ignored) {
+            return null;
+        }
     }
 }

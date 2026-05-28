@@ -21,14 +21,97 @@
 <%_
   const inheritedFieldNames = new Set();
   let inheritanceCursor = typeof entity !== 'undefined' && entity ? entity.parentEntity : undefined;
-  while (inheritanceCursor && inheritanceCursor.fields) {
-    for (const inheritedField of inheritanceCursor.fields) {
-      inheritedFieldNames.add(inheritedField.fieldName);
-    }
-    inheritanceCursor = inheritanceCursor.parentEntity;
-  }
-  const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
-_%>
+	  while (inheritanceCursor && inheritanceCursor.fields) {
+	    for (const inheritedField of inheritanceCursor.fields) {
+	      inheritedFieldNames.add(inheritedField.fieldName);
+	    }
+	    inheritanceCursor = inheritanceCursor.parentEntity;
+	  }
+	  const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+	  const discriminatorConstraintValues = [];
+	  if (entity.polymorphicRoot && entity.discriminatorColumn) {
+	    const seenDiscriminatorValues = new Set();
+	    const addDiscriminatorValue = value => {
+	      if (value === undefined || value === null || String(value).trim() === '') {
+	        return;
+	      }
+	      const stringValue = String(value).trim();
+	      if (!seenDiscriminatorValues.has(stringValue)) {
+	        seenDiscriminatorValues.add(stringValue);
+	        discriminatorConstraintValues.push(stringValue);
+	      }
+	    };
+	    const addChildDiscriminatorValues = children => {
+	      for (const child of children ?? []) {
+	        addDiscriminatorValue(child.discriminatorValue);
+	        addChildDiscriminatorValues(child.childEntities);
+	      }
+	    };
+	    const addConfiguredDiscriminatorValues = configuredValues => {
+	      if (!configuredValues) {
+	        return;
+	      }
+	      if (typeof configuredValues === 'string') {
+	        for (const part of configuredValues.split(',')) {
+	          const [value] = part.split('->');
+	          addDiscriminatorValue(value);
+	        }
+	        return;
+	      }
+	      if (Array.isArray(configuredValues)) {
+	        for (const entry of configuredValues) {
+	          if (typeof entry === 'string') {
+	            const [value] = entry.split('->');
+	            addDiscriminatorValue(value);
+	          } else if (entry && typeof entry === 'object') {
+	            addDiscriminatorValue(entry.discriminatorValue ?? entry.value ?? entry.name);
+	          }
+	        }
+	        return;
+	      }
+	      if (typeof configuredValues === 'object') {
+	        for (const value of Object.keys(configuredValues)) {
+	          addDiscriminatorValue(value);
+	        }
+	      }
+	    };
+	    addChildDiscriminatorValues(entity.childEntities);
+	    addConfiguredDiscriminatorValues(entity.discriminatorColumn.values);
+	  }
+	  const formatDiscriminatorSqlValue = value => {
+	    if (entity.discriminatorColumn?.discriminatorType === 'INTEGER' && /^-?\d+$/.test(value)) {
+	      return value;
+	    }
+	    return `'${value.replace(/'/g, "''")}'`;
+	  };
+	  const formatSqlStringValue = value => `'${String(value).replace(/'/g, "''")}'`;
+	  const discriminatorCheckSql = discriminatorConstraintValues.length > 0
+	    ? `ALTER TABLE ${entity.entityTableName} ADD CONSTRAINT ${this.getUXConstraintName(entity.entityTableName, entity.discriminatorColumn.name, entity.prodDatabaseType).replace(/^ux_/, 'ck_')} CHECK (${entity.discriminatorColumn.name} IN (${discriminatorConstraintValues.map(formatDiscriminatorSqlValue).join(', ')}))`
+	    : undefined;
+	  const enumCheckSqls = [];
+	  const enumConstraintNames = new Set();
+	  for (const field of declaredFields) {
+	    if (!field.fieldIsEnum || !field.columnName || field.columnName === entity.discriminatorColumn?.name) {
+	      continue;
+	    }
+	    const enumValues = field.enumValues?.length
+	      ? field.enumValues.map(enumValue => enumValue.name)
+	      : String(field.fieldValues ?? '')
+	          .split(',')
+	          .map(value => value.trim().replace(/\(.+\)$/, ''))
+	          .filter(Boolean);
+	    const uniqueEnumValues = [...new Set(enumValues.filter(Boolean))];
+	    if (uniqueEnumValues.length === 0) {
+	      continue;
+	    }
+	    const constraintName = this.getUXConstraintName(entity.entityTableName, field.columnName, entity.prodDatabaseType).replace(/^ux_/, 'ck_');
+	    if (enumConstraintNames.has(constraintName)) {
+	      continue;
+	    }
+	    enumConstraintNames.add(constraintName);
+	    enumCheckSqls.push(`ALTER TABLE ${entity.entityTableName} ADD CONSTRAINT ${constraintName} CHECK (${field.columnName} IN (${uniqueEnumValues.map(formatSqlStringValue).join(', ')}))`);
+	  }
+	_%>
 
 <%_ declaredFields.filter(field => field.liquibaseCustomSequenceGenerator).forEach((field, idx) => { _%>
     <changeSet id="<%= changelogDate %>-seq-<%- idx %>" author="jhipster">
@@ -94,8 +177,14 @@ _%>
     }
 } _%>
             <!-- jhipster-needle-liquibase-add-column - JHipster will add columns here -->
-        </createTable>
-<%_ for (const field of fields) {
+	        </createTable>
+	<%_ if (discriminatorCheckSql) { _%>
+	        <sql><%= discriminatorCheckSql %></sql>
+	<%_ } _%>
+	<%_ for (const enumCheckSql of enumCheckSqls) { _%>
+	        <sql><%= enumCheckSql %></sql>
+	<%_ } _%>
+	<%_ for (const field of fields) {
     if (field.shouldDropDefaultValue) { _%>
         <dropDefaultValue tableName="<%= entity.entityTableName %>" columnName="<%= field.columnName %>" columnDataType="${datetimeType}"/>
 <%_ }
@@ -143,14 +232,27 @@ _%>
                   separator=";"
                   tableName="<%= entity.entityTableName %>"
                   usePreparedStatements="true">
+  <%_ const writtenLoadColumnNames = new Set(); _%>
   <%_ for (field of fields) { _%>
+    <%_ if (field.columnName && writtenLoadColumnNames.has(field.columnName)) { _%>
+      <%_ continue; _%>
+    <%_ } _%>
+    <%_ if (field.columnName) { _%>
+      <%_ writtenLoadColumnNames.add(field.columnName); _%>
+    <%_ } _%>
             <column name="<%= field.columnName %>" type="<%= field.loadColumnType %>"/>
     <%_ if (field.fieldType === 'byte[]' && field.fieldTypeBlobContent !== 'text') { _%>
+      <%_ writtenLoadColumnNames.add(`${field.columnName}_content_type`); _%>
             <column name="<%= field.columnName %>_content_type" type="string"/>
     <%_ } _%>
   <%_ } _%>
   <%_ for (relationship of relationships.filter(relationship => !relationship.id && relationship.columnRequired && relationship.persistableRelationship && !relationship.collection)) { _%>
       <%_ for (field of relationship.otherEntity.primaryKey.fields) { _%>
+        <%_ const relationshipLoadColumnName = `${relationship.columnName}_${field.columnName}`; _%>
+        <%_ if (writtenLoadColumnNames.has(relationshipLoadColumnName)) { _%>
+          <%_ continue; _%>
+        <%_ } _%>
+        <%_ writtenLoadColumnNames.add(relationshipLoadColumnName); _%>
             <column name="<%= relationship.columnName %>_<%= field.columnName %>" type="<%= field.loadColumnType %>"/>
     <%_ } _%>
   <%_ } _%>

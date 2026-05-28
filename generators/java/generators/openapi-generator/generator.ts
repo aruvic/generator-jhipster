@@ -116,8 +116,8 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 <delegatePattern>true</delegatePattern>
                                 <title>${application.dasherizedBaseName}</title>
                                 <useSpringBoot3>true</useSpringBoot3>
-                                <useBeanValidation>false</useBeanValidation>
-                                <performBeanValidation>false</performBeanValidation>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
@@ -222,6 +222,8 @@ function sanitizeOpenApiSpec(rawContents: string): string {
     const specObject = parseYaml(rawContents);
     normalizeComponentSchemaNames(specObject);
     reconcileDiscriminatorProperties(specObject);
+    normalizeAllOfInheritedPropertyOverrides(specObject);
+    normalizeInlineComposedRequiredProperties(specObject);
     const stripExamples = (node: any) => {
       if (!node || typeof node !== 'object') return;
 
@@ -477,6 +479,161 @@ function removeInheritedStringDiscriminatorPropertyOverride(
   }
 }
 
+function normalizeAllOfInheritedPropertyOverrides(specObject: any): void {
+  const schemas = specObject?.components?.schemas;
+  if (!schemas || typeof schemas !== 'object' || Array.isArray(schemas)) {
+    return;
+  }
+
+  const normalizeNode = (node: any): void => {
+    if (!node || typeof node !== 'object') {
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach(normalizeNode);
+      return;
+    }
+
+    removeAllOfInheritedPropertyOverrides(node, schemas);
+    for (const value of Object.values(node)) {
+      normalizeNode(value);
+    }
+  };
+
+  for (const schema of Object.values(schemas)) {
+    normalizeNode(schema);
+  }
+}
+
+function removeAllOfInheritedPropertyOverrides(schema: Record<string, any>, schemas: Record<string, any>): void {
+  if (!Array.isArray(schema.allOf)) {
+    return;
+  }
+
+  const inheritedProperties = new Map<string, Record<string, any>>();
+  for (const composedSchema of schema.allOf) {
+    const ref = extractLocalComponentSchemaRef(composedSchema);
+    if (!ref) {
+      continue;
+    }
+    for (const [propertyName, propertySchema] of collectSchemaProperties(ref, schemas)) {
+      if (!inheritedProperties.has(propertyName)) {
+        inheritedProperties.set(propertyName, propertySchema);
+      }
+    }
+  }
+
+  if (inheritedProperties.size === 0) {
+    return;
+  }
+
+  for (const composedSchema of schema.allOf) {
+    if (!isObjectRecord(composedSchema.properties)) {
+      continue;
+    }
+    for (const [propertyName, propertySchema] of Object.entries(composedSchema.properties)) {
+      const inheritedProperty = inheritedProperties.get(propertyName);
+      if (!inheritedProperty || !schemaPropertyShapesCompatible(propertySchema, inheritedProperty, schemas)) {
+        continue;
+      }
+      delete composedSchema.properties[propertyName];
+      removeRequiredProperty(composedSchema, propertyName);
+    }
+    if (Object.keys(composedSchema.properties).length === 0) {
+      delete composedSchema.properties;
+    }
+  }
+}
+
+function collectSchemaProperties(
+  schemaName: string,
+  schemas: Record<string, any>,
+  visiting = new Set<string>(),
+): Map<string, Record<string, any>> {
+  const properties = new Map<string, Record<string, any>>();
+  if (visiting.has(schemaName)) {
+    return properties;
+  }
+  visiting.add(schemaName);
+
+  const schema = schemas[schemaName];
+  if (!isObjectRecord(schema)) {
+    return properties;
+  }
+  if (isObjectRecord(schema.properties)) {
+    for (const [propertyName, propertySchema] of Object.entries(schema.properties)) {
+      if (isObjectRecord(propertySchema)) {
+        properties.set(propertyName, propertySchema);
+      }
+    }
+  }
+  for (const composedSchema of asArray(schema.allOf)) {
+    const ref = extractLocalComponentSchemaRef(composedSchema);
+    if (ref) {
+      for (const [propertyName, propertySchema] of collectSchemaProperties(ref, schemas, visiting)) {
+        if (!properties.has(propertyName)) {
+          properties.set(propertyName, propertySchema);
+        }
+      }
+    } else if (isObjectRecord(composedSchema?.properties)) {
+      for (const [propertyName, propertySchema] of Object.entries(composedSchema.properties)) {
+        if (isObjectRecord(propertySchema)) {
+          properties.set(propertyName, propertySchema);
+        }
+      }
+    }
+  }
+  visiting.delete(schemaName);
+  return properties;
+}
+
+function schemaPropertyShapesCompatible(left: unknown, right: unknown, schemas: Record<string, any>): boolean {
+  const leftSignature = schemaPropertyShapeSignature(left, schemas);
+  const rightSignature = schemaPropertyShapeSignature(right, schemas);
+  return leftSignature !== undefined && leftSignature === rightSignature;
+}
+
+function schemaPropertyShapeSignature(schema: unknown, schemas: Record<string, any>, visiting = new Set<string>()): string | undefined {
+  if (!isObjectRecord(schema)) {
+    return undefined;
+  }
+  const ref = extractLocalComponentSchemaRef(schema);
+  if (ref) {
+    if (visiting.has(ref)) {
+      return `ref:${ref}`;
+    }
+    visiting.add(ref);
+    const referenced = schemas[ref];
+    const signature = schemaPropertyShapeSignature(referenced, schemas, visiting) ?? `ref:${ref}`;
+    visiting.delete(ref);
+    return signature;
+  }
+  if (typeof schema.type === 'string') {
+    if (schema.type === 'array') {
+      return `type:array;items:${schemaPropertyShapeSignature(schema.items, schemas, visiting) ?? 'unknown'}`;
+    }
+    if (schema.type === 'object') {
+      return schema.additionalProperties === undefined
+        ? 'type:object'
+        : `type:object;additional:${schemaPropertyShapeSignature(schema.additionalProperties, schemas, visiting) ?? String(schema.additionalProperties)}`;
+    }
+    return `type:${schema.type};format:${schema.format ?? ''}`;
+  }
+  if (Array.isArray(schema.oneOf)) {
+    return `oneOf:${schema.oneOf.map(item => schemaPropertyShapeSignature(item, schemas, visiting) ?? '').join('|')}`;
+  }
+  if (Array.isArray(schema.anyOf)) {
+    return `anyOf:${schema.anyOf.map(item => schemaPropertyShapeSignature(item, schemas, visiting) ?? '').join('|')}`;
+  }
+  if (Array.isArray(schema.allOf)) {
+    return `allOf:${schema.allOf.map(item => schemaPropertyShapeSignature(item, schemas, visiting) ?? '').join('|')}`;
+  }
+  if (Array.isArray(schema.enum)) {
+    return `enum:${schema.enum.map(value => typeof value).join('|')}`;
+  }
+  return undefined;
+}
+
 function hasAllOfInheritedStringProperty(
   schema: Record<string, any>,
   propertyName: string,
@@ -505,10 +662,17 @@ function removePropertyOverride(schema: Record<string, any>, propertyName: strin
     }
   }
   if (Array.isArray(schema.required)) {
-    schema.required = schema.required.filter((property: unknown) => property !== propertyName);
-    if (schema.required.length === 0) {
-      delete schema.required;
-    }
+    removeRequiredProperty(schema, propertyName);
+  }
+}
+
+function removeRequiredProperty(schema: Record<string, any>, propertyName: string): void {
+  if (!Array.isArray(schema.required)) {
+    return;
+  }
+  schema.required = schema.required.filter((property: unknown) => property !== propertyName);
+  if (schema.required.length === 0) {
+    delete schema.required;
   }
 }
 
@@ -620,6 +784,40 @@ function copySchemaShape(schema: Record<string, any>): Record<string, any> {
     }
   }
   return copied;
+}
+
+function normalizeInlineComposedRequiredProperties(node: any): void {
+  if (!node || typeof node !== 'object') {
+    return;
+  }
+  if (Array.isArray(node)) {
+    node.forEach(normalizeInlineComposedRequiredProperties);
+    return;
+  }
+
+  for (const compositionKey of ['oneOf', 'anyOf']) {
+    const variants = node[compositionKey];
+    if (!Array.isArray(variants)) {
+      continue;
+    }
+    for (const variant of variants) {
+      if (isInlineObjectSchema(variant) && Array.isArray(variant.required)) {
+        delete variant.required;
+      }
+      normalizeInlineComposedRequiredProperties(variant);
+    }
+  }
+
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'oneOf' || key === 'anyOf') {
+      continue;
+    }
+    normalizeInlineComposedRequiredProperties(value);
+  }
+}
+
+function isInlineObjectSchema(schema: any): schema is Record<string, any> {
+  return isObjectRecord(schema) && typeof schema.$ref !== 'string' && (schema.type === 'object' || isObjectRecord(schema.properties));
 }
 
 function extractLocalComponentSchemaRef(value: any): string | undefined {

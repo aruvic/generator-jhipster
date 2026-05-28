@@ -948,7 +948,7 @@ _%>
         // Initialize the database
   <%_ if (!primaryKey.derived) { _%>
     <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
     <%_ } _%>
   <%_ } _%>
         <%= entityInstance %>Repository.save(<%= persistInstance %>)<%= callBlock %>;
@@ -986,7 +986,7 @@ _%>
         // Initialize the database
 <%_ if (!primaryKey.derived) { _%>
   <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
   <%_ } _%>
 <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;
@@ -1077,7 +1077,7 @@ _%>
         // Initialize the database
 <%_ if (!primaryKey.derived) { _%>
   <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
   <%_ } _%>
 <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;
@@ -1482,7 +1482,7 @@ _%>
         // Initialize the database
   <%_ if (!primaryKey.derived) { _%>
     <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
     <%_ } _%>
   <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;
@@ -1682,7 +1682,7 @@ _%>
         // Initialize the database
   <%_ if (!primaryKey.derived) { _%>
     <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
     <%_ } _%>
   <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;
@@ -1702,7 +1702,7 @@ _%>
         // Initialize the database
   <%_ if (!primaryKey.derived) { _%>
     <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
     <%_ } _%>
   <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;
@@ -1888,7 +1888,7 @@ _%>
         // Initialize the database
   <%_ if (!primaryKey.derived) { _%>
     <%_ for (field of primaryKey.fields.filter(f => !f.autoGenerateByRepository)) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.fieldJavaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.fieldJavaValueGenerator %>);
     <%_ } _%>
   <%_ } _%>
         inserted<%= persistClass %> = <%= entityInstance %>Repository.<%= saveMethod %>(<%= persistInstance %>)<%= callBlock %>;

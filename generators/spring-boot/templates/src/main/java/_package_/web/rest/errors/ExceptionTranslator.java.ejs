@@ -69,6 +69,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.lang.Nullable;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 <%_ if (reactive) { _%>
 import reactor.core.publisher.Mono;
@@ -77,6 +78,7 @@ import reactor.core.publisher.Mono;
 <%_ if (!reactive) { _%>
 import jakarta.servlet.http.HttpServletRequest;
 <%_ } _%>
+import jakarta.validation.ConstraintViolationException;
 import java.net.URI;
 import java.util.List;
 import java.util.Arrays;
@@ -207,6 +209,10 @@ _%>
                 (problemProperties == null || !problemProperties.containsKey(FIELD_ERRORS_KEY)))
             problem.setProperty(FIELD_ERRORS_KEY, getFieldErrors(fieldException));
 
+        if(err instanceof ConstraintViolationException fieldException &&
+                (problemProperties == null || !problemProperties.containsKey(FIELD_ERRORS_KEY)))
+            problem.setProperty(FIELD_ERRORS_KEY, getFieldErrors(fieldException));
+
         problem.setCause(buildCause(err.getCause(), request).orElse(null));
 
         return problem;
@@ -227,6 +233,20 @@ _%>
                     StringUtils.isNotBlank(f.getDefaultMessage()) ? f.getDefaultMessage() : f.getCode()
                 )
             )
+            .toList();
+    }
+
+    private List<FieldErrorVM> getFieldErrors(ConstraintViolationException ex) {
+        return ex.getConstraintViolations()
+            .stream()
+            .map(violation -> {
+                String propertyPath = violation.getPropertyPath() != null ? violation.getPropertyPath().toString() : StringUtils.EMPTY;
+                String objectName = StringUtils.substringBefore(propertyPath, ".");
+                String field = StringUtils.substringAfter(propertyPath, ".");
+                if (StringUtils.isBlank(objectName)) objectName = "request";
+                if (StringUtils.isBlank(field)) field = propertyPath;
+                return new FieldErrorVM(objectName, field, violation.getMessage());
+            })
             .toList();
     }
 
@@ -260,21 +280,17 @@ _%>
     }
 
     private URI getMappedType(Throwable err) {
-        if (err instanceof MethodArgumentNotValidException) return ErrorConstants.CONSTRAINT_VIOLATION_TYPE;
+        if (isValidationException(err)) return ErrorConstants.CONSTRAINT_VIOLATION_TYPE;
         return ErrorConstants.DEFAULT_TYPE;
     }
 
     private String getMappedMessageKey(Throwable err) {
-        if(err instanceof MethodArgumentNotValidException) {
+        if(isValidationException(err)) {
             return ErrorConstants.ERR_VALIDATION;
     <%_ if (!databaseTypeNo && !databaseTypeCassandra) { _%>
         } else if(err instanceof ConcurrencyFailureException
                 || err.getCause() instanceof ConcurrencyFailureException) {
             return ErrorConstants.ERR_CONCURRENCY_FAILURE;
-    <%_ } _%>
-    <%_ if (reactive) { _%>
-        } else if (err instanceof WebExchangeBindException) {
-            return ErrorConstants.ERR_VALIDATION;
     <%_ } _%>
         }
         return null;
@@ -282,6 +298,11 @@ _%>
 
     private String getCustomizedTitle(Throwable err) {
         if (err instanceof MethodArgumentNotValidException) return "Method argument not valid";
+    <%_ if (reactive) { _%>
+        if (err instanceof WebExchangeBindException) return "Method argument not valid";
+    <%_ } _%>
+        if (err instanceof HandlerMethodValidationException) return "Method argument not valid";
+        if (err instanceof ConstraintViolationException) return "Constraint violation";
         return null;
     }
 
@@ -299,6 +320,7 @@ _%>
 
     private HttpStatus getMappedStatus(Throwable err) {
         // Where we disagree with Spring defaults
+        if (isValidationException(err)) return HttpStatus.BAD_REQUEST;
         if (err instanceof AccessDeniedException) return HttpStatus.FORBIDDEN;
     <%_ if (!databaseTypeNo && !databaseTypeCassandra) { _%>
         if(err instanceof ConcurrencyFailureException) return HttpStatus.CONFLICT;
@@ -308,6 +330,15 @@ _%>
         if (err instanceof UsernameNotFoundException) return HttpStatus.UNAUTHORIZED;
     <%_ } _%>
         return null;
+    }
+
+    private boolean isValidationException(Throwable err) {
+        return err instanceof MethodArgumentNotValidException
+    <%_ if (reactive) { _%>
+            || err instanceof WebExchangeBindException
+    <%_ } _%>
+            || err instanceof HandlerMethodValidationException
+            || err instanceof ConstraintViolationException;
     }
 
     private URI getPathValue(<%= requestClass %> request) {

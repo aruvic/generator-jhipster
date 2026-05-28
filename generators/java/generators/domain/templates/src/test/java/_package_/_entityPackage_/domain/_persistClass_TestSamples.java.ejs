@@ -123,7 +123,7 @@ public class <%= persistClass %>TestSamples {
         <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.sample1 %>);
   <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueSample1 %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.javaValueSample1 %>);
   <%_ } _%>
         return <%= persistInstance %>;
 <%_ } _%>
@@ -138,7 +138,7 @@ public class <%= persistClass %>TestSamples {
         <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.sample2 %>);
   <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueSample2 %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.javaValueSample2 %>);
   <%_ } _%>
         return <%= persistInstance %>;
 <%_ } _%>
@@ -153,7 +153,7 @@ public class <%= persistClass %>TestSamples {
         <%= persistInstance %>.set<%= primaryKey.nameCapitalized %>(<%- primaryKeySamples.generator %>);
   <%_ } _%>
   <%_ for (const field of sampleFields) { _%>
-        <%= persistInstance %>.set<%= field.fieldNameCapitalized %>(<%- field.javaValueGenerator %>);
+        <%= persistInstance %>.set<%= field.fieldInJavaBeanMethod %>(<%- field.javaValueGenerator %>);
   <%_ } _%>
         return <%= persistInstance %>;
 <%_ } _%>

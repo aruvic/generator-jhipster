@@ -61,7 +61,7 @@ public class <%= persistClass %>Asserts {
      */
     public static void assert<%- persistClass %>MapsIdRelationshipPersistedValue(<%- persistClass %> entityToPersist, <%- persistClass %> persisted) {
         // Validate the id for MapsId, the ids must be same
-        assertThat(entityToPersist.get<%= primaryKey.relationships[0].propertyJavaBeanName %>().get<%= primaryKey.nameCapitalized %>()).isEqualTo(persisted.get<%= primaryKey.nameCapitalized %>());
+        assertThat(entityToPersist.get<%= primaryKey.relationships[0].relationshipNameCapitalized %>().get<%= primaryKey.nameCapitalized %>()).isEqualTo(persisted.get<%= primaryKey.nameCapitalized %>());
     }
 <%_ } _%>
 
@@ -79,7 +79,7 @@ public class <%= persistClass %>Asserts {
             .satisfies(a -> assertThat(a.get<%- field.fieldInJavaBeanMethod %>()).as("check <%- field.propertyName %>").isEqualTo(expected.get<%- field.fieldInJavaBeanMethod %>()))
   <%_ } _%>
   <%_ for (const relationship of relationships.filter(relationship => (!embedded || relationship.otherEntity.embedded) && relationship.autoGenerate && !relationship.otherEntity.builtInUser)) { _%>
-            .satisfies(a -> assertThat(a.get<%- relationship.propertyJavaBeanName %>()).as("check <%- relationship.propertyName %>").isEqualTo(expected.get<%- relationship.propertyJavaBeanName %>()))
+            .satisfies(a -> assertThat(a.get<%- relationship.relationshipNameCapitalized %>()).as("check <%- relationship.propertyName %>").isEqualTo(expected.get<%- relationship.relationshipNameCapitalized %>()))
   <%_ } _%>
         ;
 <%_ } else { _%>
@@ -127,7 +127,7 @@ public class <%= persistClass %>Asserts {
         assertThat(actual)
             .as("Verify <%- persistClass %> relationships")
   <%_ for (const relationship of relationships.filter(relationship => (!embedded || relationship.otherEntity.embedded) && relationship.persistableRelationship && !relationship.id && !relationship.autoGenerate && !relationship.otherEntity.builtInUser)) { _%>
-            .satisfies(a -> assertThat(a.get<%- relationship.propertyJavaBeanName %>()).as("check <%- relationship.propertyName %>").isEqualTo(expected.get<%- relationship.propertyJavaBeanName %>()))
+            .satisfies(a -> assertThat(a.get<%- relationship.relationshipNameCapitalized %>()).as("check <%- relationship.propertyName %>").isEqualTo(expected.get<%- relationship.relationshipNameCapitalized %>()))
   <%_ } _%>
         ;
 <%_ } else { _%>

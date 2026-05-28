@@ -203,7 +203,7 @@ public class <%= entityClass %>Resource {
   <%_ } _%>
   <%_ if (!isUsingMapsId) { _%>
     <%_ for (field of primaryKey.fields.filter(f => f.autoGenerateByService)) { _%>
-        <%= instanceName %>.set<%= field.fieldNameCapitalized %>(UUID.randomUUID());
+        <%= instanceName %>.set<%= field.fieldInJavaBeanMethod %>(UUID.randomUUID());
     <%_ } _%>
   <%_ } _%>
   <%_ if (!primaryKey.autoGenerate && reactive) { _%>

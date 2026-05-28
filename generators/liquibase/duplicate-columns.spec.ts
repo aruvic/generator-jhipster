@@ -1,6 +1,4 @@
-import { before, describe, expect, it } from 'esmocha';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { before, describe, it } from 'esmocha';
 
 import { defaultHelpers as helpers, runResult } from '../../lib/testing/index.ts';
 import { SERVER_MAIN_RES_DIR } from '../generator-constants.js';
@@ -35,6 +33,7 @@ const duplicateColumnEntity = {
   fields: [
     { fieldName: 'typeKey', fieldType: 'String', fieldValidateRules: ['required'] },
     { fieldName: 'typeKeyAlias', fieldType: 'String', fieldNameAsDatabaseColumn: 'type_key' },
+    { fieldName: 'status', fieldType: 'CarrierStatus', fieldValues: 'ACTIVE,INACTIVE' },
   ],
   relationships: [],
 };
@@ -51,7 +50,7 @@ const discriminatorColumnEntity = {
   discriminator: {
     column: 'atType',
     type: 'String',
-    values: 'EntityRefOrValue->EntityRefOrValue',
+    values: 'ConcreteRef->ConcreteRef, ExternalRef->ExternalRef',
   },
   fields: [
     { fieldName: 'atType', fieldType: 'String', fieldValidateRules: ['required'] },
@@ -60,27 +59,53 @@ const discriminatorColumnEntity = {
   relationships: [],
 };
 
-const readChangelog = (relativePath: string) => readFileSync(join(runResult.cwd, relativePath), 'utf-8');
-const countColumnOccurrences = (content: string, columnName: string) =>
-  (content.match(new RegExp(`<column name="${columnName}"`, 'g')) ?? []).length;
+const discriminatorChildEntity = {
+  name: 'ConcreteRef',
+  changelogDate: '20240203000100',
+  entityTableName: 'concrete_ref',
+  dto: 'no',
+  service: 'no',
+  pagination: 'no',
+  applications: [applicationConfig.baseName],
+  extends: 'EntityRefOrValue',
+  annotations: {
+    discriminatorValue: {
+      value: 'ConcreteRef',
+    },
+  },
+  fields: [],
+  relationships: [],
+};
 
 describe(`generator - ${GENERATOR} duplicate columns`, () => {
   before(async () => {
     await helpers
       .runJHipster(GENERATOR)
-      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any]);
+      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any, discriminatorChildEntity as any]);
   });
 
   it('writes each mirrored column only once', () => {
     const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240202000000_added_entity_TypeCarrier.xml`;
-    const changelogContent = readChangelog(changelogPath);
-    expect(countColumnOccurrences(changelogContent, 'type_key')).to.equal(1);
+    runResult.assertFileContent(changelogPath, '<column name="type_key"');
+    runResult.assertNoFileContent(changelogPath, /<createTable[^>]*>[\s\S]*<column name="type_key"[\s\S]*<column name="type_key"[\s\S]*<\/createTable>/);
+    runResult.assertNoFileContent(changelogPath, /<loadData[\s\S]*<column name="type_key"[\s\S]*<column name="type_key"[\s\S]*<\/loadData>/);
+  });
+
+  it('adds database checks for enum columns', () => {
+    const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240202000000_added_entity_TypeCarrier.xml`;
+    runResult.assertFileContent(changelogPath, /ADD CONSTRAINT .* CHECK \(status IN \((?:'|&#39;)ACTIVE(?:'|&#39;), (?:'|&#39;)INACTIVE(?:'|&#39;)\)\)/);
   });
 
   it('does not duplicate discriminator columns', () => {
     const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000000_added_entity_EntityRefOrValue.xml`;
-    const changelogContent = readChangelog(changelogPath);
-    expect(countColumnOccurrences(changelogContent, 'at_type')).to.equal(1);
-    expect(changelogContent).to.match(/<column name="at_type" type="varchar\(31\)">/);
+    runResult.assertFileContent(changelogPath, '<column name="at_type"');
+    runResult.assertNoFileContent(changelogPath, /<createTable[^>]*>[\s\S]*<column name="at_type"[\s\S]*<column name="at_type"[\s\S]*<\/createTable>/);
+    runResult.assertNoFileContent(changelogPath, /<loadData[\s\S]*<column name="at_type"[\s\S]*<column name="at_type"[\s\S]*<\/loadData>/);
+    runResult.assertFileContent(changelogPath, /<column name="at_type" type="varchar\(31\)">/);
+  });
+
+  it('includes configured discriminator literals even when direct child entities are present', () => {
+    const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000000_added_entity_EntityRefOrValue.xml`;
+    runResult.assertFileContent(changelogPath, /CHECK \(at_type IN \((?:'|&#39;)ConcreteRef(?:'|&#39;), (?:'|&#39;)ExternalRef(?:'|&#39;)\)\)/);
   });
 });

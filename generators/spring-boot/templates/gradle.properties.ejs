@@ -22,6 +22,9 @@ profile=dev
 # Dependency versions
 mapstructVersion=<%- javaDependencies.mapstruct %>
 archunitJunit5Version=<%- javaDependencies['archunit-junit5'] %>
+<%_ if (enableSwaggerCodegen) { _%>
+evomasterVersion=<%- javaDependencies.evomaster ?? '6.0.0' %>
+<%_ } _%>
 <%_ if (reactive) { _%>
 blockhoundJunitPlatformVersion=<%- javaDependencies['blockhound-junit-platform'] %>
 <%_ } _%>
