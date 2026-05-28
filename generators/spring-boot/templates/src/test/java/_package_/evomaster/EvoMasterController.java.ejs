@@ -1,0 +1,1958 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+package <%= packageName %>.evomaster;
+
+import <%= packageName %>.<%= mainClass %>;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.sql.DataSource;
+
+import org.evomaster.client.java.controller.AuthUtils;
+import org.evomaster.client.java.controller.EmbeddedSutController;
+import org.evomaster.client.java.controller.InstrumentedSutStarter;
+import org.evomaster.client.java.controller.api.dto.SutInfoDto;
+import org.evomaster.client.java.controller.api.dto.auth.AuthenticationDto;
+import org.evomaster.client.java.controller.api.dto.database.schema.DatabaseType;
+import org.evomaster.client.java.controller.problem.ProblemInfo;
+import org.evomaster.client.java.controller.problem.RestProblem;
+import org.evomaster.client.java.instrumentation.JpaConstraint;
+import org.evomaster.client.java.instrumentation.staticstate.UnitsInfoRecorder;
+import org.evomaster.client.java.controller.api.dto.database.operations.InsertionDto;
+import org.evomaster.client.java.controller.api.dto.database.operations.InsertionEntryDto;
+import org.evomaster.client.java.controller.api.dto.database.operations.InsertionResultsDto;
+import org.evomaster.client.java.sql.DbSpecification;
+<%_ if (authenticationTypeJwt || authenticationTypeSession) { _%>
+import org.evomaster.client.java.sql.SqlScriptRunner;
+<%_ } _%>
+import org.springframework.boot.SpringApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+public class EvoMasterController extends EmbeddedSutController {
+
+    private static final String OPENAPI_RESOURCE = "swagger/api.yml";
+    private static final String OPENAPI_BASE_PATH_PROPERTY = "openapi.<%= dasherizedBaseName %>.base-path";
+    private static final Pattern SQL_DATE_LITERAL = Pattern.compile("^(['\"])(-?\\d{4,})-(\\d{2})-(\\d{2})\\1$");
+    private static final Pattern SQL_TIMESTAMP_LITERAL = Pattern.compile(
+        "^(['\"])(-?\\d{4,})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})(\\.\\d+)?\\1$"
+    );
+    private static final Pattern SQL_INSERT_VALUES = Pattern.compile(
+        "(?is)^\\s*INSERT\\s+INTO\\s+([^\\s(]+)\\s*\\((.*?)\\)\\s*VALUES\\s*\\((.*)\\)\\s*;?\\s*$"
+    );
+
+    private ConfigurableApplicationContext context;
+    private Connection connection;
+    private boolean liquibaseCheckEnumConstraintsRegistered;
+    private boolean databaseCheckEnumConstraintsRegistered;
+    private final Map<String, List<String>> liquibaseCheckEnumConstraints = new LinkedHashMap<>();
+
+    public static void main(String[] args) {
+        EvoMasterController controller = new EvoMasterController();
+        String port = env("EVOMASTER_CONTROLLER_PORT");
+        if (port != null && !port.isBlank()) {
+            controller.setControllerPort(Integer.parseInt(port));
+        }
+        new InstrumentedSutStarter(controller).start();
+    }
+
+    @Override
+    public String startSut() {
+        System.setProperty("liquibase.analytics.enabled", System.getProperty("liquibase.analytics.enabled", "false"));
+        List<String> args = new ArrayList<>();
+        args.add("--server.port=0");
+        args.add("--spring.profiles.active=" + envOrDefault("EVOMASTER_SPRING_PROFILES", "dev,api-docs"));
+        args.add("--spring.docker.compose.enabled=false");
+        args.add("--spring.main.allow-circular-references=" + envOrDefault("EVOMASTER_ALLOW_CIRCULAR_REFERENCES", "true"));
+        args.add("--spring.main.allow-bean-definition-overriding=" + envOrDefault("EVOMASTER_ALLOW_BEAN_DEFINITION_OVERRIDING", "true"));
+        args.add("--spring.liquibase.contexts=" + envOrDefault("EVOMASTER_LIQUIBASE_CONTEXTS", "dev"));
+        args.add("--spring.datasource.hikari.maximum-pool-size=" + envOrDefault("EVOMASTER_HIKARI_MAXIMUM_POOL_SIZE", "50"));
+        args.add("--spring.datasource.hikari.connection-timeout=" + envOrDefault("EVOMASTER_HIKARI_CONNECTION_TIMEOUT_MS", "60000"));
+        args.add("--logging.level.ROOT=" + envOrDefault("EVOMASTER_LOG_LEVEL", "INFO"));
+        args.add("--logging.level.<%= packageName %>=" + envOrDefault("EVOMASTER_APP_LOG_LEVEL", "INFO"));
+        args.add("--logging.level.org.hibernate.SQL=" + envOrDefault("EVOMASTER_SQL_LOG_LEVEL", "INFO"));
+        args.add("--logging.level.org.eclipse.jetty=" + envOrDefault("EVOMASTER_JETTY_LOG_LEVEL", "INFO"));
+
+        addIfPresent(args, "spring.datasource.url", "EVOMASTER_DB_URL");
+        addIfPresent(args, "spring.datasource.username", "EVOMASTER_DB_USERNAME");
+        addIfPresent(args, "spring.datasource.password", "EVOMASTER_DB_PASSWORD");
+
+        context = SpringApplication.run(<%= mainClass %>.class, args.toArray(String[]::new));
+        DataSource dataSource = context.getBeanProvider(DataSource.class).getIfAvailable();
+        try {
+            connection = openEvoMasterConnection(dataSource);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Cannot open datasource connection for EvoMaster", e);
+        }
+        registerLiquibaseCheckEnumConstraintsForEvoMaster();
+        return "http://localhost:" + getSutPort();
+    }
+
+    @Override
+    public void stopSut() {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (SQLException ignored) {
+                // Connection cleanup must not hide the original EvoMaster result.
+            }
+        }
+        connection = null;
+        if (context != null) {
+            context.close();
+        }
+        context = null;
+    }
+
+    @Override
+    public boolean isSutRunning() {
+        return context != null && context.isRunning();
+    }
+
+    @Override
+    public void resetStateOfSUT() {
+<%_ if (authenticationTypeJwt || authenticationTypeSession) { _%>
+        restoreJHipsterAuthenticationData();
+<%_ } else { _%>
+        // SQL state cleanup is delegated to EvoMaster through DbSpecification.
+<%_ } _%>
+    }
+
+    @Override
+    public List<DbSpecification> getDbSpecifications() {
+        if (connection == null) {
+            return Collections.emptyList();
+        }
+        DbSpecification specification = new DbSpecification(databaseType(connection), connectionForEvoMaster());
+<%_ if (authenticationTypeJwt || authenticationTypeSession) { _%>
+        specification = specification.withInitSqlScript(jhipsterAuthenticationSeedSql());
+<%_ } _%>
+        return List.of(specification);
+    }
+
+    @Override
+    public InsertionResultsDto execInsertionsIntoDatabase(List<InsertionDto> insertions, InsertionResultsDto... previousResults) {
+        if (!Boolean.parseBoolean(envOrDefault("EVOMASTER_SANITIZE_SQL_CHECK_ENUM_INSERTIONS", "true"))) {
+            return super.execInsertionsIntoDatabase(insertions, previousResults);
+        }
+        registerLiquibaseCheckEnumConstraintsForEvoMaster();
+        registerDatabaseCheckEnumConstraintsForEvoMaster();
+        return super.execInsertionsIntoDatabase(sanitizeSqlCheckEnumInsertions(insertions), previousResults);
+    }
+
+    private Connection connectionForEvoMaster() {
+        if (
+            connection == null ||
+            !Boolean.parseBoolean(envOrDefault("EVOMASTER_SANITIZE_SQL_STATEMENTS", "true"))
+        ) {
+            return connection;
+        }
+        return (Connection) Proxy.newProxyInstance(
+            Connection.class.getClassLoader(),
+            new Class<?>[] { Connection.class },
+            new SanitizingConnectionHandler(connection)
+        );
+    }
+
+    private final class SanitizingConnectionHandler implements InvocationHandler {
+
+        private final Connection delegate;
+
+        private SanitizingConnectionHandler(Connection delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            Object[] sanitizedArgs = sanitizeSqlArgument(method.getName(), args);
+            try {
+                Object result = method.invoke(delegate, sanitizedArgs);
+                if (result instanceof Statement statement) {
+                    return sanitizingStatement(statement);
+                }
+                return result;
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        }
+    }
+
+    private Object sanitizingStatement(Statement statement) {
+        Set<Class<?>> interfaces = new LinkedHashSet<>();
+        if (statement instanceof java.sql.CallableStatement) {
+            interfaces.add(java.sql.CallableStatement.class);
+        }
+        if (statement instanceof java.sql.PreparedStatement) {
+            interfaces.add(java.sql.PreparedStatement.class);
+        }
+        interfaces.add(Statement.class);
+        return Proxy.newProxyInstance(
+            Statement.class.getClassLoader(),
+            interfaces.toArray(Class<?>[]::new),
+            new SanitizingStatementHandler(statement)
+        );
+    }
+
+    private final class SanitizingStatementHandler implements InvocationHandler {
+
+        private final Statement delegate;
+
+        private SanitizingStatementHandler(Statement delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+            try {
+                return method.invoke(delegate, sanitizeSqlArgument(method.getName(), args));
+            } catch (InvocationTargetException e) {
+                throw e.getCause();
+            }
+        }
+    }
+
+    private Object[] sanitizeSqlArgument(String methodName, Object[] args) {
+        if (args == null || args.length == 0 || !(args[0] instanceof String sql) || !canCarrySql(methodName)) {
+            return args;
+        }
+        Object[] copy = args.clone();
+        copy[0] = sanitizeSqlStatement(sql);
+        return copy;
+    }
+
+    private static boolean canCarrySql(String methodName) {
+        return switch (methodName) {
+            case "addBatch",
+                "execute",
+                "executeLargeUpdate",
+                "executeQuery",
+                "executeUpdate",
+                "nativeSQL",
+                "prepareCall",
+                "prepareStatement" -> true;
+            default -> false;
+        };
+    }
+
+    @Override
+    public String getPackagePrefixesToCover() {
+        return "<%= packageName %>";
+    }
+
+    @Override
+    public ProblemInfo getProblemInfo() {
+        String openApiSchema = openApiSchemaForEvoMaster();
+        if (openApiSchema != null) {
+            return new RestProblem(null, List.of(), openApiSchema);
+        }
+        return new RestProblem("http://localhost:" + getSutPort() + "/v3/api-docs/openapi", List.of());
+    }
+
+    @Override
+    public List<AuthenticationDto> getInfoForAuthentication() {
+<%_ if (authenticationTypeJwt) { _%>
+        return List.of(
+            AuthUtils.getForJsonTokenBearer(
+                "admin",
+                "/api/authenticate",
+                "{\"username\":\"admin\",\"password\":\"admin\"}",
+                "/id_token"
+            ),
+            AuthUtils.getForJsonTokenBearer(
+                "user",
+                "/api/authenticate",
+                "{\"username\":\"user\",\"password\":\"user\"}",
+                "/id_token"
+            )
+        );
+<%_ } else if (authenticationTypeSession) { _%>
+        return List.of(
+            AuthUtils.getForDefaultSpringFormLogin("admin", "admin", "admin", "/login"),
+            AuthUtils.getForDefaultSpringFormLogin("user", "user", "user", "/login")
+        );
+<%_ } else { _%>
+        return Collections.emptyList();
+<%_ } _%>
+    }
+
+    @Override
+    public SutInfoDto.OutputFormat getPreferredOutputFormat() {
+        return SutInfoDto.OutputFormat.JAVA_JUNIT_5;
+    }
+
+    private int getSutPort() {
+        Map<?, ?> source = (Map<?, ?>) context.getEnvironment().getPropertySources().get("server.ports").getSource();
+        return (Integer) source.get("local.server.port");
+    }
+
+    private String openApiSchemaForEvoMaster() {
+        String schema = classpathResource(OPENAPI_RESOURCE);
+        if (schema == null) {
+            return null;
+        }
+        return withLocalServerUrl(schema);
+    }
+
+    private String withLocalServerUrl(String schema) {
+        Yaml yaml = new Yaml();
+        Object document = yaml.load(schema);
+        if (!(document instanceof Map<?, ?> map)) {
+            return schema;
+        }
+
+        Map<String, Object> openApi = toMutableMap(map);
+        Set<String> discriminatorPropertyNames = discriminatorPropertyNames(openApi);
+        openApi.put("servers", List.of(Map.of("url", localOpenApiServerUrl(openApi))));
+        movePathParametersToOperations(openApi);
+        normalizeDiscriminatorSubtypes(openApi);
+        requireDiscriminatorProperties(openApi);
+        removeResponseContentWithoutSchemas(openApi);
+        augmentJHipsterErrorResponses(openApi);
+        normalizeUnsupportedEvoMasterKeywords(openApi, componentSchemas(openApi));
+        inlineOperationSchemasForEvoMaster(openApi, componentSchemas(openApi));
+        relaxResponseDiscriminatorEnums(openApi, discriminatorPropertyNames);
+
+        DumperOptions options = new DumperOptions();
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
+        options.setPrettyFlow(true);
+        return new Yaml(options).dump(openApi);
+    }
+
+    private String localOpenApiServerUrl(Map<String, Object> openApi) {
+        String basePath = normalizedBasePath();
+        boolean pathsAlreadyUseBasePath = pathsAlreadyUseBasePath(openApi, basePath);
+        return "http://localhost:" + getSutPort() + (pathsAlreadyUseBasePath ? "" : basePath);
+    }
+
+    private String normalizedBasePath() {
+        String basePath = context.getEnvironment().getProperty(OPENAPI_BASE_PATH_PROPERTY, "/api");
+        if (basePath == null || basePath.isBlank() || basePath.equals("/")) {
+            return "";
+        }
+        return basePath.startsWith("/") ? basePath : "/" + basePath;
+    }
+
+    private static boolean pathsAlreadyUseBasePath(Map<String, Object> openApi, String basePath) {
+        if (basePath.isBlank() || !(openApi.get("paths") instanceof Map<?, ?> paths) || paths.isEmpty()) {
+            return false;
+        }
+        return paths.keySet().stream()
+            .map(String::valueOf)
+            .filter(path -> path.startsWith("/"))
+            .allMatch(path -> path.equals(basePath) || path.startsWith(basePath + "/"));
+    }
+
+    private static void movePathParametersToOperations(Map<String, Object> openApi) {
+        if (!(openApi.get("paths") instanceof Map<?, ?> paths)) {
+            return;
+        }
+        for (Object pathItemValue : paths.values()) {
+            if (!(pathItemValue instanceof Map<?, ?> rawPathItem)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> pathItem = (Map<String, Object>) rawPathItem;
+            Object rawPathParameters = pathItem.remove("parameters");
+            if (!(rawPathParameters instanceof List<?> pathParameters) || pathParameters.isEmpty()) {
+                continue;
+            }
+            for (String method : Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                Object operationValue = pathItem.get(method);
+                if (!(operationValue instanceof Map<?, ?> rawOperation)) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> operation = (Map<String, Object>) rawOperation;
+                List<Object> mergedParameters = new ArrayList<>(pathParameters);
+                Object rawOperationParameters = operation.get("parameters");
+                if (rawOperationParameters instanceof List<?> operationParameters) {
+                    mergedParameters.addAll(operationParameters);
+                }
+                operation.put("parameters", uniqueParameters(mergedParameters));
+            }
+        }
+    }
+
+    private static List<Object> uniqueParameters(List<Object> parameters) {
+        Map<String, Object> byParameterKey = new LinkedHashMap<>();
+        for (Object parameter : parameters) {
+            byParameterKey.put(parameterKey(parameter), parameter);
+        }
+        return new ArrayList<>(byParameterKey.values());
+    }
+
+    private static String parameterKey(Object parameter) {
+        if (parameter instanceof Map<?, ?> map) {
+            Object name = map.get("name");
+            Object in = map.get("in");
+            if (name != null && in != null) {
+                return in + ":" + name;
+            }
+        }
+        return String.valueOf(System.identityHashCode(parameter));
+    }
+
+    private static Set<String> discriminatorPropertyNames(Object node) {
+        Set<String> propertyNames = new LinkedHashSet<>();
+        collectDiscriminatorPropertyNames(node, propertyNames);
+        return propertyNames;
+    }
+
+    private static void collectDiscriminatorPropertyNames(Object node, Set<String> propertyNames) {
+        if (node instanceof Map<?, ?> map) {
+            Object discriminatorValue = map.get("discriminator");
+            if (discriminatorValue instanceof Map<?, ?> discriminator) {
+                Object propertyName = discriminator.get("propertyName");
+                if (propertyName != null && !propertyName.toString().isBlank()) {
+                    propertyNames.add(propertyName.toString());
+                }
+            }
+            map.values().forEach(value -> collectDiscriminatorPropertyNames(value, propertyNames));
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(value -> collectDiscriminatorPropertyNames(value, propertyNames));
+        }
+    }
+
+    private static void normalizeDiscriminatorSubtypes(Map<String, Object> openApi) {
+        Map<String, Object> schemas = componentSchemas(openApi);
+        if (schemas.isEmpty()) {
+            return;
+        }
+        for (Object schemaValue : new ArrayList<>(schemas.values())) {
+            if (!(schemaValue instanceof Map<?, ?> schema) || !(schema.get("discriminator") instanceof Map<?, ?> discriminator)) {
+                continue;
+            }
+            Object propertyNameValue = discriminator.get("propertyName");
+            Object mappingValue = discriminator.get("mapping");
+            if (propertyNameValue == null || !(mappingValue instanceof Map<?, ?> mapping)) {
+                continue;
+            }
+            String propertyName = propertyNameValue.toString();
+            for (Map.Entry<?, ?> entry : mapping.entrySet()) {
+                String schemaName = refSchemaName(entry.getValue());
+                if (schemaName == null || !(schemas.get(schemaName) instanceof Map<?, ?> subtypeSchema)) {
+                    continue;
+                }
+                Map<String, Object> flattened = flattenAllOfSchema(subtypeSchema, schemas, new LinkedHashSet<>());
+                ensureDiscriminatorValue(flattened, propertyName, entry.getKey().toString());
+                schemas.put(schemaName, flattened);
+            }
+        }
+    }
+
+    private static Map<String, Object> componentSchemas(Map<String, Object> openApi) {
+        if (!(openApi.get("components") instanceof Map<?, ?> components) || !(components.get("schemas") instanceof Map<?, ?> schemas)) {
+            return Collections.emptyMap();
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mutableSchemas = (Map<String, Object>) schemas;
+        return mutableSchemas;
+    }
+
+    private static Map<String, Object> flattenAllOfSchema(Object rawSchema, Map<String, Object> schemas, Set<String> seenRefs) {
+        if (!(rawSchema instanceof Map<?, ?> schema)) {
+            return new LinkedHashMap<>();
+        }
+        String refName = refSchemaName(schema.get("$ref"));
+        if (refName != null) {
+            if (!seenRefs.add(refName) || !(schemas.get(refName) instanceof Map<?, ?> referenced)) {
+                return new LinkedHashMap<>();
+            }
+            Map<String, Object> flattened = flattenAllOfSchema(referenced, schemas, seenRefs);
+            seenRefs.remove(refName);
+            return flattened;
+        }
+
+        Map<String, Object> flattened = new LinkedHashMap<>();
+        Object allOf = schema.get("allOf");
+        if (allOf instanceof List<?> allOfItems) {
+            for (Object item : allOfItems) {
+                mergeSchema(flattened, flattenAllOfSchema(item, schemas, seenRefs));
+            }
+        }
+        schema.forEach((key, value) -> {
+            if (!"allOf".equals(String.valueOf(key))) {
+                mergeSchemaEntry(flattened, String.valueOf(key), value);
+            }
+        });
+        flattened.putIfAbsent("type", "object");
+        return flattened;
+    }
+
+    private static void mergeSchema(Map<String, Object> target, Map<String, Object> source) {
+        source.forEach((key, value) -> mergeSchemaEntry(target, key, value));
+    }
+
+    private static void mergeSchemaEntry(Map<String, Object> target, String key, Object value) {
+        if ("required".equals(key)) {
+            target.put("required", uniqueStringList(target.get("required"), value));
+            return;
+        }
+        if ("enum".equals(key)) {
+            target.put("enum", uniqueStringList(target.get("enum"), value));
+            return;
+        }
+        if ("properties".equals(key) && value instanceof Map<?, ?> properties) {
+            Map<String, Object> mergedProperties = new LinkedHashMap<>();
+            Object existingProperties = target.get("properties");
+            if (existingProperties instanceof Map<?, ?> existing) {
+                existing.forEach((existingKey, existingValue) -> mergedProperties.put(String.valueOf(existingKey), existingValue));
+            }
+            properties.forEach((propertyKey, propertyValue) ->
+                mergedProperties.put(String.valueOf(propertyKey), mergePropertySchema(mergedProperties.get(String.valueOf(propertyKey)), propertyValue))
+            );
+            target.put("properties", mergedProperties);
+            return;
+        }
+        target.put(key, deepCopy(value));
+    }
+
+    private static Object mergePropertySchema(Object existingValue, Object incomingValue) {
+        if (existingValue instanceof Map<?, ?> existingMap && incomingValue instanceof Map<?, ?> incomingMap) {
+            Map<String, Object> merged = toMutableMap(existingMap);
+            mergeSchema(merged, toMutableMap(incomingMap));
+            return merged;
+        }
+        return deepCopy(incomingValue);
+    }
+
+    private static void ensureDiscriminatorValue(Map<String, Object> schema, String propertyName, String discriminatorValue) {
+        Object rawProperties = schema.get("properties");
+        Map<String, Object> properties = rawProperties instanceof Map<?, ?> map ? toMutableMap(map) : new LinkedHashMap<>();
+        Object rawProperty = properties.get(propertyName);
+        Map<String, Object> property = rawProperty instanceof Map<?, ?> map ? toMutableMap(map) : new LinkedHashMap<>();
+        property.putIfAbsent("type", "string");
+        property.putIfAbsent("default", discriminatorValue);
+        property.put("enum", Collections.singletonList(discriminatorValue));
+        properties.put(propertyName, property);
+        schema.put("properties", properties);
+        schema.put("required", uniqueStringList(schema.get("required"), List.of(propertyName)));
+        schema.putIfAbsent("type", "object");
+    }
+
+    private static void requireDiscriminatorProperties(Object node) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            Object discriminatorValue = map.get("discriminator");
+            if (discriminatorValue instanceof Map<?, ?> discriminator) {
+                Object propertyNameValue = discriminator.get("propertyName");
+                if (propertyNameValue != null && !propertyNameValue.toString().isBlank()) {
+                    String propertyName = propertyNameValue.toString();
+                    Object rawProperties = map.get("properties");
+                    Map<String, Object> properties = rawProperties instanceof Map<?, ?> propertiesMap
+                        ? toMutableMap(propertiesMap)
+                        : new LinkedHashMap<>();
+                    Object rawProperty = properties.get(propertyName);
+                    Map<String, Object> property = rawProperty instanceof Map<?, ?> propertyMap
+                        ? toMutableMap(propertyMap)
+                        : new LinkedHashMap<>();
+                    property.putIfAbsent("type", "string");
+                    properties.put(propertyName, property);
+                    map.put("properties", properties);
+                    map.put("required", uniqueStringList(map.get("required"), List.of(propertyName)));
+                    map.putIfAbsent("type", "object");
+                }
+            }
+            new ArrayList<>(map.values()).forEach(EvoMasterController::requireDiscriminatorProperties);
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(EvoMasterController::requireDiscriminatorProperties);
+        }
+    }
+
+    private static void augmentJHipsterErrorResponses(Map<String, Object> openApi) {
+        String problemSchemaName = ensureProblemDetailsSchema(openApi);
+        if (!(openApi.get("paths") instanceof Map<?, ?> paths)) {
+            return;
+        }
+        for (Object pathItemValue : paths.values()) {
+            if (!(pathItemValue instanceof Map<?, ?> pathItem)) {
+                continue;
+            }
+            for (String method : Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                Object operationValue = pathItem.get(method);
+                if (!(operationValue instanceof Map<?, ?> rawOperation)) {
+                    continue;
+                }
+                @SuppressWarnings("unchecked")
+                Map<String, Object> operation = (Map<String, Object>) rawOperation;
+                Map<String, Object> responses = ensureResponses(operation);
+                addProblemResponse(responses, "400", "Bad Request", problemSchemaName);
+                addNoContentResponse(responses, "401", "Unauthorized");
+                addNoContentResponse(responses, "403", "Forbidden");
+                addProblemResponse(responses, "404", "Not Found", problemSchemaName);
+                addProblemResponse(responses, "406", "Not Acceptable", problemSchemaName);
+                addProblemResponse(responses, "409", "Conflict", problemSchemaName);
+                addProblemResponse(responses, "415", "Unsupported Media Type", problemSchemaName);
+                addProblemResponse(responses, "501", "Not Implemented", problemSchemaName);
+            }
+        }
+    }
+
+    private static void removeResponseContentWithoutSchemas(Map<String, Object> openApi) {
+        if (!(openApi.get("paths") instanceof Map<?, ?> paths)) {
+            return;
+        }
+        for (Object pathItemValue : paths.values()) {
+            if (!(pathItemValue instanceof Map<?, ?> pathItem)) {
+                continue;
+            }
+            for (String method : Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                Object operationValue = pathItem.get(method);
+                if (!(operationValue instanceof Map<?, ?> operation) || !(operation.get("responses") instanceof Map<?, ?> responses)) {
+                    continue;
+                }
+                for (Object responseValue : responses.values()) {
+                    if (responseValue instanceof Map<?, ?> response) {
+                        removeContentWithoutSchema(response);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void removeContentWithoutSchema(Map<?, ?> rawResponse) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> response = (Map<String, Object>) rawResponse;
+        Object rawContent = response.get("content");
+        if (!(rawContent instanceof Map<?, ?> content)) {
+            return;
+        }
+        Map<String, Object> mediaTypesWithSchema = new LinkedHashMap<>();
+        content.forEach((mediaType, mediaTypeValue) -> {
+            if (mediaTypeValue instanceof Map<?, ?> mediaTypeMap && mediaTypeMap.get("schema") != null) {
+                mediaTypesWithSchema.put(String.valueOf(mediaType), deepCopy(mediaTypeMap));
+            }
+        });
+        if (mediaTypesWithSchema.isEmpty()) {
+            response.remove("content");
+        } else {
+            response.put("content", mediaTypesWithSchema);
+        }
+    }
+
+    private static void normalizeUnsupportedEvoMasterKeywords(Object node, Map<String, Object> schemas) {
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_STRIP_UNSUPPORTED_FORMATS", "true"))) {
+            stripUnsupportedFormats(node);
+        }
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_STRIP_SCHEMA_PATTERNS", "true"))) {
+            stripSchemaPatterns(node);
+        }
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_MERGE_COMPOSED_SCHEMAS", "true"))) {
+            mergeComposedChoiceSchemas(node, schemas);
+        }
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_FLATTEN_ALLOF_SCHEMAS", "true"))) {
+            flattenAllOfSchemas(node, schemas);
+        }
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_BOUND_FREE_FORM_OBJECT_SCHEMAS", "true"))) {
+            boundFreeFormObjectSchemas(node);
+        }
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_STRIP_SCHEMA_DISCRIMINATORS", "true"))) {
+            stripSchemaDiscriminators(node);
+        }
+    }
+
+    private static void stripUnsupportedFormats(Object node) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            Object format = map.get("format");
+            if ("uuid".equals(format)) {
+                map.remove("format");
+            }
+            new ArrayList<>(map.values()).forEach(EvoMasterController::stripUnsupportedFormats);
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(EvoMasterController::stripUnsupportedFormats);
+        }
+    }
+
+    private static void stripSchemaPatterns(Object node) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            // EvoMaster 6.0.0 can fail Postman seeding when a seeded value targets RegexGene.
+            if (map.containsKey("pattern")) {
+                map.remove("pattern");
+            }
+            new ArrayList<>(map.values()).forEach(EvoMasterController::stripSchemaPatterns);
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(EvoMasterController::stripSchemaPatterns);
+        }
+    }
+
+    private static void boundFreeFormObjectSchemas(Object node) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            if (isFreeFormObjectSchema(map)) {
+                replaceWithBoundedObjectSchema(map);
+            }
+            new ArrayList<>(map.values()).forEach(EvoMasterController::boundFreeFormObjectSchemas);
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(EvoMasterController::boundFreeFormObjectSchemas);
+        }
+    }
+
+    private static boolean isFreeFormObjectSchema(Map<String, Object> schema) {
+        Object type = schema.get("type");
+        if (type instanceof List<?> types) {
+            type = types.stream().map(String::valueOf).filter(value -> !"null".equals(value)).findFirst().orElse(null);
+        }
+        if (!"object".equals(type)) {
+            return false;
+        }
+        if (
+            schema.containsKey("$ref") ||
+            schema.containsKey("properties") ||
+            schema.containsKey("items") ||
+            schema.containsKey("allOf") ||
+            schema.containsKey("oneOf") ||
+            schema.containsKey("anyOf")
+        ) {
+            return false;
+        }
+        Object additionalProperties = schema.get("additionalProperties");
+        return additionalProperties == null || Boolean.TRUE.equals(additionalProperties);
+    }
+
+    private static void replaceWithBoundedObjectSchema(Map<String, Object> schema) {
+        Object description = schema.get("description");
+        schema.clear();
+        schema.put("type", "object");
+        if (description != null) {
+            schema.put("description", description);
+        }
+        schema.put("additionalProperties", false);
+        schema.put("properties", Map.of("value", Map.of("type", "string")));
+    }
+
+    private static void inlineOperationSchemasForEvoMaster(Map<String, Object> openApi, Map<String, Object> schemas) {
+        if (!Boolean.parseBoolean(envOrDefault("EVOMASTER_INLINE_OPERATION_SCHEMAS", "true"))) {
+            return;
+        }
+        if (!(openApi.get("paths") instanceof Map<?, ?> paths)) {
+            return;
+        }
+        int maxDepth = integerEnvOrDefault("EVOMASTER_SCHEMA_INLINE_MAX_DEPTH", 7);
+        for (Object pathItemValue : paths.values()) {
+            if (!(pathItemValue instanceof Map<?, ?> pathItem)) {
+                continue;
+            }
+            for (String method : Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                Object operationValue = pathItem.get(method);
+                if (operationValue instanceof Map<?, ?> rawOperation) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> operation = (Map<String, Object>) rawOperation;
+                    inlineRequestBodySchemas(operation, openApi, schemas, maxDepth);
+                    inlineResponseSchemas(operation, openApi, schemas, maxDepth);
+                }
+            }
+        }
+    }
+
+    private static void inlineRequestBodySchemas(
+        Map<String, Object> operation,
+        Map<String, Object> openApi,
+        Map<String, Object> schemas,
+        int maxDepth
+    ) {
+        Map<String, Object> requestBody = resolveOpenApiRefMap(operation.get("requestBody"), openApi);
+        if (requestBody == null) {
+            return;
+        }
+        operation.put("requestBody", requestBody);
+        inlineContentSchemas(requestBody, schemas, maxDepth);
+    }
+
+    private static void inlineResponseSchemas(Map<String, Object> operation, Map<String, Object> openApi, Map<String, Object> schemas, int maxDepth) {
+        if (!(operation.get("responses") instanceof Map<?, ?> responses)) {
+            return;
+        }
+        Map<String, Object> normalizedResponses = toMutableMap(responses);
+        for (Map.Entry<String, Object> entry : new ArrayList<>(normalizedResponses.entrySet())) {
+            Map<String, Object> response = resolveOpenApiRefMap(entry.getValue(), openApi);
+            if (response != null) {
+                normalizedResponses.put(entry.getKey(), response);
+                inlineContentSchemas(response, schemas, maxDepth);
+            }
+        }
+        operation.put("responses", normalizedResponses);
+    }
+
+    private static Map<String, Object> resolveOpenApiRefMap(Object value, Map<String, Object> openApi) {
+        if (value instanceof Map<?, ?> map) {
+            String ref = String.valueOf(map.get("$ref"));
+            if (ref != null && ref.startsWith("#/")) {
+                Object resolved = resolveOpenApiPointer(openApi, ref);
+                return resolved instanceof Map<?, ?> resolvedMap ? toMutableMap(resolvedMap) : toMutableMap(map);
+            }
+            return toMutableMap(map);
+        }
+        return null;
+    }
+
+    private static Object resolveOpenApiPointer(Map<String, Object> openApi, String ref) {
+        Object current = openApi;
+        for (String segment : ref.substring(2).split("/")) {
+            if (!(current instanceof Map<?, ?> map)) {
+                return null;
+            }
+            current = map.get(decodeJsonPointerSegment(segment));
+        }
+        return current;
+    }
+
+    private static String decodeJsonPointerSegment(String segment) {
+        return segment.replace("~1", "/").replace("~0", "~");
+    }
+
+    private static void inlineContentSchemas(Map<?, ?> rawContainer, Map<String, Object> schemas, int maxDepth) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> container = (Map<String, Object>) rawContainer;
+        Object rawContent = container.get("content");
+        if (!(rawContent instanceof Map<?, ?> content)) {
+            return;
+        }
+        Map<String, Object> normalizedContent = toMutableMap(content);
+        for (Map.Entry<String, Object> entry : new ArrayList<>(normalizedContent.entrySet())) {
+            if (entry.getValue() instanceof Map<?, ?> rawMediaType) {
+                Map<String, Object> mediaType = toMutableMap(rawMediaType);
+                Object schema = mediaType.get("schema");
+                if (schema != null) {
+                    mediaType.put("schema", boundedSchemaCopy(schema, schemas, maxDepth, 0, new LinkedHashSet<>()));
+                }
+                normalizedContent.put(entry.getKey(), mediaType);
+            }
+        }
+        container.put("content", normalizedContent);
+    }
+
+    private static void relaxResponseDiscriminatorEnums(Map<String, Object> openApi, Set<String> discriminatorPropertyNames) {
+        if (
+            discriminatorPropertyNames.isEmpty() ||
+            !Boolean.parseBoolean(envOrDefault("EVOMASTER_RELAX_RESPONSE_DISCRIMINATOR_ENUMS", "true")) ||
+            !(openApi.get("paths") instanceof Map<?, ?> paths)
+        ) {
+            return;
+        }
+        for (Object pathItemValue : paths.values()) {
+            if (!(pathItemValue instanceof Map<?, ?> pathItem)) {
+                continue;
+            }
+            for (String method : Set.of("get", "put", "post", "delete", "options", "head", "patch", "trace")) {
+                Object operationValue = pathItem.get(method);
+                if (!(operationValue instanceof Map<?, ?> operation) || !(operation.get("responses") instanceof Map<?, ?> responses)) {
+                    continue;
+                }
+                for (Object responseValue : responses.values()) {
+                    if (responseValue instanceof Map<?, ?> response && response.get("content") instanceof Map<?, ?> content) {
+                        for (Object mediaTypeValue : content.values()) {
+                            if (mediaTypeValue instanceof Map<?, ?> mediaType) {
+                                relaxDiscriminatorEnumProperties(mediaType.get("schema"), discriminatorPropertyNames);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void relaxDiscriminatorEnumProperties(Object node, Set<String> discriminatorPropertyNames) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            Object rawProperties = map.get("properties");
+            if (rawProperties instanceof Map<?, ?> properties) {
+                for (Map.Entry<?, ?> entry : properties.entrySet()) {
+                    if (discriminatorPropertyNames.contains(String.valueOf(entry.getKey())) && entry.getValue() instanceof Map<?, ?> propertyMap) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> property = (Map<String, Object>) propertyMap;
+                        property.remove("const");
+                        property.remove("enum");
+                    }
+                }
+            }
+            new ArrayList<>(map.values()).forEach(value -> relaxDiscriminatorEnumProperties(value, discriminatorPropertyNames));
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(value -> relaxDiscriminatorEnumProperties(value, discriminatorPropertyNames));
+        }
+    }
+
+    private static Object boundedSchemaCopy(Object rawSchema, Map<String, Object> schemas, int maxDepth, int depth, Set<String> seenRefs) {
+        if (rawSchema instanceof List<?> list) {
+            return list.stream().map(item -> boundedSchemaCopy(item, schemas, maxDepth, depth, seenRefs)).toList();
+        }
+        if (!(rawSchema instanceof Map<?, ?> schema)) {
+            return deepCopy(rawSchema);
+        }
+
+        String refName = refSchemaName(schema.get("$ref"));
+        if (refName != null) {
+            Object referenced = schemas.get(refName);
+            if (depth >= maxDepth || !seenRefs.add(refName) || referenced == null) {
+                return compactSchemaFor(referenced);
+            }
+            Object copied = boundedSchemaCopy(referenced, schemas, maxDepth, depth + 1, seenRefs);
+            seenRefs.remove(refName);
+            return copied;
+        }
+
+        Map<String, Object> copy = new LinkedHashMap<>();
+        schema.forEach((key, value) -> {
+            String keyString = String.valueOf(key);
+            if ("properties".equals(keyString) && value instanceof Map<?, ?> properties) {
+                Map<String, Object> copiedProperties = new LinkedHashMap<>();
+                properties.forEach((propertyName, propertySchema) ->
+                    copiedProperties.put(String.valueOf(propertyName), boundedSchemaCopy(propertySchema, schemas, maxDepth, depth + 1, seenRefs))
+                );
+                copy.put("properties", copiedProperties);
+            } else if ("items".equals(keyString) || "additionalProperties".equals(keyString)) {
+                copy.put(keyString, value instanceof Map<?, ?> ? boundedSchemaCopy(value, schemas, maxDepth, depth + 1, seenRefs) : deepCopy(value));
+            } else if (("oneOf".equals(keyString) || "anyOf".equals(keyString) || "allOf".equals(keyString)) && value instanceof List<?>) {
+                copy.put(keyString, boundedSchemaCopy(value, schemas, maxDepth, depth + 1, seenRefs));
+            } else {
+                copy.put(keyString, deepCopy(value));
+            }
+        });
+        if (isFreeFormObjectSchema(copy)) {
+            replaceWithBoundedObjectSchema(copy);
+        }
+        return copy;
+    }
+
+    private static Map<String, Object> compactSchemaFor(Object referenced) {
+        if (referenced instanceof Map<?, ?> schema) {
+            Object rawType = schema.get("type");
+            String type = rawType instanceof List<?> types
+                ? types.stream().map(String::valueOf).filter(value -> !"null".equals(value)).findFirst().orElse("object")
+                : String.valueOf(rawType);
+            if ("array".equals(type)) {
+                return new LinkedHashMap<>(Map.of("type", "array", "maxItems", 1, "items", Map.of("type", "string")));
+            }
+            if ("string".equals(type) || "integer".equals(type) || "number".equals(type) || "boolean".equals(type)) {
+                Map<String, Object> primitive = new LinkedHashMap<>();
+                primitive.put("type", type);
+                return primitive;
+            }
+        }
+        Map<String, Object> object = new LinkedHashMap<>();
+        object.put("type", "object");
+        object.put("additionalProperties", false);
+        object.put("properties", Map.of("value", Map.of("type", "string")));
+        return object;
+    }
+
+    private static void mergeComposedChoiceSchemas(Object node, Map<String, Object> schemas) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            mergeComposedChoiceSchema(map, schemas);
+            new ArrayList<>(map.values()).forEach(value -> mergeComposedChoiceSchemas(value, schemas));
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(value -> mergeComposedChoiceSchemas(value, schemas));
+        }
+    }
+
+    private static void mergeComposedChoiceSchema(Map<String, Object> schema, Map<String, Object> schemas) {
+        List<Object> choices = new ArrayList<>();
+        collectSchemaChoices(schema.containsKey("oneOf") ? schema.remove("oneOf") : null, choices);
+        collectSchemaChoices(schema.containsKey("anyOf") ? schema.remove("anyOf") : null, choices);
+        if (choices.isEmpty()) {
+            return;
+        }
+
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (Object choice : choices) {
+            mergeSchema(merged, flattenAllOfSchema(choice, schemas, new LinkedHashSet<>()));
+        }
+        merged.remove("required");
+        merged.forEach((key, value) -> mergeSchemaEntry(schema, key, value));
+        schema.putIfAbsent("type", "object");
+    }
+
+    private static void collectSchemaChoices(Object rawChoices, List<Object> target) {
+        if (rawChoices instanceof List<?> choices) {
+            target.addAll(choices);
+        }
+    }
+
+    private static void flattenAllOfSchemas(Object node, Map<String, Object> schemas) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            flattenAllOfSchemaInPlace(map, schemas);
+            new ArrayList<>(map.values()).forEach(value -> flattenAllOfSchemas(value, schemas));
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(value -> flattenAllOfSchemas(value, schemas));
+        }
+    }
+
+    private static void flattenAllOfSchemaInPlace(Map<String, Object> schema, Map<String, Object> schemas) {
+        if (!schema.containsKey("allOf")) {
+            return;
+        }
+        Object rawAllOf = schema.remove("allOf");
+        if (!(rawAllOf instanceof List<?> allOfItems) || allOfItems.isEmpty()) {
+            return;
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (Object item : allOfItems) {
+            mergeSchema(merged, flattenAllOfSchema(item, schemas, new LinkedHashSet<>()));
+        }
+        Map<String, Object> ownEntries = new LinkedHashMap<>(schema);
+        schema.clear();
+        mergeSchema(schema, merged);
+        mergeSchema(schema, ownEntries);
+        schema.putIfAbsent("type", "object");
+    }
+
+    private static void stripSchemaDiscriminators(Object node) {
+        if (node instanceof Map<?, ?> rawMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> map = (Map<String, Object>) rawMap;
+            if (map.containsKey("discriminator")) {
+                try {
+                    map.remove("discriminator");
+                } catch (UnsupportedOperationException ignored) {
+                    // Static schemas added by this controller may be immutable; generated OpenAPI maps are mutable.
+                }
+            }
+            new ArrayList<>(map.values()).forEach(EvoMasterController::stripSchemaDiscriminators);
+            return;
+        }
+        if (node instanceof List<?> list) {
+            list.forEach(EvoMasterController::stripSchemaDiscriminators);
+        }
+    }
+
+    private static Map<String, Object> ensureResponses(Map<String, Object> operation) {
+        Object rawResponses = operation.get("responses");
+        if (rawResponses instanceof Map<?, ?> responses) {
+            Map<String, Object> normalized = new LinkedHashMap<>();
+            responses.forEach((key, value) -> mergeResponseEntry(normalized, String.valueOf(key), value));
+            operation.put("responses", normalized);
+            return normalized;
+        }
+        Map<String, Object> responses = new LinkedHashMap<>();
+        operation.put("responses", responses);
+        return responses;
+    }
+
+    private static void mergeResponseEntry(Map<String, Object> responses, String status, Object rawResponse) {
+        Map<String, Object> incoming = rawResponse instanceof Map<?, ?> map ? toMutableMap(map) : new LinkedHashMap<>();
+        Object existing = responses.get(status);
+        if (!(existing instanceof Map<?, ?> existingMap)) {
+            responses.put(status, incoming);
+            return;
+        }
+        Map<String, Object> merged = toMutableMap(existingMap);
+        incoming.forEach((key, value) -> {
+            if ("content".equals(key) && value instanceof Map<?, ?> incomingContent && merged.get("content") instanceof Map<?, ?> existingContent) {
+                Map<String, Object> content = toMutableMap(existingContent);
+                incomingContent.forEach((mediaType, mediaTypeValue) -> content.putIfAbsent(String.valueOf(mediaType), mediaTypeValue));
+                merged.put("content", content);
+            } else {
+                merged.putIfAbsent(key, value);
+            }
+        });
+        responses.put(status, merged);
+    }
+
+    private static void addNoContentResponse(Map<String, Object> responses, String status, String description) {
+        responses.put(status, new LinkedHashMap<>(Map.of("description", description)));
+    }
+
+    private static void addProblemResponse(Map<String, Object> responses, String status, String description, String problemSchemaName) {
+        Object rawResponse = responses.get(status);
+        Map<String, Object> response;
+        if (rawResponse instanceof Map<?, ?> map && !map.containsKey("$ref")) {
+            response = toMutableMap(map);
+        } else {
+            response = new LinkedHashMap<>();
+        }
+        response.remove("$ref");
+        response.putIfAbsent("description", description);
+        Object rawContent = response.get("content");
+        Map<String, Object> content = rawContent instanceof Map<?, ?> map ? toMutableMap(map) : new LinkedHashMap<>();
+        Map<String, Object> problemContent = Map.of("schema", Map.of("$ref", "#/components/schemas/" + problemSchemaName));
+        content.put("application/problem+json", problemContent);
+        content.put("application/json", problemContent);
+        response.put("content", content);
+        responses.put(status, response);
+    }
+
+    private static String ensureProblemDetailsSchema(Map<String, Object> openApi) {
+        String schemaName = "JHipsterProblemDetails";
+        Map<String, Object> schemas = ensureComponentSchemas(openApi);
+        schemas.putIfAbsent(
+            schemaName,
+            Map.of(
+                "type",
+                "object",
+                "additionalProperties",
+                true,
+                "properties",
+                Map.of(
+                    "type",
+                    Map.of("type", "string"),
+                    "title",
+                    Map.of("type", "string"),
+                    "status",
+                    Map.of("type", "integer", "format", "int32"),
+                    "detail",
+                    Map.of("type", "string"),
+                    "instance",
+                    Map.of("type", "string"),
+                    "message",
+                    Map.of("type", "string"),
+                    "path",
+                    Map.of("type", "string")
+                )
+            )
+        );
+        return schemaName;
+    }
+
+    private static Map<String, Object> ensureComponentSchemas(Map<String, Object> openApi) {
+        Object rawComponents = openApi.get("components");
+        Map<String, Object> components;
+        if (rawComponents instanceof Map<?, ?> map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mutableComponents = (Map<String, Object>) map;
+            components = mutableComponents;
+        } else {
+            components = new LinkedHashMap<>();
+            openApi.put("components", components);
+        }
+        Object rawSchemas = components.get("schemas");
+        if (rawSchemas instanceof Map<?, ?> map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mutableSchemas = (Map<String, Object>) map;
+            return mutableSchemas;
+        }
+        Map<String, Object> schemas = new LinkedHashMap<>();
+        components.put("schemas", schemas);
+        return schemas;
+    }
+
+    private static List<String> uniqueStringList(Object left, Object right) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (left instanceof List<?> leftList) {
+            leftList.stream().map(String::valueOf).forEach(values::add);
+        }
+        if (right instanceof List<?> rightList) {
+            rightList.stream().map(String::valueOf).forEach(values::add);
+        }
+        return new ArrayList<>(values);
+    }
+
+    private static String refSchemaName(Object refValue) {
+        if (refValue == null) {
+            return null;
+        }
+        String ref = refValue.toString();
+        String prefix = "#/components/schemas/";
+        return ref.startsWith(prefix) ? ref.substring(prefix.length()) : null;
+    }
+
+    private static Map<String, Object> toMutableMap(Map<?, ?> source) {
+        Map<String, Object> target = new LinkedHashMap<>();
+        source.forEach((key, value) -> target.put(String.valueOf(key), deepCopy(value)));
+        return target;
+    }
+
+    private static List<Object> toMutableList(List<?> source) {
+        List<Object> target = new ArrayList<>(source.size());
+        source.forEach(value -> target.add(deepCopy(value)));
+        return target;
+    }
+
+    private static Object deepCopy(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            return toMutableMap(map);
+        }
+        if (value instanceof List<?> list) {
+            return toMutableList(list);
+        }
+        return value;
+    }
+
+    private static String classpathResource(String name) {
+        try (InputStream inputStream = EvoMasterController.class.getClassLoader().getResourceAsStream(name)) {
+            return inputStream == null ? null : new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot read " + name + " from the classpath", e);
+        }
+    }
+
+    private static DatabaseType databaseType(Connection connection) {
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            String product = metaData.getDatabaseProductName().toLowerCase(Locale.ROOT);
+            if (product.contains("postgres")) {
+                return DatabaseType.POSTGRES;
+            }
+            if (product.contains("mysql")) {
+                return DatabaseType.MYSQL;
+            }
+            if (product.contains("mariadb")) {
+                return DatabaseType.MARIADB;
+            }
+            if (product.contains("h2")) {
+                return DatabaseType.H2;
+            }
+            if (product.contains("derby")) {
+                return DatabaseType.DERBY;
+            }
+            if (product.contains("microsoft") || product.contains("sql server")) {
+                return DatabaseType.MS_SQL_SERVER;
+            }
+            return DatabaseType.OTHER;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Cannot inspect datasource metadata for EvoMaster", e);
+        }
+    }
+
+    private static Connection openEvoMasterConnection(DataSource dataSource) throws SQLException {
+        String dbUrl = env("EVOMASTER_DB_URL");
+        if (dbUrl != null) {
+            String username = env("EVOMASTER_DB_USERNAME");
+            String password = env("EVOMASTER_DB_PASSWORD");
+            if (username != null) {
+                return DriverManager.getConnection(dbUrl, username, password == null ? "" : password);
+            }
+            return DriverManager.getConnection(dbUrl);
+        }
+        return dataSource == null ? null : dataSource.getConnection();
+    }
+
+    private void registerLiquibaseCheckEnumConstraintsForEvoMaster() {
+        if (
+            liquibaseCheckEnumConstraintsRegistered ||
+            !Boolean.parseBoolean(envOrDefault("EVOMASTER_REGISTER_LIQUIBASE_CHECK_ENUM_CONSTRAINTS", "true"))
+        ) {
+            return;
+        }
+        liquibaseCheckEnumConstraintsRegistered = true;
+        Set<String> registered = new LinkedHashSet<>();
+        PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver(EvoMasterController.class.getClassLoader());
+        try {
+            for (Resource resource : resolver.getResources("classpath*:config/liquibase/changelog/*.xml")) {
+                String changelog = readResource(resource);
+                for (CheckEnumConstraint constraint : parseLiquibaseCheckEnumConstraints(changelog)) {
+                    String key = constraint.tableName() + "." + constraint.columnName() + "=" + constraint.values();
+                    if (registered.add(key)) {
+                        registerCheckEnumConstraint(constraint.tableName(), constraint.columnName(), constraint.values());
+                    }
+                }
+            }
+            debugSqlSanitizer("registered Liquibase check enum constraints: " + liquibaseCheckEnumConstraints.size());
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot inspect Liquibase changelog resources for EvoMaster", e);
+        }
+    }
+
+    private void registerDatabaseCheckEnumConstraintsForEvoMaster() {
+        if (
+            databaseCheckEnumConstraintsRegistered ||
+            connection == null ||
+            !Boolean.parseBoolean(envOrDefault("EVOMASTER_REGISTER_DATABASE_CHECK_ENUM_CONSTRAINTS", "true"))
+        ) {
+            return;
+        }
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            String productName = metaData == null ? "" : String.valueOf(metaData.getDatabaseProductName()).toLowerCase(Locale.ROOT);
+            if (productName.contains("postgresql")) {
+                int foundConstraintCount = registerPostgreSqlCheckEnumConstraintsForEvoMaster();
+                databaseCheckEnumConstraintsRegistered = foundConstraintCount > 0;
+            } else {
+                databaseCheckEnumConstraintsRegistered = true;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("Cannot inspect database check constraints for EvoMaster", e);
+        }
+    }
+
+    private int registerPostgreSqlCheckEnumConstraintsForEvoMaster() throws SQLException {
+        String sql =
+            "select c.relname as table_name, a.attname as column_name, pg_get_constraintdef(co.oid) as constraint_definition " +
+            "from pg_constraint co " +
+            "join pg_class c on c.oid = co.conrelid " +
+            "join pg_namespace n on n.oid = c.relnamespace " +
+            "join pg_attribute a on a.attrelid = c.oid and a.attnum = co.conkey[1] " +
+            "where co.contype = 'c' and array_length(co.conkey, 1) = 1";
+        int foundConstraintCount = 0;
+        try (var statement = connection.prepareStatement(sql); var resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                List<String> values = parseCheckEnumValues(resultSet.getString("constraint_definition"));
+                if (!values.isEmpty()) {
+                    foundConstraintCount++;
+                    registerCheckEnumConstraint(resultSet.getString("table_name"), resultSet.getString("column_name"), values);
+                }
+            }
+        }
+        debugSqlSanitizer("registered PostgreSQL check enum constraints: " + foundConstraintCount);
+        return foundConstraintCount;
+    }
+
+    private boolean registerCheckEnumConstraint(String tableName, String columnName, List<String> values) {
+        if (tableName == null || columnName == null || values == null || values.isEmpty()) {
+            return false;
+        }
+        String normalizedTableName = normalizeSqlIdentifier(tableName);
+        String normalizedColumnName = normalizeSqlIdentifier(columnName);
+        String key = enumConstraintKey(normalizedTableName, normalizedColumnName);
+        if (liquibaseCheckEnumConstraints.putIfAbsent(key, List.copyOf(values)) != null) {
+            return false;
+        }
+        debugSqlSanitizer("registered check enum constraint " + key + "=" + values);
+        UnitsInfoRecorder.registerNewJpaConstraint(
+            new JpaConstraint(
+                normalizedTableName,
+                normalizedColumnName,
+                null,
+                null,
+                null,
+                null,
+                new ArrayList<>(values),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            )
+        );
+        return true;
+    }
+
+    private List<InsertionDto> sanitizeSqlCheckEnumInsertions(List<InsertionDto> insertions) {
+        if (insertions == null || insertions.isEmpty()) {
+            return insertions;
+        }
+        List<InsertionDto> sanitized = new ArrayList<>(insertions.size());
+        for (InsertionDto insertion : insertions) {
+            sanitized.add(sanitizeSqlCheckEnumInsertion(insertion));
+        }
+        return sanitized;
+    }
+
+    private InsertionDto sanitizeSqlCheckEnumInsertion(InsertionDto insertion) {
+        if (insertion == null || insertion.data == null || insertion.data.isEmpty()) {
+            return insertion;
+        }
+        InsertionDto copy = new InsertionDto();
+        copy.id = insertion.id;
+        copy.targetTable = insertion.targetTable;
+        copy.data = new ArrayList<>(insertion.data.size());
+        String tableName = normalizeSqlIdentifier(String.valueOf(insertion.targetTable));
+        for (InsertionEntryDto entry : insertion.data) {
+            copy.data.add(sanitizeSqlCheckEnumEntry(tableName, entry));
+        }
+        return copy;
+    }
+
+    private InsertionEntryDto sanitizeSqlCheckEnumEntry(String tableName, InsertionEntryDto entry) {
+        if (entry == null) {
+            return null;
+        }
+        InsertionEntryDto copy = new InsertionEntryDto();
+        copy.variableName = entry.variableName;
+        copy.printableValue = entry.printableValue;
+        copy.foreignKeyToPreviouslyGeneratedRow = entry.foreignKeyToPreviouslyGeneratedRow;
+        if (copy.variableName == null || copy.printableValue == null || copy.foreignKeyToPreviouslyGeneratedRow != null) {
+            return copy;
+        }
+        copy.printableValue = sanitizePrintableSqlTemporalLiteral(copy.printableValue);
+        List<String> allowedValues = checkEnumValuesForSqlColumn(tableName, copy.variableName);
+        if (allowedValues == null || allowedValues.isEmpty()) {
+            debugSqlSanitizer(
+                "no check enum values for table=" +
+                tableName +
+                ", column=" +
+                copy.variableName +
+                ", value=" +
+                copy.printableValue +
+                ", registered=" +
+                liquibaseCheckEnumConstraints.keySet()
+            );
+            return copy;
+        }
+        String value = unquotePrintableSqlString(copy.printableValue);
+        if (value != null && !allowedValues.contains(value)) {
+            debugSqlSanitizer(
+                "replacing invalid check enum value table=" +
+                tableName +
+                ", column=" +
+                copy.variableName +
+                ", value=" +
+                value +
+                ", replacement=" +
+                allowedValues.get(0)
+            );
+            copy.printableValue = printableSqlString(allowedValues.get(0));
+        }
+        return copy;
+    }
+
+    private String sanitizeSqlStatement(String sql) {
+        if (sql == null || sql.isBlank()) {
+            return sql;
+        }
+        String sanitized = sanitizeSqlInsertValuesStatement(sql);
+        if (!sanitized.equals(sql)) {
+            debugSqlSanitizer("rewrote SQL statement for EvoMaster direct insert");
+        }
+        return sanitized;
+    }
+
+    private String sanitizeSqlInsertValuesStatement(String sql) {
+        Matcher matcher = SQL_INSERT_VALUES.matcher(sql);
+        if (!matcher.matches()) {
+            return sql;
+        }
+        registerLiquibaseCheckEnumConstraintsForEvoMaster();
+        registerDatabaseCheckEnumConstraintsForEvoMaster();
+
+        String tableName = normalizeSqlIdentifier(matcher.group(1));
+        List<String> columns = splitSqlCsv(matcher.group(2));
+        List<String> values = splitSqlCsv(matcher.group(3));
+        if (columns.isEmpty() || columns.size() != values.size()) {
+            return sql;
+        }
+
+        boolean changed = false;
+        for (int i = 0; i < values.size(); i++) {
+            String originalValue = values.get(i);
+            String sanitizedValue = sanitizeSqlInsertValue(tableName, columns.get(i), originalValue);
+            if (!sanitizedValue.equals(originalValue)) {
+                values.set(i, sanitizedValue);
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return sql;
+        }
+        return (
+            sql.substring(0, matcher.start(3)) +
+            String.join(",", values) +
+            sql.substring(matcher.end(3))
+        );
+    }
+
+    private String sanitizeSqlInsertValue(String tableName, String columnName, String value) {
+        String sanitizedValue = sanitizePrintableSqlTemporalLiteral(value.trim());
+        List<String> allowedValues = checkEnumValuesForSqlColumn(tableName, columnName);
+        if (allowedValues == null || allowedValues.isEmpty()) {
+            return sanitizedValue;
+        }
+        String unquotedValue = unquotePrintableSqlString(sanitizedValue);
+        if (unquotedValue != null && !allowedValues.contains(unquotedValue)) {
+            String replacement = allowedValues.get(0);
+            debugSqlSanitizer(
+                "replacing invalid SQL check enum value table=" +
+                tableName +
+                ", column=" +
+                columnName +
+                ", value=" +
+                unquotedValue +
+                ", replacement=" +
+                replacement
+            );
+            return sqlStringLiteral(replacement);
+        }
+        return sanitizedValue;
+    }
+
+    private static List<String> splitSqlCsv(String rawValues) {
+        if (rawValues == null || rawValues.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<String> values = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean singleQuoted = false;
+        boolean doubleQuoted = false;
+        int parenthesisDepth = 0;
+        int squareBracketDepth = 0;
+        for (int i = 0; i < rawValues.length(); i++) {
+            char c = rawValues.charAt(i);
+            current.append(c);
+            if (singleQuoted) {
+                if (c == '\'' && i + 1 < rawValues.length() && rawValues.charAt(i + 1) == '\'') {
+                    current.append(rawValues.charAt(i + 1));
+                    i++;
+                } else if (c == '\'') {
+                    singleQuoted = false;
+                }
+                continue;
+            }
+            if (doubleQuoted) {
+                if (c == '"' && i + 1 < rawValues.length() && rawValues.charAt(i + 1) == '"') {
+                    current.append(rawValues.charAt(i + 1));
+                    i++;
+                } else if (c == '"') {
+                    doubleQuoted = false;
+                }
+                continue;
+            }
+            if (c == '\'') {
+                singleQuoted = true;
+                continue;
+            }
+            if (c == '"') {
+                doubleQuoted = true;
+                continue;
+            }
+            if (c == '(') {
+                parenthesisDepth++;
+                continue;
+            }
+            if (c == ')' && parenthesisDepth > 0) {
+                parenthesisDepth--;
+                continue;
+            }
+            if (c == '[') {
+                squareBracketDepth++;
+                continue;
+            }
+            if (c == ']' && squareBracketDepth > 0) {
+                squareBracketDepth--;
+                continue;
+            }
+            if (c == ',' && parenthesisDepth == 0 && squareBracketDepth == 0) {
+                current.setLength(current.length() - 1);
+                values.add(current.toString().trim());
+                current.setLength(0);
+            }
+        }
+        if (current.length() > 0) {
+            values.add(current.toString().trim());
+        }
+        return values;
+    }
+
+    private static String sanitizePrintableSqlTemporalLiteral(String printableValue) {
+        Matcher timestampMatcher = SQL_TIMESTAMP_LITERAL.matcher(printableValue.trim());
+        if (timestampMatcher.matches()) {
+            String quote = timestampMatcher.group(1);
+            int year = clamp(parseSqlTemporalInt(timestampMatcher.group(2), 1970), 1, 9999);
+            int month = clamp(parseSqlTemporalInt(timestampMatcher.group(3), 1), 1, 12);
+            int day = clamp(parseSqlTemporalInt(timestampMatcher.group(4), 1), 1, YearMonth.of(year, month).lengthOfMonth());
+            int hour = clamp(parseSqlTemporalInt(timestampMatcher.group(5), 0), 0, 23);
+            int minute = clamp(parseSqlTemporalInt(timestampMatcher.group(6), 0), 0, 59);
+            int second = clamp(parseSqlTemporalInt(timestampMatcher.group(7), 0), 0, 59);
+            String fraction = timestampMatcher.group(8) == null ? "" : timestampMatcher.group(8);
+            return String.format(Locale.ROOT, "%s%04d-%02d-%02d %02d:%02d:%02d%s%s", quote, year, month, day, hour, minute, second, fraction, quote);
+        }
+        Matcher dateMatcher = SQL_DATE_LITERAL.matcher(printableValue.trim());
+        if (dateMatcher.matches()) {
+            String quote = dateMatcher.group(1);
+            int year = clamp(parseSqlTemporalInt(dateMatcher.group(2), 1970), 1, 9999);
+            int month = clamp(parseSqlTemporalInt(dateMatcher.group(3), 1), 1, 12);
+            int day = clamp(parseSqlTemporalInt(dateMatcher.group(4), 1), 1, YearMonth.of(year, month).lengthOfMonth());
+            return String.format(Locale.ROOT, "%s%04d-%02d-%02d%s", quote, year, month, day, quote);
+        }
+        return printableValue;
+    }
+
+    private static int parseSqlTemporalInt(String value, int fallback) {
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private List<String> checkEnumValuesForSqlColumn(String tableName, String columnName) {
+        for (String candidateTableName : sqlTableNameCandidates(tableName)) {
+            for (String candidateColumnName : sqlColumnNameCandidates(columnName)) {
+                List<String> allowedValues = liquibaseCheckEnumConstraints.get(enumConstraintKey(candidateTableName, candidateColumnName));
+                if (allowedValues != null) {
+                    return allowedValues;
+                }
+            }
+        }
+        if (connection == null) {
+            return null;
+        }
+        try {
+            DatabaseMetaData metaData = connection.getMetaData();
+            String productName = metaData == null ? "" : String.valueOf(metaData.getDatabaseProductName()).toLowerCase(Locale.ROOT);
+            if (!productName.contains("postgresql")) {
+                return null;
+            }
+            for (String candidateTableName : sqlTableNameCandidates(tableName)) {
+                for (String candidateColumnName : sqlColumnNameCandidates(columnName)) {
+                    List<String> values = findPostgreSqlCheckEnumValues(candidateTableName, candidateColumnName);
+                    if (!values.isEmpty()) {
+                        registerCheckEnumConstraint(candidateTableName, candidateColumnName, values);
+                        return liquibaseCheckEnumConstraints.get(enumConstraintKey(candidateTableName, candidateColumnName));
+                    }
+                }
+            }
+            return null;
+        } catch (SQLException e) {
+            throw new IllegalStateException("Cannot inspect database check constraint for EvoMaster SQL insertion", e);
+        }
+    }
+
+    private static List<String> sqlTableNameCandidates(String tableName) {
+        return sqlIdentifierCandidates(tableName);
+    }
+
+    private static List<String> sqlColumnNameCandidates(String columnName) {
+        return sqlIdentifierCandidates(columnName);
+    }
+
+    private static List<String> sqlIdentifierCandidates(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return Collections.emptyList();
+        }
+        Set<String> candidates = new LinkedHashSet<>();
+        String normalized = normalizeSqlIdentifier(identifier);
+        candidates.add(normalized);
+        candidates.add(camelCaseToSnakeCase(normalized));
+        candidates.add(normalized.replace('-', '_'));
+        candidates.add(camelCaseToSnakeCase(normalized.replace('-', '_')));
+        candidates.removeIf(String::isBlank);
+        return new ArrayList<>(candidates);
+    }
+
+    private static String camelCaseToSnakeCase(String value) {
+        String normalized = normalizeSqlIdentifier(value);
+        if (normalized.indexOf('_') >= 0 && normalized.equals(normalized.toLowerCase(Locale.ROOT))) {
+            return normalized;
+        }
+        StringBuilder result = new StringBuilder(normalized.length() + 8);
+        char previous = 0;
+        for (int i = 0; i < normalized.length(); i++) {
+            char current = normalized.charAt(i);
+            char next = i + 1 < normalized.length() ? normalized.charAt(i + 1) : 0;
+            if (current == '-' || current == ' ' || current == '.') {
+                appendSnakeSeparator(result);
+                previous = current;
+                continue;
+            }
+            if (
+                Character.isUpperCase(current) &&
+                result.length() > 0 &&
+                previous != '_' &&
+                previous != '-' &&
+                previous != ' ' &&
+                previous != '.' &&
+                (Character.isLowerCase(previous) || Character.isDigit(previous) || (next != 0 && Character.isLowerCase(next)))
+            ) {
+                appendSnakeSeparator(result);
+            }
+            result.append(Character.toLowerCase(current));
+            previous = current;
+        }
+        return result.toString();
+    }
+
+    private static void appendSnakeSeparator(StringBuilder result) {
+        if (result.length() > 0 && result.charAt(result.length() - 1) != '_') {
+            result.append('_');
+        }
+    }
+
+    private List<String> findPostgreSqlCheckEnumValues(String tableName, String columnName) throws SQLException {
+        String sql =
+            "select pg_get_constraintdef(co.oid) as constraint_definition " +
+            "from pg_constraint co " +
+            "join pg_class c on c.oid = co.conrelid " +
+            "join pg_namespace n on n.oid = c.relnamespace " +
+            "join pg_attribute a on a.attrelid = c.oid and a.attnum = co.conkey[1] " +
+            "where co.contype = 'c' and array_length(co.conkey, 1) = 1 " +
+            "and lower(c.relname) = lower(?) and lower(a.attname) = lower(?)";
+        try (var statement = connection.prepareStatement(sql)) {
+            statement.setString(1, normalizeSqlIdentifier(tableName));
+            statement.setString(2, normalizeSqlIdentifier(columnName));
+            try (var resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    List<String> values = parseCheckEnumValues(resultSet.getString("constraint_definition"));
+                    if (!values.isEmpty()) {
+                        return values;
+                    }
+                }
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    private static String enumConstraintKey(String tableName, String columnName) {
+        return normalizeSqlIdentifier(tableName).toLowerCase(Locale.ROOT) + "." + normalizeSqlIdentifier(columnName).toLowerCase(Locale.ROOT);
+    }
+
+    private static String unquotePrintableSqlString(String printableValue) {
+        String value = printableValue.trim();
+        if ("NULL".equalsIgnoreCase(value)) {
+            return null;
+        }
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1).replace("\\\"", "\"").replace("\\\\", "\\");
+        }
+        if (value.length() >= 2 && value.startsWith("'") && value.endsWith("'")) {
+            return value.substring(1, value.length() - 1).replace("''", "'");
+        }
+        return value;
+    }
+
+    private static String printableSqlString(String value) {
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    private static String sqlStringLiteral(String value) {
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    private static List<CheckEnumConstraint> parseLiquibaseCheckEnumConstraints(String changelog) {
+        String sql = decodeXmlEntities(changelog);
+        Pattern pattern = Pattern.compile(
+            "ALTER\\s+TABLE\\s+([^\\s]+)\\s+ADD\\s+CONSTRAINT\\s+([^\\s]+)\\s+CHECK\\s*\\(\\s*([^\\s()]+)\\s+IN\\s*\\((.*?)\\)\\s*\\)",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL
+        );
+        Matcher matcher = pattern.matcher(sql);
+        List<CheckEnumConstraint> constraints = new ArrayList<>();
+        while (matcher.find()) {
+            String tableName = normalizeSqlIdentifier(matcher.group(1));
+            String columnName = normalizeSqlIdentifier(matcher.group(3));
+            List<String> values = parseSqlStringList(matcher.group(4));
+            if (!tableName.isBlank() && !columnName.isBlank() && !values.isEmpty()) {
+                constraints.add(new CheckEnumConstraint(tableName, columnName, values));
+            }
+        }
+        return constraints;
+    }
+
+    private static List<String> parseCheckEnumValues(String constraintDefinition) {
+        if (constraintDefinition == null || constraintDefinition.isBlank()) {
+            return Collections.emptyList();
+        }
+        String sql = decodeXmlEntities(constraintDefinition);
+        Matcher arrayMatcher = Pattern.compile("ARRAY\\s*\\[(.*?)]", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(sql);
+        if (arrayMatcher.find()) {
+            return parseSqlStringList(arrayMatcher.group(1));
+        }
+        Matcher inMatcher = Pattern.compile("\\bIN\\s*\\((.*?)\\)", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(sql);
+        if (inMatcher.find()) {
+            return parseSqlStringList(inMatcher.group(1));
+        }
+        return Collections.emptyList();
+    }
+
+    private static String readResource(Resource resource) throws IOException {
+        try (InputStream inputStream = resource.getInputStream()) {
+            return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String decodeXmlEntities(String value) {
+        return value
+            .replace("&apos;", "'")
+            .replace("&#39;", "'")
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&");
+    }
+
+    private static List<String> parseSqlStringList(String rawValues) {
+        List<String> values = new ArrayList<>();
+        StringBuilder current = null;
+        for (int i = 0; i < rawValues.length(); i++) {
+            char c = rawValues.charAt(i);
+            if (current == null) {
+                if (c == '\'') {
+                    current = new StringBuilder();
+                }
+                continue;
+            }
+            if (c == '\'') {
+                if (i + 1 < rawValues.length() && rawValues.charAt(i + 1) == '\'') {
+                    current.append('\'');
+                    i++;
+                } else {
+                    values.add(current.toString());
+                    current = null;
+                }
+                continue;
+            }
+            current.append(c);
+        }
+        return values;
+    }
+
+    private static String normalizeSqlIdentifier(String rawIdentifier) {
+        String identifier = rawIdentifier.trim();
+        int dotIndex = identifier.lastIndexOf('.');
+        if (dotIndex >= 0 && dotIndex + 1 < identifier.length()) {
+            identifier = identifier.substring(dotIndex + 1);
+        }
+        if (
+            (identifier.startsWith("\"") && identifier.endsWith("\"")) ||
+            (identifier.startsWith("`") && identifier.endsWith("`")) ||
+            (identifier.startsWith("[") && identifier.endsWith("]"))
+        ) {
+            identifier = identifier.substring(1, identifier.length() - 1);
+        }
+        return identifier.replace("\"\"", "\"");
+    }
+
+    private record CheckEnumConstraint(String tableName, String columnName, List<String> values) {}
+
+<%_ if (authenticationTypeJwt || authenticationTypeSession) { _%>
+    private void restoreJHipsterAuthenticationData() {
+        if (connection == null) {
+            return;
+        }
+        try {
+            SqlScriptRunner.execScript(connection, jhipsterAuthenticationSeedSql());
+        } catch (SQLException e) {
+            throw new IllegalStateException("Cannot restore JHipster authentication data for EvoMaster", e);
+        }
+    }
+
+    private static String jhipsterAuthenticationSeedSql() {
+        return """
+            INSERT INTO jhi_authority(name)
+            SELECT 'ROLE_ADMIN'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_authority WHERE name = 'ROLE_ADMIN');
+
+            INSERT INTO jhi_authority(name)
+            SELECT 'ROLE_USER'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_authority WHERE name = 'ROLE_USER');
+
+            INSERT INTO jhi_user(id, login, password_hash, first_name, last_name, email, image_url, activated, lang_key, created_by, last_modified_by)
+            SELECT 1, 'admin', '$2a$10$gSAhZrxMllrbgj/kkK9UceBPpChGWJA7SYIb1Mqo.n5aNLq1/oRrC', 'Administrator', 'Administrator', 'admin@localhost', NULL, true, 'en', 'system', 'system'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_user WHERE id = 1);
+
+            INSERT INTO jhi_user(id, login, password_hash, first_name, last_name, email, image_url, activated, lang_key, created_by, last_modified_by)
+            SELECT 2, 'user', '$2a$10$VEjxo0jq2YG9Rbk2HmX9S.k1uZBGYUHdUcid3g/vfiEl7lwWgOH/K', 'User', 'User', 'user@localhost', NULL, true, 'en', 'system', 'system'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_user WHERE id = 2);
+
+            INSERT INTO jhi_user_authority(user_id, authority_name)
+            SELECT 1, 'ROLE_ADMIN'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_user_authority WHERE user_id = 1 AND authority_name = 'ROLE_ADMIN');
+
+            INSERT INTO jhi_user_authority(user_id, authority_name)
+            SELECT 1, 'ROLE_USER'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_user_authority WHERE user_id = 1 AND authority_name = 'ROLE_USER');
+
+            INSERT INTO jhi_user_authority(user_id, authority_name)
+            SELECT 2, 'ROLE_USER'
+            WHERE NOT EXISTS (SELECT 1 FROM jhi_user_authority WHERE user_id = 2 AND authority_name = 'ROLE_USER');
+            """;
+    }
+
+<%_ } _%>
+
+    private static void addIfPresent(List<String> args, String property, String variable) {
+        String value = env(variable);
+        if (value != null) {
+            args.add("--" + property + "=" + value);
+        }
+    }
+
+    private static String envOrDefault(String name, String defaultValue) {
+        String value = env(name);
+        return value == null ? defaultValue : value;
+    }
+
+    private static int integerEnvOrDefault(String name, int defaultValue) {
+        String value = env(name);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static String env(String name) {
+        String value = System.getenv(name);
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static void debugSqlSanitizer(String message) {
+        if (Boolean.parseBoolean(envOrDefault("EVOMASTER_DEBUG_SQL_SANITIZER", "false"))) {
+            System.err.println("[EvoMaster SQL sanitizer] " + message);
+        }
+    }
+}

@@ -124,6 +124,25 @@ class ExceptionTranslatorIT {
     }
 
     @Test
+    void testConstraintViolationException() {
+        webTestClient
+            .get()
+            .uri(uriBuilder -> uriBuilder.path("/api/exception-translator-test/constraint-violation").queryParam("param", "abcd").build())
+            .exchange()
+            .expectStatus()
+            .isBadRequest()
+            .expectHeader()
+            .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+            .expectBody()
+            .jsonPath("$.message")
+            .isEqualTo(ErrorConstants.ERR_VALIDATION)
+            .jsonPath("$.fieldErrors.[0].field")
+            .isEqualTo("param")
+            .jsonPath("$.fieldErrors.[0].message")
+            .isEqualTo("size must be between 0 and 3");
+    }
+
+    @Test
     void testAccessDenied() {
         webTestClient
             .get()

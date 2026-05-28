@@ -91,6 +91,9 @@ public class <%- mainClass %> {
      * @param args the command line arguments.
      */
     public static void main(String[] args) {
+<%_ if (databaseMigrationLiquibase) { _%>
+        System.setProperty("liquibase.analytics.enabled", System.getProperty("liquibase.analytics.enabled", "false"));
+<%_ } _%>
 <%_ if (cacheProviderHazelcast) { _%>
         try {
             // Workaround Hazelcast issue: https://github.com/hazelcast/hazelcast/issues/26361#issuecomment-2489778475

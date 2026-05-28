@@ -1,0 +1,28 @@
+package <%= packageName %>.validation;
+
+import jakarta.validation.ConstraintValidator;
+import jakarta.validation.ConstraintValidatorContext;
+import jakarta.validation.constraints.Pattern;
+
+/**
+ * Allows {@link Pattern} constraints generated from OpenAPI metadata to validate
+ * non-string scalar types such as LocalDate by matching their string representation.
+ */
+public class PatternObjectValidator implements ConstraintValidator<Pattern, Object> {
+
+    private java.util.regex.Pattern pattern;
+
+    @Override
+    public void initialize(Pattern constraintAnnotation) {
+        int flags = 0;
+        for (Pattern.Flag flag : constraintAnnotation.flags()) {
+            flags |= flag.getValue();
+        }
+        pattern = java.util.regex.Pattern.compile(constraintAnnotation.regexp(), flags);
+    }
+
+    @Override
+    public boolean isValid(Object value, ConstraintValidatorContext context) {
+        return value == null || pattern.matcher(value.toString()).matches();
+    }
+}

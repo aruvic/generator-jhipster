@@ -110,6 +110,15 @@ describe('Hybrid mapper generator', () => {
 
     expect(helper).toBeDefined();
     expect(helper?.subtypes).toEqual([]);
+
+    const template = readFileSync(new URL('../templates/polymorphic-helper-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(template, { ...helper!, locals: { baseMethodAnnotations: [] } }, { filename: 'polymorphic-helper-mapper.java.ejs' });
+
+    expect(rendered).toContain('return mapCatalogBaseDto(unwrapped);');
+    expect(rendered).toContain('protected abstract com.example.service.api.dto.Catalog mapCatalogBaseDto(com.example.domain.Catalog source);');
+    expect(rendered).toContain(
+      'protected abstract void updateCatalogBaseFromCatalog(@MappingTarget com.example.domain.Catalog target, com.example.service.api.dto.Catalog source);',
+    );
   });
 
   it('keeps Java subclass mappings when JDL entities declare domain inheritance', () => {
@@ -217,6 +226,76 @@ describe('Hybrid mapper generator', () => {
 
     expect(helper?.hasDomainDiscriminatorAccessor).toBe(true);
     expect(helper?.domainDiscriminatorAccessor).toBe('unwrapped.getAtType()');
+  });
+
+  it('renders domain discriminator dispatch with the declared discriminator literals', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [],
+      schemas: {
+        Pet: {
+          type: 'object',
+          discriminator: {
+            propertyName: 'type',
+            mapping: {
+              dog: '#/components/schemas/Dog',
+              cat: '#/components/schemas/Cat',
+            },
+          },
+          oneOf: [{ $ref: '#/components/schemas/Dog' }, { $ref: '#/components/schemas/Cat' }],
+          properties: {
+            type: { type: 'string' },
+          },
+        },
+        Dog: {
+          allOf: [{ $ref: '#/components/schemas/Pet' }, { type: 'object', properties: { barkVolume: { type: 'integer' } } }],
+        },
+        Cat: {
+          allOf: [{ $ref: '#/components/schemas/Pet' }, { type: 'object', properties: { livesLeft: { type: 'integer' } } }],
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'Pet',
+        {
+          name: 'Pet',
+          fields: [{ fieldName: 'type', fieldType: 'String' }],
+          annotations: {
+            discriminator: { column: 'type', type: 'String', values: 'dog->Dog, cat->Cat' },
+          },
+        },
+      ],
+      [
+        'Dog',
+        {
+          name: 'Dog',
+          extends: 'Pet',
+          fields: [{ fieldName: 'barkVolume', fieldType: 'Integer' }],
+          annotations: { discriminatorValue: { value: 'dog' } },
+        },
+      ],
+      [
+        'Cat',
+        {
+          name: 'Cat',
+          extends: 'Pet',
+          fields: [{ fieldName: 'livesLeft', fieldType: 'Integer' }],
+          annotations: { discriminatorValue: { value: 'cat' } },
+        },
+      ],
+    ]);
+
+    const { helperMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const helper = helperMappers.find(mapper => mapper.baseType === 'Pet');
+    expect(helper).toBeDefined();
+    const template = readFileSync(new URL('../templates/polymorphic-helper-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(template, { ...helper!, locals: { baseMethodAnnotations: [] } }, { filename: 'polymorphic-helper-mapper.java.ejs' });
+
+    expect(helper?.subtypes.find(subtype => subtype.domainSimpleName === 'Dog')?.discriminatorValue).toBe('dog');
+    expect(rendered).toContain('if ("dog".equals(discriminator))');
+    expect(rendered).toContain('if ("cat".equals(discriminator))');
+    expect(rendered).not.toContain('if ("Dog".equals(discriminator))');
+    expect(rendered).not.toContain('if ("Cat".equals(discriminator))');
   });
 
   it('maps FVO and MVO requests to domain and responds with base DTO only', () => {
@@ -610,6 +689,133 @@ describe('Hybrid mapper generator', () => {
     );
   });
 
+  it('adds primitive conversion annotations to polymorphic helper base mappings', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [],
+      schemas: {
+        JsonValue: {
+          type: 'object',
+          discriminator: {
+            propertyName: '@type',
+            mapping: {
+              JsonValueChild: '#/components/schemas/JsonValueChild',
+            },
+          },
+          properties: {
+            '@id': { type: 'string', format: 'uri' },
+            '@list': {},
+            '@type': { type: 'string' },
+          },
+        },
+        JsonValueChild: {
+          allOf: [
+            { $ref: '#/components/schemas/JsonValue' },
+            {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'JsonValue',
+        {
+          name: 'JsonValue',
+          fields: [
+            { fieldName: 'atId', fieldType: 'String' },
+            { fieldName: 'atList', fieldType: 'TextBlob' },
+            { fieldName: 'atType', fieldType: 'String' },
+          ],
+        },
+      ],
+      [
+        'JsonValueChild',
+        {
+          name: 'JsonValueChild',
+          extends: 'JsonValue',
+          fields: [{ fieldName: 'name', fieldType: 'String' }],
+        },
+      ],
+    ]);
+
+    const { helperMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const helper = helperMappers.find(entry => entry.baseType === 'JsonValue');
+
+    expect(helper?.baseMethodAnnotations).toContain(
+      '@Mapping(source = "atList", target = "atList", qualifiedByName = "jsonNullableObjectToString")',
+    );
+    expect(helper?.baseMethodAnnotations).toContain('@Mapping(source = "atId", target = "atId", qualifiedByName = "uriToString")');
+    expect(helper?.baseResponseMethodAnnotations).toContain(
+      '@Mapping(source = "atList", target = "atList", qualifiedByName = "jsonStringToJsonNullableObject")',
+    );
+    expect(helper?.baseResponseMethodAnnotations).toContain(
+      '@Mapping(source = "atId", target = "atId", qualifiedByName = "stringToUri")',
+    );
+
+    const template = readFileSync(new URL('../templates/polymorphic-helper-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(
+      template,
+      {
+        ...helper,
+        locals: {
+          baseMethodAnnotations: helper?.baseMethodAnnotations,
+          baseResponseMethodAnnotations: helper?.baseResponseMethodAnnotations,
+        },
+      },
+      { filename: 'polymorphic-helper-mapper.java.ejs' },
+    );
+
+    expect(rendered).toContain('@Named("mapJsonValueBaseDto")');
+    expect(rendered).toContain('@Mapping(source = "atId", target = "atId", qualifiedByName = "stringToUri")');
+    expect(rendered).toContain('@Named("updateJsonValueBaseFromJsonValue")');
+    expect(rendered).toContain('@Mapping(source = "atId", target = "atId", qualifiedByName = "uriToString")');
+  });
+
+  it('does not add base conversion annotations when oneOf base DTO is generated as an interface', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [],
+      schemas: {
+        HazardousItem: {
+          type: 'object',
+          properties: {
+            codes: {
+              type: 'array',
+              items: { type: 'string' },
+            },
+          },
+          oneOf: [
+            {
+              title: 'Hazardous By Code',
+              type: 'object',
+              properties: {
+                code: { type: 'string' },
+              },
+            },
+          ],
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'HazardousItem',
+        {
+          name: 'HazardousItem',
+          fields: [{ fieldName: 'codes', fieldType: 'TextBlob' }],
+        },
+      ],
+    ]);
+
+    const { helperMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const helper = helperMappers.find(entry => entry.baseType === 'HazardousItem');
+
+    expect(helper?.baseMethodAnnotations).toEqual([]);
+    expect(helper?.baseResponseMethodAnnotations).toEqual([]);
+  });
+
   it('renders FVO wrapper subtype mappings from schema DTOs without synthesizing missing suffix variants', () => {
     const template = readFileSync(new URL('../templates/polymorphic-helper-mapper.java.ejs', import.meta.url), 'utf8');
     const subtype = (dtoSimpleName: string, domainSimpleName: string) => ({
@@ -960,6 +1166,72 @@ describe('Hybrid mapper generator', () => {
     const requestMapping = mapper?.requestMappings.find(entry => entry.sourceType.endsWith('GeographicAddressFVO'));
 
     expect(requestMapping?.annotations).not.toContain('@Mapping(target = "geographicSubAddress", ignore = true)');
+  });
+
+  it('does not treat descriptive schema titles as abstract relationship targets', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/bookings',
+          method: 'POST',
+          requestBodySchema: 'CreateBooking',
+          responseSchema: 'Booking',
+        },
+      ],
+      schemas: {
+        CreateBooking: {
+          type: 'object',
+          properties: {
+            documentParties: { $ref: '#/components/schemas/DocumentPartiesReq' },
+          },
+        },
+        Booking: {
+          type: 'object',
+          properties: {
+            documentParties: { $ref: '#/components/schemas/DocumentPartiesReq' },
+          },
+        },
+        DocumentPartiesReq: {
+          title: 'Document Parties (Shipper)',
+          type: 'object',
+          properties: {
+            bookingAgent: { $ref: '#/components/schemas/BookingAgent' },
+          },
+        },
+        BookingAgent: {
+          type: 'object',
+          properties: {
+            partyName: { type: 'string' },
+          },
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'Booking',
+        {
+          name: 'Booking',
+          fields: [],
+          relationships: [{ relationshipName: 'documentParties', relationshipType: 'many-to-one', otherEntityName: 'DocumentPartiesReq' }],
+        },
+      ],
+      [
+        'CreateBooking',
+        {
+          name: 'CreateBooking',
+          fields: [],
+          relationships: [{ relationshipName: 'documentParties', relationshipType: 'many-to-one', otherEntityName: 'DocumentPartiesReq' }],
+        },
+      ],
+      ['DocumentPartiesReq', { name: 'DocumentPartiesReq', fields: [], relationships: [] }],
+      ['BookingAgent', { name: 'BookingAgent', fields: [{ fieldName: 'partyName', fieldType: 'String' }], relationships: [] }],
+    ]);
+
+    const { entityMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const mapper = entityMappers.find(entry => entry.entityName === 'CreateBooking');
+    const requestMapping = mapper?.requestMappings.find(entry => entry.sourceType.endsWith('CreateBooking'));
+
+    expect(requestMapping?.annotations).not.toContain('@Mapping(target = "documentParties", ignore = true)');
   });
 
   it('maps renamed object relationships by schema target instead of inverse field name', () => {
@@ -1656,6 +1928,53 @@ describe('Hybrid mapper generator', () => {
     expect(responseMapping?.annotations).toContain(
       '@Mapping(target = "children", expression = "java(mapChildrenToChildrenDto(source.getChildren()))")',
     );
+
+    const template = readFileSync(new URL('../templates/entity-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(template, { ...mapper }, { filename: 'entity-mapper.java.ejs' });
+    expect(rendered).toContain('import org.mapstruct.Named;');
+    expect(rendered).toContain('@Named("ParentMapper.mapChildrenToChildrenDto")');
+  });
+
+  it('renders recursive collection mappers without self autowiring', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/packagings',
+          method: 'POST',
+          requestBodySchema: 'InnerPackaging',
+          responseSchema: 'InnerPackaging',
+        },
+      ],
+      schemas: {
+        InnerPackaging: {
+          type: 'object',
+          properties: {
+            innerPackagings: { type: 'array', items: { $ref: '#/components/schemas/InnerPackaging' } },
+          },
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'InnerPackaging',
+        {
+          name: 'InnerPackaging',
+          fields: [],
+          relationships: [{ relationshipName: 'innerPackagings', otherEntityName: 'InnerPackaging' }],
+        },
+      ],
+    ]);
+
+    const { entityMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const mapper = entityMappers.find(entry => entry.entityName === 'InnerPackaging');
+    const template = readFileSync(new URL('../templates/entity-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(template, { ...mapper }, { filename: 'entity-mapper.java.ejs' });
+
+    expect(mapper?.usesMappers).not.toContain('com.example.web.api.mapper.InnerPackagingMapper');
+    expect(rendered).not.toContain('protected com.example.web.api.mapper.InnerPackagingMapper innerPackagingMapper;');
+    expect(rendered).toContain('.map(this::toInnerPackagingDto)');
+    expect(rendered).toContain('(existingItem, incomingItem) -> this.updateInnerPackagingEntityFromInnerPackaging(existingItem, incomingItem)');
+    expect(rendered).toContain('incomingItem -> this.toInnerPackagingEntity(incomingItem)');
   });
 
   it('uses JDL collection relationship names when the OpenAPI array property is singular', () => {

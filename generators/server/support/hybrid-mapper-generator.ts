@@ -48,6 +48,7 @@ export interface PolymorphicHelperMapperContext {
   usesMappers: string[];
   isAbstract?: boolean;
   baseMethodAnnotations?: string[];
+  baseResponseMethodAnnotations?: string[];
   hasDomainDiscriminatorAccessor?: boolean;
   domainDiscriminatorAccessor?: string;
 }
@@ -74,6 +75,7 @@ export interface PolymorphicTypeMapping {
   variants: PolymorphicVariantInfo[];
   isAbstract?: boolean;
   baseMethodAnnotations?: string[];
+  baseResponseMethodAnnotations?: string[];
   hasDomainDiscriminatorAccessor?: boolean;
   domainDiscriminatorAccessor?: string;
 }
@@ -83,6 +85,7 @@ export interface SubtypeInfo {
   domainType: string;
   dtoSimpleName: string;
   domainSimpleName: string;
+  discriminatorValue?: string;
   isCompatible?: boolean;
   usesHelperMapper?: boolean;
   isDtoSubtype?: boolean;
@@ -907,6 +910,23 @@ function mergeEntityMetadata(target: EntityMetadata, source?: Partial<EntityMeta
   return target;
 }
 
+function resolveDiscriminatorValue(metadata: EntityMetadata | undefined, entityName: string | undefined): string | undefined {
+  const normalizedEntityName = normalizeEntityKey(entityName);
+  if (!metadata || !normalizedEntityName) {
+    return undefined;
+  }
+  const child = metadata.childEntities?.find(candidate => normalizeEntityKey(candidate.name) === normalizedEntityName);
+  if (child?.discriminatorValue) {
+    return child.discriminatorValue;
+  }
+  for (const [discriminatorValue, targetEntityName] of Object.entries(metadata.discriminatorValues ?? {})) {
+    if (normalizeEntityKey(targetEntityName) === normalizedEntityName) {
+      return discriminatorValue;
+    }
+  }
+  return undefined;
+}
+
 function buildEntityMetadataFromDescriptor(entity: any): Partial<EntityMetadata> | undefined {
   if (!entity) {
     return undefined;
@@ -944,12 +964,35 @@ function buildEntityMetadataFromDescriptor(entity: any): Partial<EntityMetadata>
     }
   }
 
-  const registerDiscriminatorMapping = (value?: string, target?: string, abstractFlag?: boolean) => {
-    const discriminatorValue = value?.trim();
-    const targetName = target?.trim() ?? discriminatorValue;
-    if (!discriminatorValue || !targetName) {
+  const looksLikeEntityName = (value?: string) => !!value && /^[A-Z][A-Za-z0-9_]*$/.test(stripDtoSuffix(value));
+  const knownChildNames = () => new Set(childEntities.map(child => normalizeEntityKey(child.name)).filter((name): name is string => !!name));
+
+  const registerDiscriminatorMapping = (left?: string, right?: string, abstractFlag?: boolean) => {
+    const leftValue = left?.trim();
+    const rightValue = right?.trim() ?? leftValue;
+    if (!leftValue || !rightValue) {
       return;
     }
+    const childNames = knownChildNames();
+    const normalizedLeft = normalizeEntityKey(leftValue);
+    const normalizedRight = normalizeEntityKey(rightValue);
+    let discriminatorValue = leftValue;
+    let targetName = rightValue;
+
+    if (normalizedLeft && childNames.has(normalizedLeft) && (!normalizedRight || !childNames.has(normalizedRight))) {
+      discriminatorValue = rightValue;
+      targetName = leftValue;
+    } else if (normalizedRight && childNames.has(normalizedRight)) {
+      discriminatorValue = leftValue;
+      targetName = rightValue;
+    } else if (looksLikeEntityName(leftValue) && !looksLikeEntityName(rightValue)) {
+      discriminatorValue = rightValue;
+      targetName = leftValue;
+    } else if (looksLikeEntityName(rightValue) && !looksLikeEntityName(leftValue)) {
+      discriminatorValue = leftValue;
+      targetName = rightValue;
+    }
+
     const normalizedTarget = normalizeEntityKey(targetName);
     if (!normalizedTarget) {
       return;
@@ -2666,7 +2709,10 @@ function collectAbstractSchemaMatches(
     collectAbstractSchemaMatches(schema.additionalProperties, schemas, matches, visited);
   }
 
-  registerMatch(schema.title ?? schema['x-class-name']);
+  const explicitTypeName = schema.title ?? schema['x-class-name'];
+  if (matchesAbstractType(explicitTypeName, schemas)) {
+    registerMatch(explicitTypeName);
+  }
   return matches;
 }
 
@@ -2806,7 +2852,7 @@ function buildObjectFactoryVariants(
   }
 
   if (metadata.discriminatorValues) {
-    for (const [childName, discriminator] of Object.entries(metadata.discriminatorValues)) {
+    for (const [discriminator, childName] of Object.entries(metadata.discriminatorValues)) {
       registerVariant(childName, discriminator);
     }
   }
@@ -3070,6 +3116,7 @@ function buildPolymorphicMapping(
   domainMapStructPropertyCache: Map<string, Map<string, string>> = new Map(),
   domainFieldTypeCache: Map<string, Map<string, string>> = new Map(),
   schemaPropertiesCache: Map<string, SchemaProperties> = new Map(),
+  schemaJsonMetadataCache: Map<string, SchemaJsonMetadata> = new Map(),
   operationRequestSchemas: Set<string> = new Set(),
   operationResponseSchemas: Set<string> = new Set(),
 ): PolymorphicTypeMapping | null {
@@ -3137,6 +3184,8 @@ function buildPolymorphicMapping(
   const baseDtoFqcn = buildDtoFqcn(schemaName, basePackage);
   const baseDomainFqcn = buildDomainFqcn(baseType, basePackage);
   const isAbstract = !!schema.discriminator || !!schema.abstract || !!schema['x-abstract'] || (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) || (Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
+  const baseDtoIsCompositionInterface =
+    (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) || (Array.isArray(schema.anyOf) && schema.anyOf.length > 0);
   const domainDiscriminatorAccessor = buildDomainDiscriminatorAccessorExpression(
     schemaName,
     schema,
@@ -3145,6 +3194,63 @@ function buildPolymorphicMapping(
     domainPropertyCache,
   );
   const hasDomainDiscriminatorAccessor = Boolean(domainDiscriminatorAccessor);
+  const baseJsonMetadata = collectSchemaJsonMetadata(schemaName, schemas, schemaJsonMetadataCache, schemaPropertiesCache);
+  const { annotations: baseRequestJsonAnnotations, mappedFields: baseRequestJsonMappedFields } = buildJsonMappingAnnotations(
+    baseJsonMetadata,
+    'request',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+  );
+  const { annotations: baseResponseJsonAnnotations, mappedFields: baseResponseJsonMappedFields } = buildJsonMappingAnnotations(
+    baseJsonMetadata,
+    'response',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+  );
+  const { annotations: baseRequestUriAnnotations, mappedFields: baseRequestUriMappedFields } = buildUriMappingAnnotations(
+    schemaName,
+    schemas,
+    schemaPropertiesCache,
+    'request',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+    baseRequestJsonMappedFields,
+  );
+  const { annotations: baseResponseUriAnnotations, mappedFields: baseResponseUriMappedFields } = buildUriMappingAnnotations(
+    schemaName,
+    schemas,
+    schemaPropertiesCache,
+    'response',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+    baseResponseJsonMappedFields,
+  );
+  const { annotations: baseRequestScalarArrayAnnotations } = buildScalarArrayMappingAnnotations(
+    schemaName,
+    schemas,
+    schemaPropertiesCache,
+    'request',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+    basePackage,
+    new Set<string>([...baseRequestJsonMappedFields, ...baseRequestUriMappedFields]),
+  );
+  const { annotations: baseResponseScalarArrayAnnotations } = buildScalarArrayMappingAnnotations(
+    schemaName,
+    schemas,
+    schemaPropertiesCache,
+    'response',
+    baseType,
+    entityDefinitions,
+    domainFieldTypeCache,
+    basePackage,
+    new Set<string>([...baseResponseJsonMappedFields, ...baseResponseUriMappedFields]),
+  );
 
   let subtypeInfos: SubtypeInfo[] = subtypeNames
     .map((subtypeName): SubtypeInfo | undefined => {
@@ -3177,6 +3283,7 @@ function buildPolymorphicMapping(
         domainAssignable === undefined
           ? isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata) || schemaAssignable
           : domainAssignable;
+      const discriminatorValue = resolveDiscriminatorValue(baseMetadata, domainCandidate);
       const usesHelperMapper = normalizedDomainCandidate ? polymorphicBaseTypes.has(normalizedDomainCandidate) : false;
       const normalizedSubtype = normalizeTypeName(stripDtoSuffix(subtypeName)) ?? subtypeName;
       const isDtoSubtype = compositionSubtypeNames.size === 0 ? true : compositionSubtypeNames.has(normalizedSubtype);
@@ -3186,6 +3293,7 @@ function buildPolymorphicMapping(
         domainType: buildDomainFqcn(domainCandidate, basePackage),
         dtoSimpleName: normalizeDtoTypeName(subtypeName),
         domainSimpleName: domainCandidate,
+        discriminatorValue,
         isCompatible,
         usesHelperMapper,
         isDtoSubtype,
@@ -3243,7 +3351,12 @@ function buildPolymorphicMapping(
     baseDomainType: baseDomainFqcn,
     subtypes: uniqueSubtypeInfos,
     isAbstract,
-    baseMethodAnnotations: [],
+    baseMethodAnnotations: baseDtoIsCompositionInterface
+      ? []
+      : uniqueAnnotations([...baseRequestJsonAnnotations, ...baseRequestUriAnnotations, ...baseRequestScalarArrayAnnotations]),
+    baseResponseMethodAnnotations: baseDtoIsCompositionInterface
+      ? []
+      : uniqueAnnotations([...baseResponseJsonAnnotations, ...baseResponseUriAnnotations, ...baseResponseScalarArrayAnnotations]),
     hasDomainDiscriminatorAccessor,
     domainDiscriminatorAccessor,
     variants: variants.map(variantName => {
@@ -3291,19 +3404,21 @@ function buildPolymorphicMapping(
           domainAssignable === undefined
             ? isSubtypeInstantiationCompatible(baseType, domainCandidate, baseMetadata) || schemaAssignable
             : domainAssignable;
+        const discriminatorValue = resolveDiscriminatorValue(baseMetadata, domainCandidate);
         const usesHelperMapper = normalizedDomainCandidate ? polymorphicBaseTypes.has(normalizedDomainCandidate) : false;
         const normalizedSubtype = normalizeTypeName(stripDtoSuffix(subtypeName)) ?? subtypeName;
         const isDtoSubtype = compositionSubtypeNames.size === 0 ? true : compositionSubtypeNames.has(normalizedSubtype);
 
-          return {
-            dtoType: buildDtoFqcn(subtypeName, basePackage),
-            domainType: buildDomainFqcn(domainCandidate, basePackage),
-            dtoSimpleName: normalizeDtoTypeName(subtypeName),
-            domainSimpleName: domainCandidate,
-            isCompatible,
-            usesHelperMapper,
-            isDtoSubtype,
-          } satisfies SubtypeInfo;
+        return {
+          dtoType: buildDtoFqcn(subtypeName, basePackage),
+          domainType: buildDomainFqcn(domainCandidate, basePackage),
+          dtoSimpleName: normalizeDtoTypeName(subtypeName),
+          domainSimpleName: domainCandidate,
+          discriminatorValue,
+          isCompatible,
+          usesHelperMapper,
+          isDtoSubtype,
+        } satisfies SubtypeInfo;
         })
         .filter((subtypeInfo): subtypeInfo is SubtypeInfo => !!subtypeInfo);
       variantSubtypeInfos = variantSubtypeInfos.filter(info => info.isCompatible !== false);
@@ -3324,37 +3439,32 @@ function buildPolymorphicMapping(
       const variantDtoSimpleName = normalizeDtoTypeName(variantName);
       const mappingMethodName = `to${variantDtoSimpleName}`;
       const targetDomainSimpleName = resolvedDomainSubtype?.domainSimpleName ?? baseType;
-      const variantAbstractAnnotations = filterMappingAnnotationsByDomainProperty(
-        buildAbstractFieldMappingAnnotations(
-          variantName,
-          schemas,
-          schemaPropertiesCache,
-          'request',
-          new Set<string>(),
-          new Set<string>(),
-        ).annotations,
+      const variantJsonMetadata = collectSchemaJsonMetadata(variantName, schemas, schemaJsonMetadataCache, schemaPropertiesCache);
+      const { annotations: variantRequestJsonAnnotations, mappedFields: variantRequestJsonMappedFields } = buildJsonMappingAnnotations(
+        variantJsonMetadata,
+        'request',
         targetDomainSimpleName,
         entityDefinitions,
-        domainPropertyCache,
-        'target',
-        domainMapStructPropertyCache,
+        domainFieldTypeCache,
       );
-      const variantResponseAbstractAnnotations = filterMappingAnnotationsByDomainProperty(
-        buildAbstractFieldMappingAnnotations(
-          variantName,
-          schemas,
-          schemaPropertiesCache,
-          'response',
-          new Set<string>(),
-          new Set<string>(),
-        ).annotations,
+      const { annotations: variantResponseJsonAnnotations, mappedFields: variantResponseJsonMappedFields } = buildJsonMappingAnnotations(
+        variantJsonMetadata,
+        'response',
         targetDomainSimpleName,
         entityDefinitions,
-        domainPropertyCache,
-        'source',
-        domainMapStructPropertyCache,
+        domainFieldTypeCache,
       );
-      const { annotations: variantResponseScalarArrayAnnotations } = buildScalarArrayMappingAnnotations(
+      const { annotations: variantRequestUriAnnotations, mappedFields: variantRequestUriMappedFields } = buildUriMappingAnnotations(
+        variantName,
+        schemas,
+        schemaPropertiesCache,
+        'request',
+        targetDomainSimpleName,
+        entityDefinitions,
+        domainFieldTypeCache,
+        variantRequestJsonMappedFields,
+      );
+      const { annotations: variantResponseUriAnnotations, mappedFields: variantResponseUriMappedFields } = buildUriMappingAnnotations(
         variantName,
         schemas,
         schemaPropertiesCache,
@@ -3362,7 +3472,71 @@ function buildPolymorphicMapping(
         targetDomainSimpleName,
         entityDefinitions,
         domainFieldTypeCache,
-        basePackage,
+        variantResponseJsonMappedFields,
+      );
+      const { annotations: variantRequestScalarArrayAnnotations, mappedFields: variantRequestScalarArrayMappedFields } =
+        buildScalarArrayMappingAnnotations(
+          variantName,
+          schemas,
+          schemaPropertiesCache,
+          'request',
+          targetDomainSimpleName,
+          entityDefinitions,
+          domainFieldTypeCache,
+          basePackage,
+          new Set<string>([...variantRequestJsonMappedFields, ...variantRequestUriMappedFields]),
+        );
+      const { annotations: variantResponseScalarArrayAnnotations, mappedFields: variantResponseScalarArrayMappedFields } =
+        buildScalarArrayMappingAnnotations(
+          variantName,
+          schemas,
+          schemaPropertiesCache,
+          'response',
+          targetDomainSimpleName,
+          entityDefinitions,
+          domainFieldTypeCache,
+          basePackage,
+          new Set<string>([...variantResponseJsonMappedFields, ...variantResponseUriMappedFields]),
+        );
+      const variantAbstractAnnotations = filterMappingAnnotationsByDomainProperty(
+        uniqueAnnotations([
+          ...variantRequestJsonAnnotations,
+          ...variantRequestUriAnnotations,
+          ...variantRequestScalarArrayAnnotations,
+          ...buildAbstractFieldMappingAnnotations(
+            variantName,
+            schemas,
+            schemaPropertiesCache,
+            'request',
+            new Set<string>([...variantRequestJsonMappedFields, ...variantRequestUriMappedFields, ...variantRequestScalarArrayMappedFields]),
+            new Set<string>(),
+          ).annotations,
+        ]),
+        targetDomainSimpleName,
+        entityDefinitions,
+        domainPropertyCache,
+        'target',
+        domainMapStructPropertyCache,
+      );
+      const variantResponseAbstractAnnotations = filterMappingAnnotationsByDomainProperty(
+        uniqueAnnotations([
+          ...variantResponseJsonAnnotations,
+          ...variantResponseUriAnnotations,
+          ...variantResponseScalarArrayAnnotations,
+          ...buildAbstractFieldMappingAnnotations(
+            variantName,
+            schemas,
+            schemaPropertiesCache,
+            'response',
+            new Set<string>([...variantResponseJsonMappedFields, ...variantResponseUriMappedFields, ...variantResponseScalarArrayMappedFields]),
+            new Set<string>(),
+          ).annotations,
+        ]),
+        targetDomainSimpleName,
+        entityDefinitions,
+        domainPropertyCache,
+        'source',
+        domainMapStructPropertyCache,
       );
 
       return {
@@ -3379,7 +3553,7 @@ function buildPolymorphicMapping(
         targetDomainSimpleName,
         mappingMethodName,
         annotations: variantAbstractAnnotations,
-        responseAnnotations: uniqueAnnotations([...variantResponseScalarArrayAnnotations, ...variantResponseAbstractAnnotations]),
+        responseAnnotations: variantResponseAbstractAnnotations,
         generateObjectFactory: targetDomainSimpleName === baseType,
       };
     }),
@@ -3673,6 +3847,7 @@ export function generateHybridMappers(
         domainMapStructPropertyCache,
         domainFieldTypeCache,
         schemaPropertiesCache,
+        schemaJsonMetadataCache,
         operationRequestSchemas,
         operationResponseSchemas,
       );
@@ -4452,6 +4627,7 @@ export function generateHybridMappers(
       usesMappers: Array.from(subtypeMapperFqcns).sort(),
       isAbstract: poly.isAbstract,
       baseMethodAnnotations: poly.baseMethodAnnotations,
+      baseResponseMethodAnnotations: poly.baseResponseMethodAnnotations,
       hasDomainDiscriminatorAccessor: poly.hasDomainDiscriminatorAccessor,
       domainDiscriminatorAccessor: poly.domainDiscriminatorAccessor,
     } satisfies PolymorphicHelperMapperContext;

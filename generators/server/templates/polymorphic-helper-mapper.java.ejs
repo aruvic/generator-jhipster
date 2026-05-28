@@ -7,14 +7,11 @@
     const requiresMappingImport = Boolean(
         requiresRequestIdIgnore ||
         (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Mapping('))) ||
+        (baseResponseMethodAnnotations && baseResponseMethodAnnotations.some(annotation => annotation.includes('@Mapping('))) ||
         variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Mapping('))) ||
         variants.some(variant => Array.isArray(variant.responseAnnotations) && variant.responseAnnotations.some(annotation => annotation.includes('@Mapping(')))
     );
-    const requiresNamedImport = Boolean(
-        (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Named'))) ||
-        variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Named'))) ||
-        requestVariants.length > 0
-    );
+    const requiresNamedImport = true;
     const mappingQualifierForSubtype = subtypeDtoType => {
         const variant = requestVariants.find(candidate => candidate.dtoType === subtypeDtoType);
         if (!variant) {
@@ -133,7 +130,7 @@ _%>
             return this.<%- subtypeMapperField %>.<%- subtypeDtoMethod %>((<%- subtype.domainType %>) unwrapped);
         }
 <%_ } _%>
-        return create<%- baseType %>Dto(unwrapped);
+        return map<%- baseType %>BaseDto(unwrapped);
     }
 
     private <T> T unwrapHibernateProxy(T source) {
@@ -159,6 +156,14 @@ _%>
  <%_ } _%>
         return instantiate<%- baseType %>DtoFallback();
     }
+
+<%_ if (locals.baseResponseMethodAnnotations) { _%>
+<%_ for (const annotation of baseResponseMethodAnnotations) { _%>
+    <%- annotation %>
+<%_ } _%>
+<%_ } _%>
+    @Named("map<%- baseType %>BaseDto")
+    protected abstract <%- baseDtoType %> map<%- baseType %>BaseDto(<%- baseDomainType %> source);
 
 <%_ if (locals.baseMethodAnnotations) { _%>
 <%_ for (const annotation of baseMethodAnnotations) { _%>
@@ -196,7 +201,17 @@ _%>
             return;
         }
 <%_ } _%>
+        update<%- baseType %>BaseFrom<%- baseDtoSimpleName %>(unwrappedTarget, source);
     }
+
+<%_ if (locals.baseMethodAnnotations) { _%>
+<%_ for (const annotation of baseMethodAnnotations) { _%>
+    <%- annotation %>
+<%_ } _%>
+<%_ } _%>
+    @Mapping(target = "id", ignore = true)
+    @Named("update<%- baseType %>BaseFrom<%- baseDtoSimpleName %>")
+    protected abstract void update<%- baseType %>BaseFrom<%- baseDtoSimpleName %>(@MappingTarget <%- baseDomainType %> target, <%- baseDtoType %> source);
 
 <%_ for (const variant of requestVariants) {
       const variantDtoSimpleName = variant.dtoType.substring(variant.dtoType.lastIndexOf('.') + 1);
@@ -227,7 +242,12 @@ _%>
             return;
         }
   <%_ } _%>
+        update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(unwrappedTarget, source);
     }
+
+    @Mapping(target = "id", ignore = true)
+    @Named("update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>")
+    protected abstract void update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(@MappingTarget <%- baseDomainType %> target, <%- variant.dtoType %> source);
 
 <%_ } _%>
 

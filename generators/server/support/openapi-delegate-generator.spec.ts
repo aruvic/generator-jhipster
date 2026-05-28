@@ -61,21 +61,88 @@ describe('OpenAPI delegate generator', () => {
           `            application/json:\n` +
           `              schema:\n` +
           `                $ref: '#/components/schemas/CreateBookingResponse'\n` +
+          `  /bookings/{bookingId}:\n` +
+          `    delete:\n` +
+          `      operationId: cancelBooking\n` +
+          `      parameters:\n` +
+          `        - name: bookingId\n` +
+          `          in: path\n` +
+          `          required: true\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `      responses:\n` +
+          `        '202':\n` +
+          `          description: Accepted for asynchronous deletion\n` +
           `components:\n` +
           `  schemas:\n` +
           `    Booking:\n` +
+          `      discriminator:\n` +
+          `        propertyName: kind\n` +
+          `        mapping:\n` +
+          `          Booking: '#/components/schemas/Booking'\n` +
           `      type: object\n` +
+          `      required:\n` +
+          `        - kind\n` +
           `      properties:\n` +
+          `        kind:\n` +
+          `          type: string\n` +
+          `        id:\n` +
+          `          type: string\n` +
+          `        agreements:\n` +
+          `          type: array\n` +
+          `          items:\n` +
+          `            $ref: '#/components/schemas/AgreementRef'\n` +
+          `    AgreementRef:\n` +
+          `      discriminator:\n` +
+          `        propertyName: kind\n` +
+          `        mapping:\n` +
+          `          AgreementRef: '#/components/schemas/AgreementRef'\n` +
+          `      type: object\n` +
+          `      required:\n` +
+          `        - kind\n` +
+          `      properties:\n` +
+          `        kind:\n` +
+          `          type: string\n` +
           `        id:\n` +
           `          type: string\n` +
           `    CreateBooking:\n` +
+          `      discriminator:\n` +
+          `        propertyName: kind\n` +
+          `        mapping:\n` +
+          `          CreateBooking: '#/components/schemas/CreateBooking'\n` +
           `      type: object\n` +
+          `      required:\n` +
+          `        - kind\n` +
           `      properties:\n` +
+          `        kind:\n` +
+          `          type: string\n` +
           `        booking:\n` +
           `          type: string\n` +
-          `    CreateBookingResponse:\n` +
+          `        equipment:\n` +
+          `          $ref: '#/components/schemas/ShipperOwnedEquipment'\n` +
+          `    ShipperOwnedEquipment:\n` +
+          `      discriminator:\n` +
+          `        propertyName: isShipperOwned\n` +
           `      type: object\n` +
+          `      required:\n` +
+          `        - isShipperOwned\n` +
           `      properties:\n` +
+          `        isShipperOwned:\n` +
+          `          type: boolean\n` +
+          `          enum:\n` +
+          `            - false\n` +
+          `            - true\n` +
+          `    CreateBookingResponse:\n` +
+          `      discriminator:\n` +
+          `        propertyName: kind\n` +
+          `        mapping:\n` +
+          `          CreateBookingResponse: '#/components/schemas/CreateBookingResponse'\n` +
+          `      type: object\n` +
+          `      required:\n` +
+          `        - kind\n` +
+          `      properties:\n` +
+          `        kind:\n` +
+          `          type: string\n` +
           `        bookingId:\n` +
           `          type: string\n`,
       );
@@ -97,6 +164,10 @@ describe('OpenAPI delegate generator', () => {
           `    }\n\n` +
           `    default ResponseEntity<CreateBookingResponse> createBooking(@RequestBody CreateBooking createBooking) {\n` +
           `        return ResponseEntity.status(201).body(new CreateBookingResponse());\n` +
+          `    }\n` +
+          `\n` +
+          `    default ResponseEntity<Void> cancelBooking(String bookingId) {\n` +
+          `        return ResponseEntity.accepted().build();\n` +
           `    }\n` +
           `}\n`,
       );
@@ -172,9 +243,29 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('private final CreateBookingMapper createBookingMapper;');
       expect(output).toContain('private final CreateBookingResponseMapper createBookingResponseMapper;');
       expect(output).not.toContain('CreateBookingRepository');
+      expect(output).toContain('validatePayload(createBooking);');
+      expect(output).toContain(
+        'validatePayloadDiscriminators(createBooking, List.of(new DiscriminatorRule("", "kind", Set.of("CreateBooking")), new DiscriminatorRule("/equipment", "isShipperOwned", Set.of("false", "true"))));',
+      );
+      expect(output).toContain('return value != null && value.isValueNode() && allowedValues.contains(value.asText());');
+      expect(output.indexOf('validatePayload(createBooking);')).toBeLessThan(
+        output.indexOf('com.example.domain.Booking entity = this.createBookingMapper.toBookingEntity(createBooking);'),
+      );
       expect(output).toContain('com.example.domain.Booking entity = this.createBookingMapper.toBookingEntity(createBooking);');
-      expect(output).toContain('CreateBookingResponse responseBody = this.createBookingResponseMapper.toCreateBookingResponse(saved);');
-      expect(output).toContain('entities.stream().map(this.mapper::toBookingDto).toList()');
+      expect(output).toContain('CreateBookingResponse responseBody = mapResponseBody(() -> this.createBookingResponseMapper.toCreateBookingResponse(saved));');
+      expect(output).toContain(
+        'requireValidResponseDiscriminators(responseBody, List.of(new DiscriminatorRule("", "kind", Set.of("CreateBookingResponse"))));',
+      );
+      expect(output).toContain('List<Booking> body = mapValidResponseBodies(entities, this.mapper::toBookingDto);');
+      expect(output).toContain(
+        'body = filterValidResponseDiscriminators(body, List.of(new DiscriminatorRule("", "kind", Set.of("Booking")), new DiscriminatorRule("/agreements/*", "kind", Set.of("AgreementRef"))));',
+      );
+      expect(output).toContain('private List<JsonNode> discriminatorTargets(JsonNode root, String pointer)');
+      expect(output).toContain('this.objectMapper.writeValueAsBytes(body);');
+      expect(output).toContain('return isValidResponseBody(filtered) ? filtered : value;');
+      expect(output).toContain('final HttpStatus successStatus = resolveSuccessStatus(202, HttpStatus.NO_CONTENT);');
+      expect(output).toContain('if (successStatus == HttpStatus.ACCEPTED) {\n                return ResponseEntity.accepted().build();');
+      expect(output).not.toContain('successStatus = HttpStatus.NO_CONTENT;');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -328,9 +419,144 @@ describe('OpenAPI delegate generator', () => {
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final ServiceMapper mapper;');
       expect(output).not.toContain('private final ServiceResMapper serviceResMapper;');
-      expect(output).toContain('ServiceRES responseBody = this.mapper.toServiceRES(saved);');
-      expect(output).toContain('entities.stream().map(this.mapper::toServiceRES).toList()');
+      expect(output).toContain('ServiceRES responseBody = mapResponseBody(() -> this.mapper.toServiceRES(saved));');
+      expect(output).toContain('List<ServiceRES> body = mapValidResponseBodies(entities, this.mapper::toServiceRES);');
       expect(output).not.toContain('this.serviceResMapper.toServiceResDto(saved)');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves non-numeric path identifiers through matching scalar entity fields', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /bookings/{bookingReference}:\n` +
+          `    get:\n` +
+          `      operationId: getBooking\n` +
+          `      parameters:\n` +
+          `        - name: bookingReference\n` +
+          `          in: path\n` +
+          `          required: true\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `      responses:\n` +
+          `        '200':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/Booking'\n` +
+          `    put:\n` +
+          `      operationId: updateBooking\n` +
+          `      parameters:\n` +
+          `        - name: bookingReference\n` +
+          `          in: path\n` +
+          `          required: true\n` +
+          `          schema:\n` +
+          `            type: string\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              $ref: '#/components/schemas/UpdateBooking'\n` +
+          `      responses:\n` +
+          `        '202':\n` +
+          `          description: accepted\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    Booking:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        carrierBookingRequestReference:\n` +
+          `          type: string\n` +
+          `    UpdateBooking:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        carrierBookingRequestReference:\n` +
+          `          type: string\n`,
+      );
+
+      const interfaceDir = join(tempDir, 'src/main/java/com/example/web/api');
+      mkdirSync(interfaceDir, { recursive: true });
+      writeFileSync(
+        join(interfaceDir, 'BookingApiDelegate.java'),
+        `package com.example.web.api;\n\n` +
+          `import org.springframework.http.ResponseEntity;\n` +
+          `import org.springframework.web.bind.annotation.PathVariable;\n` +
+          `import com.example.service.api.dto.Booking;\n\n` +
+          `import com.example.service.api.dto.UpdateBooking;\n\n` +
+          `public interface BookingApiDelegate {\n` +
+          `    default ResponseEntity<Booking> getBooking(@PathVariable("bookingReference") String bookingReference) {\n` +
+          `        return ResponseEntity.ok(new Booking());\n` +
+          `    }\n` +
+          `    default ResponseEntity<Void> updateBooking(@PathVariable("bookingReference") String bookingReference, UpdateBooking updateBooking) {\n` +
+          `        return ResponseEntity.accepted().build();\n` +
+          `    }\n` +
+          `}\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Booking',
+              entityClass: 'Booking',
+              entityAbsoluteClass: 'com.example.domain.Booking',
+              entityInstance: 'booking',
+              entityInstancePlural: 'bookings',
+              entityNameCapitalized: 'Booking',
+              entityNamePlural: 'Bookings',
+              entityNameKebabCase: 'booking',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/BookingApiDelegateImpl.java');
+      const output = writes.get(outputPath) ?? '';
+      expect(output).toContain(
+        'findByResourceIdentifier(this.repository, bookingReference, "bookingReference", com.example.domain.Booking.class)',
+      );
+      expect(output).not.toContain('Optional<Long> parsedId = parseId(bookingReference);');
+      expect(output).toContain('private <T> Optional<T> findByResourceIdentifier(');
+      expect(output).toContain('public ResponseEntity<Void> updateBooking(');
+      expect(output).toContain('UpdateBooking updateBooking)');
+      expect(output).toContain('return ResponseEntity.status(successStatus).body((Void) null);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -550,7 +776,7 @@ describe('OpenAPI delegate generator', () => {
       expect(signatureStart).toBeGreaterThanOrEqual(0);
       const signature = output.slice(signatureStart, output.indexOf(') {', signatureStart));
       expect(signature.indexOf('CreateBooking createBooking')).toBeLessThan(signature.indexOf('String apiVersion'));
-      expect(output).toContain('.super.createBookings(createBooking, apiVersion)');
+      expect(output).toContain('validatePayload(createBooking);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -678,17 +904,22 @@ describe('OpenAPI delegate generator', () => {
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final ReferenceRepository repository;');
       expect(output).toContain('private final ReferenceMapper mapper;');
+      expect(output).toContain('validatePayload(reference);');
+      expect(output.indexOf('validatePayload(reference);')).toBeLessThan(output.indexOf('Reference entity = this.mapper.toReferenceEntity(reference);'));
       expect(output).toContain('Reference entity = this.mapper.toReferenceEntity(reference);');
-      expect(output).toContain('Reference responseBody = this.mapper.toReferenceDto(saved);');
+      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(saved));');
       expect(output).toContain('return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);');
       expect(output).toContain('ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();');
       expect(output).toContain('String.format("/%s/%s", "reference", idValue)');
       expect(output).toContain('this.mapper.toReferenceEntity(reference)');
+      expect(output).toContain('JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> this.mapper.toReferenceDto(existing)));');
       expect(output).toContain('convertAndValidate(patchedNode, Reference.class);');
       expect(output).toContain(
         'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), Reference.class);',
       );
-      expect(output).toContain('return ResponseEntity.status(successStatus).body(this.mapper.toReferenceDto(saved));');
+      expect(output).toContain('validatePayload(mergedPayload);');
+      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(saved));');
+      expect(output).toContain('return ResponseEntity.status(successStatus).body(responseBody);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -788,8 +1019,10 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('private final IssuanceRequestRepository repository;');
       expect(output).toContain('private final IssuanceRequestMapper mapper;');
       expect(output).toContain('public ResponseEntity<Void> putIssuanceRequests(@RequestBody IssuanceRequest issuanceRequest)');
+      expect(output).toContain('validatePayload(issuanceRequest);');
       expect(output).toContain('com.example.domain.IssuanceRequest entity = this.mapper.toIssuanceRequestEntity(issuanceRequest);');
-      expect(output).toContain('com.example.domain.IssuanceRequest saved = this.repository.save(entity);');
+      expect(output).toContain('com.example.domain.IssuanceRequest saved;');
+      expect(output).toContain('saved = this.repository.saveAndFlush(entity);');
       expect(output).toContain('return ResponseEntity.status(resolvedStatus).body((Void) null);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

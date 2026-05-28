@@ -139,6 +139,8 @@ type OperationContext = {
   successStatus?: number;
   generatedUuidInitializers?: GeneratedUuidInitializer[];
   defaultFieldInitializers?: DefaultFieldInitializer[];
+  requestDiscriminatorRulesExpression?: string;
+  responseDiscriminatorRulesExpression?: string;
 };
 
 type GeneratedUuidInitializer = {
@@ -155,6 +157,12 @@ type DefaultFieldCandidate = {
   fieldName: string;
   field?: any;
   schema?: any;
+};
+
+type DiscriminatorRuleContext = {
+  pointer: string;
+  propertyName: string;
+  allowedValues: string[];
 };
 
 type ResourceContext = {
@@ -516,6 +524,189 @@ function buildSchemaBackedDefaultInitializers(
     });
   }
   return initializers;
+}
+
+function buildDiscriminatorRulesExpression(
+  schemaObject: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  options: { arrayItemsAsRoot?: boolean } = {},
+): string | undefined {
+  const rules = buildDiscriminatorRules(schemaObject, schemaName, schemas, options);
+  if (rules.length === 0) {
+    return undefined;
+  }
+  return `List.of(${rules
+    .map(
+      rule =>
+        `new DiscriminatorRule(${javaStringLiteral(rule.pointer)}, ${javaStringLiteral(rule.propertyName)}, Set.of(${rule.allowedValues.map(javaStringLiteral).join(', ')}))`,
+    )
+    .join(', ')})`;
+}
+
+function buildDiscriminatorRules(
+  schemaObject: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  options: { arrayItemsAsRoot?: boolean } = {},
+): DiscriminatorRuleContext[] {
+  const rulesByLocation = new Map<string, { pointer: string; propertyName: string; allowedValues: Set<string> }>();
+  const addRule = (pointer: string, propertyName: string | undefined, values: unknown[]) => {
+    if (!propertyName) {
+      return;
+    }
+    const normalizedValues = values.map(value => String(value)).filter(Boolean);
+    if (normalizedValues.length === 0) {
+      return;
+    }
+    const key = `${pointer}\0${propertyName}`;
+    const existing = rulesByLocation.get(key) ?? { pointer, propertyName, allowedValues: new Set<string>() };
+    normalizedValues.forEach(value => existing.allowedValues.add(value));
+    rulesByLocation.set(key, existing);
+  };
+
+  const visit = (schema: any, hintedSchemaName: string | undefined, seen: Set<string>, pointer: string) => {
+    if (!schema) {
+      return;
+    }
+    if (schema.type === 'array' && schema.items) {
+      visit(schema.items, extractSchemaRef(schema.items), new Set(seen), appendJsonPointer(pointer, '*'));
+      return;
+    }
+    const ref = extractSchemaRef(schema);
+    if (ref) {
+      if (seen.has(ref)) {
+        return;
+      }
+      const nextSeen = new Set(seen);
+      nextSeen.add(ref);
+      visit(schemas[ref], ref, nextSeen, pointer);
+      return;
+    }
+
+    const discriminator = schema.discriminator;
+    const propertyName = typeof discriminator?.propertyName === 'string' ? discriminator.propertyName : undefined;
+    if (propertyName) {
+      addRule(pointer, propertyName, discriminatorAllowedValues(schema, hintedSchemaName, propertyName, schemas));
+    }
+
+    for (const key of ['oneOf', 'anyOf', 'allOf']) {
+      for (const fragment of schema[key] ?? []) {
+        visit(fragment, extractSchemaRef(fragment), new Set(seen), pointer);
+      }
+    }
+
+    const properties = schemaPropertiesForDiscriminatorTraversal(schema, hintedSchemaName, schemas);
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      visit(propertySchema, extractSchemaRef(propertySchema), new Set(seen), appendJsonPointer(pointer, propertyName));
+    }
+
+    if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+      visit(schema.additionalProperties, extractSchemaRef(schema.additionalProperties), new Set(seen), appendJsonPointer(pointer, '*'));
+    }
+  };
+
+  const rootSchema = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? schemaObject.items : schemaObject;
+  const rootSchemaName = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
+  visit(rootSchema, rootSchemaName, new Set(), '');
+  if (schemaName && !options.arrayItemsAsRoot && (!schemaObject || !extractSchemaRef(schemaObject))) {
+    visit(schemas[schemaName], schemaName, new Set(), '');
+  }
+
+  return Array.from(rulesByLocation.values())
+    .map(({ pointer, propertyName, allowedValues }) => ({
+      pointer,
+      propertyName,
+      allowedValues: Array.from(allowedValues).sort(),
+    }))
+    .sort((left, right) => left.pointer.localeCompare(right.pointer) || left.propertyName.localeCompare(right.propertyName));
+}
+
+function schemaPropertiesForDiscriminatorTraversal(
+  schema: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+): SchemaProperties {
+  if (schemaName) {
+    return collectSchemaProperties(schemaName, schemas);
+  }
+  const properties: SchemaProperties = { ...(schema?.properties ?? {}) };
+  for (const key of ['allOf', 'oneOf', 'anyOf']) {
+    for (const fragment of schema?.[key] ?? []) {
+      const refName = extractSchemaRef(fragment);
+      if (refName) {
+        Object.assign(properties, collectSchemaProperties(refName, schemas));
+      } else {
+        Object.assign(properties, schemaPropertiesForDiscriminatorTraversal(fragment, undefined, schemas));
+      }
+    }
+  }
+  return properties;
+}
+
+function appendJsonPointer(pointer: string, segment: string): string {
+  return `${pointer}/${escapeJsonPointerSegment(segment)}`;
+}
+
+function escapeJsonPointerSegment(segment: string): string {
+  return segment.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function discriminatorAllowedValues(
+  schema: any,
+  schemaName: string | undefined,
+  propertyName: string,
+  schemas: Record<string, any>,
+): unknown[] {
+  const values: unknown[] = [];
+  if (schema?.discriminator?.mapping && typeof schema.discriminator.mapping === 'object') {
+    values.push(...Object.keys(schema.discriminator.mapping));
+  }
+
+  const propertySchema =
+    (schemaName ? collectSchemaProperties(schemaName, schemas)[propertyName] : undefined) ??
+    findDiscriminatorPropertySchema(schema, propertyName, schemas);
+  if (propertySchema?.const !== undefined) {
+    values.push(propertySchema.const);
+  }
+  if (Array.isArray(propertySchema?.enum)) {
+    values.push(...propertySchema.enum);
+  }
+  if (values.length === 0 && schemaName) {
+    values.push(stripDtoSuffix(schemaName));
+  }
+  return values;
+}
+
+function findDiscriminatorPropertySchema(
+  schema: any,
+  propertyName: string,
+  schemas: Record<string, any>,
+  seen = new Set<string>(),
+): any {
+  if (!schema) {
+    return undefined;
+  }
+  const ref = extractSchemaRef(schema);
+  if (ref) {
+    if (seen.has(ref)) {
+      return undefined;
+    }
+    seen.add(ref);
+    return findDiscriminatorPropertySchema(schemas[ref], propertyName, schemas, seen);
+  }
+  if (schema.properties?.[propertyName]) {
+    return schema.properties[propertyName];
+  }
+  for (const key of ['allOf', 'oneOf', 'anyOf']) {
+    for (const fragment of schema[key] ?? []) {
+      const found = findDiscriminatorPropertySchema(fragment, propertyName, schemas, new Set(seen));
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return undefined;
 }
 
 function parseOpenApiSourceOfTruth(
@@ -1386,6 +1577,18 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
 
     const resolverOptions = dtoPackage ? { dtoPackage } : undefined;
     const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas }, resolverOptions);
+    const sourceOperation = findSourceOperation(operation, sourceOfTruthSpec) ?? operation;
+    opContext.requestDiscriminatorRulesExpression = buildDiscriminatorRulesExpression(
+      sourceOperation.requestBodySchemaObject,
+      sourceOperation.requestBodySchema,
+      sourceOfTruthSpec.schemas,
+    );
+    opContext.responseDiscriminatorRulesExpression = buildDiscriminatorRulesExpression(
+      sourceOperation.responseSchemaObject,
+      sourceOperation.responseSchema,
+      sourceOfTruthSpec.schemas,
+      { arrayItemsAsRoot: Boolean(sourceOperation.responseIsArray || sourceOperation.responseSchemaObject?.type === 'array') },
+    );
 
     const matchedEntityInfo: EntityInfo | undefined = descriptor?.matchedEntity
       ? {
@@ -1475,7 +1678,6 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         }
         opContext.willPersist = true;
         opContext.generatedUuidInitializers = buildRequiredUuidInitializers(persistenceEntity);
-        const sourceOperation = findSourceOperation(operation, sourceOfTruthSpec) ?? operation;
         opContext.defaultFieldInitializers = buildSchemaBackedDefaultInitializers(
           persistenceEntity,
           sourceOperation,
