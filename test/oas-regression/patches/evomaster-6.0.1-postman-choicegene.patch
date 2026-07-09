@@ -1,0 +1,54 @@
+diff --git a/core/src/main/kotlin/org/evomaster/core/problem/rest/seeding/AbstractParser.kt b/core/src/main/kotlin/org/evomaster/core/problem/rest/seeding/AbstractParser.kt
+index 03498b6a..f2304275 100644
+--- a/core/src/main/kotlin/org/evomaster/core/problem/rest/seeding/AbstractParser.kt
++++ b/core/src/main/kotlin/org/evomaster/core/problem/rest/seeding/AbstractParser.kt
+@@ -16,6 +16,7 @@ import org.evomaster.core.search.gene.numeric.IntegerGene
+ import org.evomaster.core.search.gene.numeric.LongGene
+ import org.evomaster.core.search.gene.wrapper.CustomMutationRateGene
+ import org.evomaster.core.search.gene.wrapper.OptionalGene
++import org.evomaster.core.search.gene.wrapper.ChoiceGene
+ import org.evomaster.core.search.gene.string.Base64StringGene
+ import org.evomaster.core.search.gene.string.StringGene
+ import org.slf4j.Logger
+@@ -80,6 +81,7 @@ abstract class AbstractParser(
+             // Non-terminal genes (iterate over children)
+             is OptionalGene -> updateGeneWithParameterValue(gene, paramName, paramValue)
+             is CustomMutationRateGene<*> -> updateGeneWithParameterValue(gene, paramName, paramValue)
++            is ChoiceGene<*> -> updateGeneWithParameterValue(gene, paramName, paramValue)
+             is ArrayGene<*> -> updateGeneWithParameterValue(gene, paramName, paramValue)
+             is ObjectGene -> updateGeneWithParameterValue(gene, paramName, paramValue)
+             is FixedMapGene<*, *> -> updateGeneWithParameterValue(gene, paramName, paramValue)
+@@ -240,6 +242,17 @@ abstract class AbstractParser(
+         return updateGenesRecursivelyWithParameterValue(gene.gene, gene.gene.name, paramValue)
+     }
+ 
++    protected fun updateGeneWithParameterValue(gene: ChoiceGene<*>, paramName: String, paramValue: String): Boolean {
++        for ((index, child) in gene.getViewOfChildren().withIndex()) {
++            val copy = child.copy()
++            if (updateGenesRecursivelyWithParameterValue(copy, copy.name, paramValue) && child.copyValueFrom(copy)) {
++                gene.selectActiveGene(index)
++                return true
++            }
++        }
++        return logWarningAndReturnFalse(WARN_WRONG_VALUE, "choice", paramName, "choice", paramValue)
++    }
++
+     protected fun updateGeneWithParameterValue(gene: ArrayGene<*>, paramName: String, paramValue: String): Boolean {
+         /*
+             Here we may have an array as a query/header/path/cookie parameter
+@@ -360,6 +373,7 @@ abstract class AbstractParser(
+             is DateTimeGene -> (gene as ArrayGene<DateTimeGene>).addElement(elementGene)
+             is OptionalGene -> (gene as ArrayGene<OptionalGene>).addElement(elementGene)
+             is CustomMutationRateGene<*> -> (gene as ArrayGene<CustomMutationRateGene<*>>).addElement(elementGene)
++            is ChoiceGene<*> -> (gene as ArrayGene<ChoiceGene<*>>).addElement(elementGene)
+             is ArrayGene<*> -> (gene as ArrayGene<ArrayGene<*>>).addElement(elementGene)
+             is ObjectGene -> (gene as ArrayGene<ObjectGene>).addElement(elementGene)
+             is FixedMapGene<*, *> -> (gene as ArrayGene<FixedMapGene<*, *>>).addElement(elementGene)
+@@ -381,6 +395,7 @@ abstract class AbstractParser(
+             is DateTimeGene -> (gene as FixedMapGene<StringGene, DateTimeGene>).addElement(elementGene as PairGene<StringGene, DateTimeGene>)
+             is OptionalGene -> (gene as FixedMapGene<StringGene, OptionalGene>).addElement(elementGene as PairGene<StringGene, OptionalGene>)
+             is CustomMutationRateGene<*> -> (gene as FixedMapGene<StringGene, CustomMutationRateGene<*>>).addElement(elementGene as PairGene<StringGene, CustomMutationRateGene<*>>)
++            is ChoiceGene<*> -> (gene as FixedMapGene<StringGene, ChoiceGene<*>>).addElement(elementGene as PairGene<StringGene, ChoiceGene<*>>)
+             is ArrayGene<*> -> (gene as FixedMapGene<StringGene, ArrayGene<*>>).addElement(elementGene as PairGene<StringGene, ArrayGene<*>>)
+             is ObjectGene -> (gene as FixedMapGene<StringGene, ObjectGene>).addElement(elementGene as PairGene<StringGene, ObjectGene>)
+             is FixedMapGene<*, *> -> (gene as FixedMapGene<StringGene, FixedMapGene<*, *>>).addElement(elementGene as PairGene<StringGene, FixedMapGene<*, *>>)

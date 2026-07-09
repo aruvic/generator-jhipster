@@ -1,0 +1,17 @@
+diff --git a/generators/server/templates/polymorphic-helper-mapper.java.ejs b/generators/server/templates/polymorphic-helper-mapper.java.ejs
+--- a/generators/server/templates/polymorphic-helper-mapper.java.ejs
++++ b/generators/server/templates/polymorphic-helper-mapper.java.ejs
+@@ -404,13 +404,8 @@ _%>
+         if (target == null) {
+             return null;
+         }
+-        update<%- baseType %>BaseFrom<%- variant.dtoSimpleName %>(target, source);
+-<%_ if (targetMapperField && targetDomainType !== baseDomainType && mapperFields.some(field => field.simpleName === targetMapperSimpleName)) { _%>
+-        if (target instanceof <%- targetDomainType %>) {
+-            this.<%- targetMapperField %>.update<%- variant.targetDomainSimpleName %>EntityFrom<%- variant.dtoSimpleName %>((<%- targetDomainType %>) target, source);
+-        }
+-<%_ } _%>
++        update<%- baseType %>From<%- variant.dtoSimpleName %>(target, source);
+         return target;
+     }
+ <%_ } _%>

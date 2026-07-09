@@ -110,7 +110,7 @@ export default class EnvironmentBuilder {
   }
 
   async prepare({ blueprints, lookups, devBlueprintPath = jhipsterDevBlueprintPath } = {}) {
-    const devBlueprintEnabled = existsSync(devBlueprintPath);
+    const devBlueprintEnabled = typeof devBlueprintPath === 'string' && devBlueprintPath.length > 0 && existsSync(devBlueprintPath);
     this.env.sharedOptions.devBlueprintEnabled = devBlueprintEnabled;
     this.devBlueprintPath = devBlueprintEnabled ? devBlueprintPath : undefined;
     this.localBlueprintPath = path.join(process.cwd(), '.blueprint');

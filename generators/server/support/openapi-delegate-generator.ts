@@ -32,6 +32,7 @@ import {
   singularize,
   toJavaOperationName,
   toJavaParamName,
+  toModelName,
 } from '../../type-utils.ts';
 import type { Application as SpringBootApplication } from '../types.ts';
 
@@ -122,6 +123,9 @@ type OperationContext = {
   responseType?: string;
   responseIsArray?: boolean;
   responseResolvedType?: JavaResolvedType;
+  responseArrayElementResolvedType?: JavaResolvedType;
+  responseCollectionWrapperResolvedType?: JavaResolvedType;
+  responseCollectionWrapperType?: string;
   fullSignature?: string; // Full method signature from generated interface
   returnType?: string; // Full return type with generics
   throwsClause?: string;
@@ -140,7 +144,9 @@ type OperationContext = {
   generatedUuidInitializers?: GeneratedUuidInitializer[];
   defaultFieldInitializers?: DefaultFieldInitializer[];
   requestDiscriminatorRulesExpression?: string;
+  requestRequiredRulesExpression?: string;
   responseDiscriminatorRulesExpression?: string;
+  responseRequiredRulesExpression?: string;
 };
 
 type GeneratedUuidInitializer = {
@@ -163,6 +169,12 @@ type DiscriminatorRuleContext = {
   pointer: string;
   propertyName: string;
   allowedValues: string[];
+};
+
+type RequiredPropertyRuleContext = {
+  pointer: string;
+  propertyName: string;
+  nullable: boolean;
 };
 
 type ResourceContext = {
@@ -426,9 +438,30 @@ function isIdentifierFieldName(fieldName?: string): boolean {
   return fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName) || /(?:Id|ID)$/.test(fieldName);
 }
 
-function buildRequiredUuidInitializers(persistenceEntity: EntityInfo): GeneratedUuidInitializer[] {
+function isUuidSchema(schema: any): boolean {
+  return schema?.type === 'string' && schema?.format === 'uuid';
+}
+
+function addGeneratedUuidInitializer(initializers: GeneratedUuidInitializer[], seen: Set<string>, fieldName: string | undefined): void {
+  if (!fieldName || !isIdentifierFieldName(fieldName)) {
+    return;
+  }
+  const accessor = pascalize(toDomainPropertyName(fieldName));
+  if (seen.has(accessor)) {
+    return;
+  }
+  seen.add(accessor);
+  initializers.push({ accessor });
+}
+
+function buildRequiredUuidInitializers(
+  persistenceEntity: EntityInfo,
+  operation: OpenAPIOperation,
+  schemas: Record<string, any>,
+): GeneratedUuidInitializer[] {
   const fields = Array.isArray(persistenceEntity.definition?.fields) ? persistenceEntity.definition.fields : [];
   const initializers: GeneratedUuidInitializer[] = [];
+  const seen = new Set<string>();
   for (const field of fields) {
     const fieldName = field?.fieldName ?? field?.name;
     const fieldType = typeof field?.fieldType === 'string' ? field.fieldType.toLowerCase() : '';
@@ -436,7 +469,18 @@ function buildRequiredUuidInitializers(persistenceEntity: EntityInfo): Generated
     if (!fieldName || fieldType !== 'uuid' || !validationRules.includes('required') || !isIdentifierFieldName(fieldName)) {
       continue;
     }
-    initializers.push({ accessor: pascalize(toDomainPropertyName(fieldName)) });
+    addGeneratedUuidInitializer(initializers, seen, fieldName);
+  }
+
+  const propertyCache = new Map<string, SchemaProperties>();
+  const requiredCache = new Map<string, Set<string>>();
+  const requestProperties = collectSchemaProperties(operation.requestBodySchema, schemas, propertyCache);
+  const requestRequired = collectSchemaRequiredProperties(operation.requestBodySchema, schemas, requiredCache);
+  for (const requiredName of requestRequired) {
+    const schema = requestProperties[requiredName] ?? requestProperties[toOpenApiPropertyName(requiredName)];
+    if (schema?.readOnly === true && isUuidSchema(schema)) {
+      addGeneratedUuidInitializer(initializers, seen, requiredName);
+    }
   }
   return initializers;
 }
@@ -530,7 +574,7 @@ function buildDiscriminatorRulesExpression(
   schemaObject: any,
   schemaName: string | undefined,
   schemas: Record<string, any>,
-  options: { arrayItemsAsRoot?: boolean } = {},
+  options: { arrayItemsAsRoot?: boolean; includeSchemaNameAlias?: boolean } = {},
 ): string | undefined {
   const rules = buildDiscriminatorRules(schemaObject, schemaName, schemas, options);
   if (rules.length === 0) {
@@ -544,11 +588,130 @@ function buildDiscriminatorRulesExpression(
     .join(', ')})`;
 }
 
+function buildRequiredPropertyRulesExpression(
+  schemaObject: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  options: { arrayItemsAsRoot?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
+): string | undefined {
+  const rules = buildRequiredPropertyRules(schemaObject, schemaName, schemas, options);
+  if (rules.length === 0) {
+    return undefined;
+  }
+  return `List.of(${rules
+    .map(rule => `new RequiredPropertyRule(${javaStringLiteral(rule.pointer)}, ${javaStringLiteral(rule.propertyName)}, ${rule.nullable ? 'true' : 'false'})`)
+    .join(', ')})`;
+}
+
+function buildRequiredPropertyRules(
+  schemaObject: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+  options: { arrayItemsAsRoot?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
+): RequiredPropertyRuleContext[] {
+  const rulesByLocation = new Map<string, RequiredPropertyRuleContext>();
+  const excludeReadOnly = options.excludeReadOnly === true;
+  const excludeWriteOnly = options.excludeWriteOnly !== false;
+
+  const addRule = (pointer: string, propertyName: unknown, propertySchema: any) => {
+    if (
+      typeof propertyName !== 'string' ||
+      propertyName.length === 0 ||
+      (excludeReadOnly && propertySchema?.readOnly === true) ||
+      (excludeWriteOnly && propertySchema?.writeOnly === true)
+    ) {
+      return;
+    }
+    const key = `${pointer}\0${propertyName}`;
+    const nullable = isNullableSchema(propertySchema);
+    const existing = rulesByLocation.get(key);
+    rulesByLocation.set(key, existing ? { ...existing, nullable: existing.nullable && nullable } : { pointer, propertyName, nullable });
+  };
+
+  const hasOwnProperty = (object: SchemaProperties, propertyName: string): boolean =>
+    Object.prototype.hasOwnProperty.call(object, propertyName);
+
+  const resolveRequiredPropertyName = (propertyName: string, properties: SchemaProperties): string => {
+    if (hasOwnProperty(properties, propertyName)) {
+      return propertyName;
+    }
+
+    const javaStyleName = toOpenApiPropertyName(propertyName);
+    if (javaStyleName && hasOwnProperty(properties, javaStyleName)) {
+      return javaStyleName;
+    }
+
+    const caseInsensitiveMatch = Object.keys(properties).find(candidate => candidate.toLowerCase() === propertyName.toLowerCase());
+    if (caseInsensitiveMatch) {
+      return caseInsensitiveMatch;
+    }
+
+    return propertyName;
+  };
+
+  const visit = (
+    schema: any,
+    hintedSchemaName: string | undefined,
+    seen: Set<string>,
+    pointer: string,
+    inheritedProperties: SchemaProperties = {},
+  ) => {
+    if (!schema) {
+      return;
+    }
+    if (schema.type === 'array' && schema.items) {
+      visit(schema.items, extractSchemaRef(schema.items), new Set(seen), appendJsonPointer(pointer, '*'));
+      return;
+    }
+    const ref = extractSchemaRef(schema);
+    if (ref) {
+      if (seen.has(ref)) {
+        return;
+      }
+      const nextSeen = new Set(seen);
+      nextSeen.add(ref);
+      visit(schemas[ref], ref, nextSeen, pointer);
+      return;
+    }
+
+    const properties = schemaPropertiesForRequiredTraversal(schema, hintedSchemaName, schemas);
+    const effectiveProperties = { ...inheritedProperties, ...properties };
+    for (const propertyName of Array.isArray(schema.required) ? schema.required : []) {
+      const resolvedPropertyName = resolveRequiredPropertyName(propertyName, effectiveProperties);
+      const propertySchema = effectiveProperties[resolvedPropertyName] ?? effectiveProperties[propertyName];
+      addRule(pointer, resolvedPropertyName, propertySchema);
+    }
+
+    for (const fragment of schema.allOf ?? []) {
+      visit(fragment, extractSchemaRef(fragment), new Set(seen), pointer, effectiveProperties);
+    }
+
+    for (const [propertyName, propertySchema] of Object.entries(properties)) {
+      visit(propertySchema, extractSchemaRef(propertySchema), new Set(seen), appendJsonPointer(pointer, propertyName));
+    }
+
+    if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+      visit(schema.additionalProperties, extractSchemaRef(schema.additionalProperties), new Set(seen), appendJsonPointer(pointer, '*'));
+    }
+  };
+
+  const rootSchema = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? schemaObject.items : schemaObject;
+  const rootSchemaName = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
+  visit(rootSchema, rootSchemaName, new Set(), '');
+  if (schemaName && !options.arrayItemsAsRoot && (!schemaObject || !extractSchemaRef(schemaObject))) {
+    visit(schemas[schemaName], schemaName, new Set(), '');
+  }
+
+  return Array.from(rulesByLocation.values()).sort(
+    (left, right) => left.pointer.localeCompare(right.pointer) || left.propertyName.localeCompare(right.propertyName),
+  );
+}
+
 function buildDiscriminatorRules(
   schemaObject: any,
   schemaName: string | undefined,
   schemas: Record<string, any>,
-  options: { arrayItemsAsRoot?: boolean } = {},
+  options: { arrayItemsAsRoot?: boolean; includeSchemaNameAlias?: boolean } = {},
 ): DiscriminatorRuleContext[] {
   const rulesByLocation = new Map<string, { pointer: string; propertyName: string; allowedValues: Set<string> }>();
   const addRule = (pointer: string, propertyName: string | undefined, values: unknown[]) => {
@@ -587,7 +750,7 @@ function buildDiscriminatorRules(
     const discriminator = schema.discriminator;
     const propertyName = typeof discriminator?.propertyName === 'string' ? discriminator.propertyName : undefined;
     if (propertyName) {
-      addRule(pointer, propertyName, discriminatorAllowedValues(schema, hintedSchemaName, propertyName, schemas));
+      addRule(pointer, propertyName, discriminatorAllowedValues(schema, hintedSchemaName, propertyName, schemas, options));
     }
 
     for (const key of ['oneOf', 'anyOf', 'allOf']) {
@@ -644,6 +807,33 @@ function schemaPropertiesForDiscriminatorTraversal(
   return properties;
 }
 
+function schemaPropertiesForRequiredTraversal(
+  schema: any,
+  schemaName: string | undefined,
+  schemas: Record<string, any>,
+): SchemaProperties {
+  if (schemaName) {
+    return collectSchemaProperties(schemaName, schemas);
+  }
+  const properties: SchemaProperties = { ...(schema?.properties ?? {}) };
+  for (const fragment of schema?.allOf ?? []) {
+    const refName = extractSchemaRef(fragment);
+    if (refName) {
+      Object.assign(properties, collectSchemaProperties(refName, schemas));
+    } else {
+      Object.assign(properties, schemaPropertiesForRequiredTraversal(fragment, undefined, schemas));
+    }
+  }
+  return properties;
+}
+
+function isNullableSchema(schema: any): boolean {
+  if (!schema) {
+    return false;
+  }
+  return schema.nullable === true || (Array.isArray(schema.type) && schema.type.includes('null'));
+}
+
 function appendJsonPointer(pointer: string, segment: string): string {
   return `${pointer}/${escapeJsonPointerSegment(segment)}`;
 }
@@ -657,10 +847,14 @@ function discriminatorAllowedValues(
   schemaName: string | undefined,
   propertyName: string,
   schemas: Record<string, any>,
+  options: { includeSchemaNameAlias?: boolean } = {},
 ): unknown[] {
   const values: unknown[] = [];
   if (schema?.discriminator?.mapping && typeof schema.discriminator.mapping === 'object') {
     values.push(...Object.keys(schema.discriminator.mapping));
+  }
+  if (options.includeSchemaNameAlias && schemaName) {
+    values.push(schemaName, stripDtoSuffix(schemaName));
   }
 
   const propertySchema =
@@ -1583,11 +1777,31 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       sourceOperation.requestBodySchema,
       sourceOfTruthSpec.schemas,
     );
+    opContext.requestRequiredRulesExpression = buildRequiredPropertyRulesExpression(
+      sourceOperation.requestBodySchemaObject,
+      sourceOperation.requestBodySchema,
+      sourceOfTruthSpec.schemas,
+      {
+        excludeReadOnly: true,
+        excludeWriteOnly: false,
+      },
+    );
     opContext.responseDiscriminatorRulesExpression = buildDiscriminatorRulesExpression(
       sourceOperation.responseSchemaObject,
       sourceOperation.responseSchema,
       sourceOfTruthSpec.schemas,
-      { arrayItemsAsRoot: Boolean(sourceOperation.responseIsArray || sourceOperation.responseSchemaObject?.type === 'array') },
+      {
+        arrayItemsAsRoot: Boolean(sourceOperation.responseIsArray || sourceOperation.responseSchemaObject?.type === 'array'),
+        includeSchemaNameAlias: true,
+      },
+    );
+    opContext.responseRequiredRulesExpression = buildRequiredPropertyRulesExpression(
+      sourceOperation.responseSchemaObject,
+      sourceOperation.responseSchema,
+      sourceOfTruthSpec.schemas,
+      {
+        arrayItemsAsRoot: Boolean(sourceOperation.responseIsArray || sourceOperation.responseSchemaObject?.type === 'array'),
+      },
     );
 
     const matchedEntityInfo: EntityInfo | undefined = descriptor?.matchedEntity
@@ -1677,7 +1891,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           }
         }
         opContext.willPersist = true;
-        opContext.generatedUuidInitializers = buildRequiredUuidInitializers(persistenceEntity);
+        opContext.generatedUuidInitializers = buildRequiredUuidInitializers(persistenceEntity, sourceOperation, sourceOfTruthSpec.schemas);
         opContext.defaultFieldInitializers = buildSchemaBackedDefaultInitializers(
           persistenceEntity,
           sourceOperation,
@@ -1846,6 +2060,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       }
       operation.requestBodyResolvedType?.imports.forEach(fqcn => importSet.add(fqcn));
       operation.responseResolvedType?.imports.forEach(fqcn => importSet.add(fqcn));
+      operation.responseCollectionWrapperResolvedType?.imports.forEach(fqcn => importSet.add(fqcn));
     }
     for (const dependency of context.repositories) {
       importSet.add(dependency.import);
@@ -2144,9 +2359,16 @@ function buildOperationContext(
 
   const responseSchema = operation.responseSchemaObject;
   const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext, resolverOptions) : undefined;
+  const namedArrayResponse = resolveNamedArrayResponse(responseSchema, resolverContext, resolverOptions);
+  const responseArrayElementResolvedType =
+    responseResolvedType?.componentType ?? namedArrayResponse?.elementType ?? (operation.responseIsArray ? responseResolvedType?.componentType : undefined);
   const responseType = responseResolvedType?.baseType;
 
-  const defaultReturnType = responseResolvedType ? `ResponseEntity<${responseResolvedType.fullType}>` : 'ResponseEntity<Void>';
+  const responseBodyType = extractResponseEntityBodyType(returnType);
+  const responseCollectionWrapperType =
+    namedArrayResponse && (!responseBodyType || !isCollectionTypeSignature(responseBodyType)) ? namedArrayResponse.wrapperType.fullType : undefined;
+  const defaultResponseType = responseCollectionWrapperType ?? responseResolvedType?.fullType;
+  const defaultReturnType = defaultResponseType ? `ResponseEntity<${defaultResponseType}>` : 'ResponseEntity<Void>';
   const successStatus = operation.responseStatus ? Number.parseInt(operation.responseStatus, 10) : undefined;
 
   return {
@@ -2157,12 +2379,65 @@ function buildOperationContext(
     requestBodyResolvedType,
     responseType,
     responseResolvedType,
+    responseArrayElementResolvedType,
+    responseCollectionWrapperResolvedType: responseCollectionWrapperType ? namedArrayResponse?.wrapperType : undefined,
+    responseCollectionWrapperType,
     responseIsArray: responseResolvedType?.isList ?? operation.responseIsArray,
     fullSignature: parsedSignature?.fullSignature,
     returnType: returnType ?? defaultReturnType,
     throwsClause,
     successStatus: Number.isFinite(successStatus) ? successStatus : undefined,
   };
+}
+
+function resolveNamedArrayResponse(
+  schema: any,
+  resolverContext: JavaTypeResolverContext,
+  resolverOptions?: JavaTypeResolverOptions,
+): { wrapperType: JavaResolvedType; elementType: JavaResolvedType } | undefined {
+  if (!schema?.$ref || typeof schema.$ref !== 'string') {
+    return undefined;
+  }
+  const refName = schema.$ref.split('/').pop();
+  if (!refName) {
+    return undefined;
+  }
+  const referencedSchema = resolverContext.schemas?.[refName];
+  if (referencedSchema?.type !== 'array') {
+    return undefined;
+  }
+  const elementType = resolveJavaType(referencedSchema.items ?? {}, resolverContext, resolverOptions);
+  const dtoPackage = resolverOptions?.dtoPackage;
+  const wrapperName = toModelName(refName);
+  const imports = new Set<string>(elementType.imports);
+  if (dtoPackage) {
+    imports.add(`${dtoPackage}.${wrapperName}`);
+  }
+  return {
+    wrapperType: {
+      fullType: wrapperName,
+      baseType: wrapperName,
+      rawType: wrapperName,
+      isPrimitive: false,
+      isContainer: false,
+      isList: false,
+      isMap: false,
+      imports,
+    },
+    elementType,
+  };
+}
+
+function extractResponseEntityBodyType(returnType?: string): string | undefined {
+  if (!returnType) {
+    return undefined;
+  }
+  const sanitized = removeModifiers(returnType);
+  const responseEntityMatch = sanitized.match(/\bResponseEntity\s*<([\s\S]+)>/);
+  if (!responseEntityMatch?.[1]) {
+    return undefined;
+  }
+  return responseEntityMatch[1].trim();
 }
 
 function determineParamLocation(annotations: string[] = []): string | undefined {

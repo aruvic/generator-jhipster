@@ -119,20 +119,20 @@ export class AlertError implements OnDestroy {
       const alertData = entityKey ? { entityName: this.translateService.instant(`global.menu.entities.${entityKey}`) } : undefined;
 <%_ } _%>
       this.addErrorAlert(errorHeader<% if (enableTranslation) { %>, errorHeader, alertData<% } %>);
-    } else if (httpErrorResponse.error !== '' && httpErrorResponse.error.fieldErrors) {
+    } else if (httpErrorResponse.error && httpErrorResponse.error !== '' && httpErrorResponse.error.fieldErrors) {
       this.handleFieldsError(httpErrorResponse);
-    } else if (httpErrorResponse.error !== '' && httpErrorResponse.error.message) {
+    } else if (httpErrorResponse.error && httpErrorResponse.error !== '' && httpErrorResponse.error.message) {
       this.addErrorAlert(httpErrorResponse.error.detail ?? httpErrorResponse.error.message<% if (enableTranslation) { %>, httpErrorResponse.error.message, httpErrorResponse.error.params<% } %>);
     } else {
-      this.addErrorAlert(httpErrorResponse.error<% if (enableTranslation) { %>, httpErrorResponse.error<% } %>);
+      this.addErrorAlert(httpErrorResponse.error ?? httpErrorResponse.message ?? 'Unexpected error'<% if (enableTranslation) { %>, httpErrorResponse.error ?? httpErrorResponse.message ?? 'error.http'<% } %>);
     }
   }
 
   private handleDefaultError(httpErrorResponse: HttpErrorResponse): void {
-    if (httpErrorResponse.error !== '' && httpErrorResponse.error.message) {
+    if (httpErrorResponse.error && httpErrorResponse.error !== '' && httpErrorResponse.error.message) {
       this.addErrorAlert(httpErrorResponse.error.detail ?? httpErrorResponse.error.message<% if (enableTranslation) { %>, httpErrorResponse.error.message, httpErrorResponse.error.params<% } %>);
     } else {
-      this.addErrorAlert(httpErrorResponse.error<% if (enableTranslation) { %>, httpErrorResponse.error<% } %>);
+      this.addErrorAlert(httpErrorResponse.error ?? httpErrorResponse.message ?? 'Unexpected error'<% if (enableTranslation) { %>, httpErrorResponse.error ?? httpErrorResponse.message ?? 'error.http'<% } %>);
     }
   }
 

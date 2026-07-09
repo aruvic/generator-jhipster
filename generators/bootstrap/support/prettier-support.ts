@@ -28,6 +28,15 @@ import type CoreGenerator from '../../base-core/index.ts';
 const minimatch = new Minimatch('**/{.prettierrc**,.prettierignore}');
 export const isPrettierConfigFilePath = (filePath: string) => minimatch.match(filePath);
 
+const prettierWorkerMaxOldGenerationSizeMb = () => {
+  const configured = Number.parseInt(
+    process.env.JHIPSTER_PRETTIER_WORKER_MAX_OLD_GENERATION_MB ?? process.env.JHIPSTER_WORKER_MAX_OLD_GENERATION_MB ?? '',
+    10,
+  );
+
+  return Number.isFinite(configured) && configured > 0 ? configured : undefined;
+};
+
 type PrettierWorkerOptions = {
   prettierPackageJson?: boolean;
   prettierJava?: boolean;
@@ -37,9 +46,11 @@ type PrettierWorkerOptions = {
 
 export class PrettierPool extends Piscina {
   constructor(options = {}) {
+    const maxOldGenerationSizeMb = prettierWorkerMaxOldGenerationSizeMb();
     super({
       maxThreads: 1,
       filename: new URL('./prettier-worker.js', import.meta.url).href,
+      ...(maxOldGenerationSizeMb ? { resourceLimits: { maxOldGenerationSizeMb } } : {}),
       ...options,
     });
   }
@@ -76,12 +87,21 @@ export const createPrettierTransform = async function (
       if (!file.contents) {
         throw new Error(`File content doesn't exist for ${file.relative}`);
       }
-      const { result, errorMessage } = await applyPrettier({
-        relativeFilePath: file.relative,
-        filePath: file.path,
-        fileContents: file.contents.toString('utf8'),
-        ...workerOptions,
-      });
+      let result: string | undefined;
+      let errorMessage: string | undefined;
+      try {
+        ({ result, errorMessage } = await applyPrettier({
+          relativeFilePath: file.relative,
+          filePath: file.path,
+          fileContents: file.contents.toString('utf8'),
+          ...workerOptions,
+        }));
+      } catch (error) {
+        if (!ignoreErrors) {
+          throw error;
+        }
+        errorMessage = `Prettier failed for ${file.relative}: ${error instanceof Error ? error.message : String(error)}`;
+      }
       if (result) {
         file.contents = Buffer.from(result);
       }

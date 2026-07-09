@@ -144,7 +144,6 @@ export async function generateMapStructMappers(generator: any, application: Spri
   const strategy = 'hybrid'; // Options: 'hybrid', 'unified', 'legacy'
 
   let mapperContexts: any[];
-  let templateFiles: Map<string, string> = new Map();
 
   if (strategy === 'hybrid') {
     generator.log.info('MapStruct: using hybrid mapper strategy (polymorphic helpers + per-entity)');
@@ -162,32 +161,30 @@ export async function generateMapStructMappers(generator: any, application: Spri
     mapperContexts.push({
       mapperName: 'OpenApiPrimitiveMapper',
       packageName: `${application.packageName}.web.api.mapper`,
+      templateFileName: 'openapi-primitive-mapper.java.ejs',
     });
-    templateFiles.set('OpenApiPrimitiveMapper', 'openapi-primitive-mapper.java.ejs');
 
     for (const helperMapper of helperMappers) {
-      mapperContexts.push(helperMapper);
-      templateFiles.set(helperMapper.mapperName, 'polymorphic-helper-mapper.java.ejs');
+      mapperContexts.push({ ...helperMapper, templateFileName: 'polymorphic-helper-mapper.java.ejs' });
     }
 
     for (const entityMapper of entityMappers) {
-      mapperContexts.push(entityMapper);
-      templateFiles.set(entityMapper.mapperName, 'entity-mapper.java.ejs');
+      mapperContexts.push({ ...entityMapper, templateFileName: 'entity-mapper.java.ejs' });
     }
   } else if (strategy === 'unified') {
     // Generate unified Request/Response mappers with @SubclassMapping support
     generator.log.info('MapStruct: using unified mapper strategy with @SubclassMapping');
-    mapperContexts = generateUnifiedMappers(spec, application.packageName!);
-    for (const context of mapperContexts) {
-      templateFiles.set(context.mapperName, 'unified-mapper.java.ejs');
-    }
+    mapperContexts = generateUnifiedMappers(spec, application.packageName!).map(context => ({
+      ...context,
+      templateFileName: 'unified-mapper.java.ejs',
+    }));
   } else {
     // Generate per-operation mappers (legacy approach)
     generator.log.info('MapStruct: using per-operation mapper strategy');
-    mapperContexts = generateMapperContexts(spec, application.packageName!);
-    for (const context of mapperContexts) {
-      templateFiles.set(context.mapperName, 'mapper.java.ejs');
-    }
+    mapperContexts = generateMapperContexts(spec, application.packageName!).map(context => ({
+      ...context,
+      templateFileName: 'mapper.java.ejs',
+    }));
   }
 
   if (mapperContexts.length === 0) {
@@ -223,7 +220,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
   // Write mapper files
   for (const context of mapperContexts) {
     // Get the appropriate template for this mapper
-    const templateFileName = templateFiles.get(context.mapperName) || 'mapper.java.ejs';
+    const templateFileName = context.templateFileName || 'mapper.java.ejs';
     const relativeTemplatePath = join('server', 'templates', templateFileName);
 
     // Try to load template (blueprint first, then bundled)

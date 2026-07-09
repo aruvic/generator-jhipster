@@ -3,6 +3,7 @@ package <%= packageName %>;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.databind.node.NullNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.fge.jsonpatch.JsonPatch;
@@ -63,8 +64,13 @@ import <%= basePackage %>.web.api.<%= interfaceName %>;
 public class <%= className %> implements <%= interfaceName %> {
 
     private static final Logger LOG = LoggerFactory.getLogger(<%= className %>.class);
+    private static final Pattern STRICT_OPENAPI_EMAIL_PATTERN = Pattern.compile(
+        "^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*$"
+    );
 
     private record DiscriminatorRule(String pointer, String propertyName, Set<String> allowedValues) {}
+    private record RequiredPropertyRule(String pointer, String propertyName, boolean nullable) {}
+    private record JsonNodeLocation(JsonNode node, String pointer) {}
 
 <%_ const hasInjections = Array.isArray(injections) && injections.length > 0;
     const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
@@ -129,6 +135,9 @@ _%>
         final HttpStatus resolvedStatus = successStatus;
         LOG.info("Creating <%= resolvedResourceSlug %>");
         validatePayload(<%= bodyParam.varName %>);
+<%_ if (op.requestRequiredRulesExpression) { _%>
+        validateRequiredProperties(<%= bodyParam.varName %>, <%- op.requestRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
 <%_ } _%>
@@ -150,30 +159,38 @@ _%>
 	        <%= persistenceTypeFqcn %> saved;
         try {
             saved = this.<%= repoField %>.saveAndFlush(entity);
+            if (populateGeneratedHref(saved, "<%= resolvedResourceSlug %>")) {
+                saved = this.<%= repoField %>.saveAndFlush(saved);
+            }
         } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
             throw persistenceViolation(ex);
         }
+        final <%= persistenceTypeFqcn %> responseEntity = saved;
         LOG.info(
             "Created <%= resolvedResourceSlug %> id={}",
-            saved != null ? saved.getId() : null
+            responseEntity != null ? responseEntity.getId() : null
         );
 <%_ if (!hasResponseBody) { _%>
         if (resolvedStatus == HttpStatus.CREATED) {
-            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).build();
+            return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).build();
         }
         return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
 <%_ } else if (canMapResponseBody) { _%>
-        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(saved));
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
+<%_ if (op.responseRequiredRulesExpression) { _%>
+        responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
+        requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
 <%_ } _%>
         if (resolvedStatus == HttpStatus.CREATED) {
-            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);
+            return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(responseBody);
         }
         return ResponseEntity.status(resolvedStatus).body(responseBody);
 <%_ } else { _%>
         if (resolvedStatus == HttpStatus.CREATED) {
-            return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(null);
+            return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(null);
         }
         return ResponseEntity.status(resolvedStatus).body(null);
 <%_ } _%>
@@ -193,7 +210,8 @@ _%>
     const offsetParam = op.parameters.find(param => param.name?.toLowerCase() === 'offset');
     const limitParam = op.parameters.find(param => param.name?.toLowerCase() === 'limit');
     const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
-    const elementType = op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object';
+    const elementType = op.responseArrayElementResolvedType?.fullType ?? op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object';
+    const collectionWrapperType = op.responseCollectionWrapperType;
 _%>
     @Transactional(readOnly = true)
     @Override
@@ -208,9 +226,12 @@ _%>
         Page<<%= persistenceTypeFqcn %>> page = this.<%= repoField %>.findAll(pageable);
         List<<%= persistenceTypeFqcn %>> entities = page.getContent();
         if (successStatus == HttpStatus.NO_CONTENT) {
-            return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+            return ResponseEntity.status(successStatus).body((<%- collectionWrapperType ?? op.responseResolvedType?.fullType ?? 'Void' %>) null);
         }
-        List<<%- elementType %>> body = mapValidResponseBodies(entities, this.<%= responseField %>::<%= responseMethod %>);
+        List<<%- elementType %>> body = mapValidResponseBodies(entities, this.<%= responseField %>::<%= responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
+<%_ if (op.responseRequiredRulesExpression) { _%>
+        body = filterValidResponseRequiredProperties(body, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         body = filterValidResponseDiscriminators(body, <%- op.responseDiscriminatorRulesExpression %>);
 <%_ } _%>
@@ -218,12 +239,24 @@ _%>
         if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
             List<<%- elementType %>> filtered = body
                 .stream()
-                .map(item -> filterFields(item, <%- fieldsParam.varName %>, <%- elementType %>.class))
+                .map(item -> filterFields(item, <%- fieldsParam.varName %>, <%- elementType %>.class, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>))
                 .toList();
+<%_ if (collectionWrapperType) { _%>
+            <%- collectionWrapperType %> responseBody = new <%- collectionWrapperType %>();
+            responseBody.addAll(filtered);
+            return ResponseEntity.status(successStatus).body(responseBody);
+<%_ } else { _%>
             return ResponseEntity.status(successStatus).body(filtered);
+<%_ } _%>
         }
 <%_ } _%>
+<%_ if (collectionWrapperType) { _%>
+        <%- collectionWrapperType %> responseBody = new <%- collectionWrapperType %>();
+        responseBody.addAll(body);
+        return ResponseEntity.status(successStatus).body(responseBody);
+<%_ } else { _%>
         return ResponseEntity.status(successStatus).body(body);
+<%_ } _%>
 <%_ } _%>
     }
 
@@ -257,13 +290,19 @@ _%>
                         return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
                     }
                     <%- op.responseResolvedType?.fullType ?? 'Object' %> body = this.<%= responseField %>.<%= responseMethod %>(found);
+<%_ if (op.responseRequiredRulesExpression) { _%>
+                    body = completeResponseRequiredProperties(body, found, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
                     requireValidResponseBody(body);
+<%_ if (op.responseRequiredRulesExpression) { _%>
+                    requireValidResponseRequiredProperties(body, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.responseDiscriminatorRulesExpression) { _%>
                     requireValidResponseDiscriminators(body, <%- op.responseDiscriminatorRulesExpression %>);
 <%_ } _%>
 <%_ if (fieldsParam) { _%>
                     if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
-                        body = filterFields(body, <%- fieldsParam.varName %>, <%- op.responseResolvedType?.fullType ?? 'Object' %>.class);
+                        body = filterFields(body, <%- fieldsParam.varName %>, <%- op.responseResolvedType?.fullType ?? 'Object' %>.class, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
                     }
 <%_ } _%>
                     return ResponseEntity.status(successStatus).body(body);
@@ -300,10 +339,11 @@ _%>
         Optional<<%= persistenceTypeFqcn %>> maybeEntity = findByResourceIdentifier(this.<%= repoField %>, <%= idParam.varName %>, "<%= idParam.name %>", <%- persistenceTypeFqcn %>.class);
         if (maybeEntity.isPresent()) {
             LOG.info("Deleting <%= resolvedResourceSlug %> identifier={}", <%= idParam.varName %>);
+            this.<%= repoField %>.delete(maybeEntity.orElseThrow());
+            this.<%= repoField %>.flush();
             if (successStatus == HttpStatus.ACCEPTED) {
                 return ResponseEntity.accepted().build();
             }
-            this.<%= repoField %>.delete(maybeEntity.orElseThrow());
             if (successStatus == HttpStatus.NO_CONTENT) {
                 return ResponseEntity.noContent().build();
             }
@@ -348,6 +388,7 @@ _%>
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found");
         }
         <%= persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
+        Map<String, Object> originalIdentifiers = snapshotIdentifierValues(existing);
 <%_ if (mapperField && updateMethod) { _%>
         LOG.info("Patching <%= resolvedResourceSlug %> identifier={}", <%= idParam.varName %>);
         validatePayload(<%= bodyParam.varName %>);
@@ -357,16 +398,20 @@ _%>
         JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> <%- existingJsonSource %>));
         JsonNode patchNode = normalizePatchDiscriminators(readPatchNode(<%= bodyParam.varName %>));
         PatchFormat patchFormat = resolvePatchFormat(resolveContentType(), patchNode);
-        JsonNode patchedNode = applyPatchedNode(baseNode, patchNode, patchFormat);
+        JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);
         enforceImmutableIdentifiers(baseNode, patchedNode);
         convertAndValidate(patchedNode, <%- payloadType %>.class);
         <%- payloadType %> mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), <%- payloadType %>.class);
         validatePayload(mergedPayload);
+<%_ if (op.requestRequiredRulesExpression) { _%>
+        validateRequiredProperties(mergedPayload, <%- op.requestRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(mergedPayload, <%- op.requestDiscriminatorRulesExpression %>);
 <%_ } _%>
         try {
             this.<%= mapperField %>.<%= updateMethod %>(existing, mergedPayload);
+            restoreIdentifierValues(existing, originalIdentifiers);
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
         }
@@ -377,6 +422,9 @@ _%>
         validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
 <%_ } _%>
         <%- payloadType %> replacementPayload = convertAndValidate(readPatchNode(<%= bodyParam.varName %>), <%- payloadType %>.class);
+<%_ if (op.requestRequiredRulesExpression) { _%>
+        validateRequiredProperties(replacementPayload, <%- op.requestRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(replacementPayload, <%- op.requestDiscriminatorRulesExpression %>);
 <%_ } _%>
@@ -386,6 +434,7 @@ _%>
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
         }
         mapped.setId(existing.getId());
+        restoreIdentifierValues(mapped, originalIdentifiers);
         existing = mapped;
 <%_ } else { _%>
         validatePayload(<%= bodyParam.varName %>);
@@ -395,6 +444,7 @@ _%>
         return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
 <%_ } _%>
 	<%_ if (hasPatchMapping) { _%>
+	        populateGeneratedHref(existing, "<%= resolvedResourceSlug %>");
 	        validatePayload(existing);
 	        <%= persistenceTypeFqcn %> saved;
         try {
@@ -402,15 +452,20 @@ _%>
         } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
             throw persistenceViolation(ex);
         }
+        final <%= persistenceTypeFqcn %> responseEntity = saved;
         LOG.info(
             "Patched <%= resolvedResourceSlug %> id={}",
-            saved != null ? saved.getId() : null
+            responseEntity != null ? responseEntity.getId() : null
         );
 <%_ if (canRespondWithBody) { _%>
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
         }
-        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(saved));
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
+<%_ if (op.responseRequiredRulesExpression) { _%>
+        responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
+        requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
 <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
 <%_ } _%>
@@ -635,6 +690,88 @@ _%>
         return value == null ? "" : value.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
     }
 
+    private Map<String, Object> snapshotIdentifierValues(Object source) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        if (source == null) {
+            return values;
+        }
+        for (Method method : source.getClass().getMethods()) {
+            if (method.getParameterCount() != 0 || method.getDeclaringClass() == Object.class || !method.getName().startsWith("get")) {
+                continue;
+            }
+            String propertyName = getterPropertyName(method);
+            if (!isIdentifierField(propertyName) || findSetter(source.getClass(), propertyName, method.getReturnType()).isEmpty()) {
+                continue;
+            }
+            values.put(propertyName, invokeGetter(source, method));
+        }
+        return values;
+    }
+
+    private void restoreIdentifierValues(Object target, Map<String, Object> values) {
+        if (target == null || values == null || values.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : values.entrySet()) {
+            Optional<Method> setter = findSetter(target.getClass(), entry.getKey(), entry.getValue() != null ? entry.getValue().getClass() : null);
+            setter.ifPresent(method -> {
+                try {
+                    method.invoke(target, entry.getValue());
+                } catch (ReflectiveOperationException | RuntimeException ex) {
+                    LOG.debug("Unable to restore identifier property {}", entry.getKey(), ex);
+                }
+            });
+        }
+    }
+
+    private Optional<Method> findSetter(Class<?> type, String propertyName, Class<?> valueType) {
+        if (type == null || propertyName == null || propertyName.isBlank()) {
+            return Optional.empty();
+        }
+        String setterName = "set" + Character.toUpperCase(propertyName.charAt(0)) + propertyName.substring(1);
+        for (Method method : type.getMethods()) {
+            if (!method.getName().equals(setterName) || method.getParameterCount() != 1) {
+                continue;
+            }
+            Class<?> parameterType = wrapPrimitive(method.getParameterTypes()[0]);
+            if (valueType == null || parameterType.isAssignableFrom(wrapPrimitive(valueType))) {
+                return Optional.of(method);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Class<?> wrapPrimitive(Class<?> type) {
+        if (type == null || !type.isPrimitive()) {
+            return type;
+        }
+        if (type == boolean.class) {
+            return Boolean.class;
+        }
+        if (type == byte.class) {
+            return Byte.class;
+        }
+        if (type == short.class) {
+            return Short.class;
+        }
+        if (type == int.class) {
+            return Integer.class;
+        }
+        if (type == long.class) {
+            return Long.class;
+        }
+        if (type == float.class) {
+            return Float.class;
+        }
+        if (type == double.class) {
+            return Double.class;
+        }
+        if (type == char.class) {
+            return Character.class;
+        }
+        return type;
+    }
+
     private HttpStatus resolveSuccessStatus(Integer statusCode, HttpStatus fallback) {
         if (statusCode == null) {
             return fallback;
@@ -767,6 +904,102 @@ _%>
         }
         fieldsToRemove.forEach(mappingNode::remove);
         return mappingNode;
+    }
+
+    private JsonNode preservePatchedArrayItemValues(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode, PatchFormat format) {
+        if (format != PatchFormat.MERGE_PATCH || !(baseNode instanceof ObjectNode) || !(patchedNode instanceof ObjectNode patchedObject) || !(patchNode instanceof ObjectNode patchObject)) {
+            return patchedNode;
+        }
+        ObjectNode merged = patchedObject.deepCopy();
+        Iterator<String> patchedFields = patchObject.fieldNames();
+        while (patchedFields.hasNext()) {
+            String fieldName = patchedFields.next();
+            JsonNode baseChild = baseNode.get(fieldName);
+            JsonNode patchedChild = merged.get(fieldName);
+            JsonNode patchChild = patchObject.get(fieldName);
+            if (baseChild != null && patchedChild != null) {
+                merged.set(fieldName, preservePatchedArrayItemValuesRecursive(baseChild, patchedChild, patchChild));
+            }
+        }
+        return merged;
+    }
+
+    private JsonNode preservePatchedArrayItemValuesRecursive(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode) {
+        if (baseNode instanceof ArrayNode baseArray && patchedNode instanceof ArrayNode patchedArray && patchNode instanceof ArrayNode patchArray) {
+            ArrayNode mergedArray = patchedArray.deepCopy();
+            for (int index = 0; index < mergedArray.size(); index++) {
+                JsonNode patchedItem = mergedArray.get(index);
+                JsonNode patchItem = index < patchArray.size() ? patchArray.get(index) : MissingNode.getInstance();
+                JsonNode baseItem = matchingArrayItem(baseArray, patchedItem, index);
+                if (baseItem != null && patchedItem != null) {
+                    mergedArray.set(index, preserveMissingObjectFields(baseItem, patchedItem, patchItem));
+                }
+            }
+            return mergedArray;
+        }
+        if (baseNode instanceof ObjectNode baseObject && patchedNode instanceof ObjectNode patchedObject && patchNode instanceof ObjectNode patchObject) {
+            ObjectNode mergedObject = patchedObject.deepCopy();
+            Iterator<String> fields = patchObject.fieldNames();
+            while (fields.hasNext()) {
+                String fieldName = fields.next();
+                JsonNode baseChild = baseObject.get(fieldName);
+                JsonNode patchedChild = mergedObject.get(fieldName);
+                JsonNode patchChild = patchObject.get(fieldName);
+                if (baseChild != null && patchedChild != null) {
+                    mergedObject.set(fieldName, preservePatchedArrayItemValuesRecursive(baseChild, patchedChild, patchChild));
+                }
+            }
+            return mergedObject;
+        }
+        return patchedNode;
+    }
+
+    private JsonNode preserveMissingObjectFields(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode) {
+        if (!(baseNode instanceof ObjectNode baseObject) || !(patchedNode instanceof ObjectNode patchedObject)) {
+            return patchedNode;
+        }
+        ObjectNode mergedObject = patchedObject.deepCopy();
+        Iterator<Map.Entry<String, JsonNode>> baseFields = baseObject.fields();
+        while (baseFields.hasNext()) {
+            Map.Entry<String, JsonNode> baseField = baseFields.next();
+            if (!mergedObject.has(baseField.getKey())) {
+                mergedObject.set(baseField.getKey(), baseField.getValue().deepCopy());
+            }
+        }
+        if (patchNode instanceof ObjectNode patchObject) {
+            Iterator<String> fields = patchObject.fieldNames();
+            while (fields.hasNext()) {
+                String fieldName = fields.next();
+                JsonNode baseChild = baseObject.get(fieldName);
+                JsonNode patchedChild = mergedObject.get(fieldName);
+                JsonNode patchChild = patchObject.get(fieldName);
+                if (baseChild != null && patchedChild != null) {
+                    mergedObject.set(fieldName, preservePatchedArrayItemValuesRecursive(baseChild, patchedChild, patchChild));
+                }
+            }
+        }
+        return mergedObject;
+    }
+
+    private JsonNode matchingArrayItem(ArrayNode baseArray, JsonNode patchedItem, int fallbackIndex) {
+        if (patchedItem != null && patchedItem.isObject()) {
+            Iterator<String> fields = patchedItem.fieldNames();
+            while (fields.hasNext()) {
+                String identifierField = fields.next();
+                if (isIdentifierField(identifierField)) {
+                    JsonNode identifierValue = patchedItem.get(identifierField);
+                    if (!isNullOrMissing(identifierValue) && identifierValue.isValueNode()) {
+                        for (JsonNode candidate : baseArray) {
+                            JsonNode candidateValue = candidate.get(identifierField);
+                            if (!isNullOrMissing(candidateValue) && candidateValue.equals(identifierValue)) {
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return fallbackIndex >= 0 && fallbackIndex < baseArray.size() ? baseArray.get(fallbackIndex) : null;
     }
 
     private boolean isComplexPatchField(JsonNode node) {
@@ -1074,6 +1307,68 @@ _%>
         }
     }
 
+    private void validateRequiredProperties(Object payload, List<RequiredPropertyRule> rules) {
+        List<String> missing = missingRequiredPropertyPaths(payload, rules);
+        if (!missing.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Missing required payload field(s): " + String.join(", ", missing));
+        }
+    }
+
+    private List<String> missingRequiredPropertyPaths(Object payload, List<RequiredPropertyRule> rules) {
+        List<String> missing = new ArrayList<>();
+        if (payload == null || rules == null || rules.isEmpty()) {
+            return missing;
+        }
+        JsonNode node;
+        try {
+            node = this.objectMapper.valueToTree(payload);
+        } catch (IllegalArgumentException ex) {
+            missing.add("<payload>");
+            return missing;
+        }
+        for (RequiredPropertyRule rule : rules) {
+            if (rule == null || rule.propertyName() == null || rule.propertyName().isBlank()) {
+                continue;
+            }
+            for (JsonNodeLocation target : discriminatorTargetLocations(node, rule.pointer())) {
+                if (!(target.node() instanceof ObjectNode objectNode)) {
+                    missing.add(formatRequiredPath(target.pointer(), rule.propertyName()));
+                    continue;
+                }
+                JsonNode value = objectNode.get(rule.propertyName());
+                if (value == null || value.isMissingNode() || (!rule.nullable() && value.isNull())) {
+                    missing.add(formatRequiredPath(target.pointer(), rule.propertyName()));
+                }
+            }
+        }
+        return missing.stream().distinct().toList();
+    }
+
+    private String formatRequiredPath(String pointer, String propertyName) {
+        List<String> parts = new ArrayList<>();
+        if (pointer != null && !pointer.isBlank()) {
+            for (String rawSegment : pointer.split("/")) {
+                if (rawSegment.isBlank() || "*".equals(rawSegment)) {
+                    continue;
+                }
+                parts.add(rawSegment.replace("~1", "/").replace("~0", "~"));
+            }
+        }
+        parts.add(propertyName);
+        StringBuilder path = new StringBuilder();
+        for (String part : parts) {
+            if (part.matches("\\d+")) {
+                path.append('[').append(part).append(']');
+            } else {
+                if (path.length() > 0) {
+                    path.append('.');
+                }
+                path.append(part);
+            }
+        }
+        return path.toString();
+    }
+
     private ResponseStatusException persistenceViolation(RuntimeException ex) {
         return new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payload violates persistence constraints", ex);
     }
@@ -1113,6 +1408,140 @@ _%>
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private <T> T completeResponseRequiredProperties(T body, Object source, List<RequiredPropertyRule> rules) {
+        if (body == null || rules == null || rules.isEmpty()) {
+            return body;
+        }
+        JsonNode node;
+        try {
+            node = this.objectMapper.valueToTree(body);
+        } catch (IllegalArgumentException ex) {
+            return body;
+        }
+        if (!node.isObject() && !node.isArray()) {
+            return body;
+        }
+        JsonNode mutable = node.deepCopy();
+        boolean changed = populateMissingRequiredHrefs(mutable, rules, responseIdentifier(source));
+        if (!changed) {
+            return body;
+        }
+        try {
+            return (T) this.objectMapper.convertValue(mutable, body.getClass());
+        } catch (IllegalArgumentException ex) {
+            LOG.debug("Response body could not be completed from OpenAPI response rules", ex);
+            return body;
+        }
+    }
+
+    private boolean populateMissingRequiredHrefs(JsonNode root, List<RequiredPropertyRule> rules, Object sourceIdentifier) {
+        boolean changed = false;
+        for (RequiredPropertyRule rule : rules) {
+            if (rule == null || !"href".equals(rule.propertyName())) {
+                continue;
+            }
+            for (JsonNode target : discriminatorTargets(root, rule.pointer())) {
+                if (target instanceof ObjectNode objectNode && isNullOrMissing(objectNode.get(rule.propertyName()))) {
+                    objectNode.put(rule.propertyName(), buildSyntheticHref(objectNode, sourceIdentifier));
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    private boolean populateGeneratedHref(Object target, String resourceSlug) {
+        if (target == null || resourceSlug == null || resourceSlug.isBlank()) {
+            return false;
+        }
+        Optional<Method> hrefSetter = findSetter(target.getClass(), "href", String.class);
+        if (hrefSetter.isEmpty()) {
+            return false;
+        }
+        Object identifier = responseIdentifier(target);
+        if (identifier == null || identifier.toString().isBlank()) {
+            return false;
+        }
+        try {
+            hrefSetter.get().invoke(target, buildResourceHref(resourceSlug, identifier));
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException ex) {
+            LOG.debug("Unable to write generated href", ex);
+            return false;
+        }
+    }
+
+    private String buildResourceHref(String resourceSlug, Object identifier) {
+        try {
+            String base = ServletUriComponentsBuilder.fromCurrentRequestUri().replaceQuery(null).build().normalize().toUriString();
+            String identifierText = identifier.toString();
+            if (base.endsWith("/" + identifierText)) {
+                return base;
+            }
+            return ServletUriComponentsBuilder.fromUriString(base).pathSegment(identifierText).build().normalize().toUriString();
+        } catch (IllegalStateException ex) {
+            return String.format("/api/%s/%s", resourceSlug, identifier);
+        }
+    }
+
+    private String buildSyntheticHref(ObjectNode objectNode, Object sourceIdentifier) {
+        Object identifier = responseIdentifier(objectNode);
+        if (identifier == null) {
+            identifier = sourceIdentifier;
+        }
+        String identifierText = identifier != null ? identifier.toString() : "";
+        try {
+            String base = ServletUriComponentsBuilder.fromCurrentRequestUri().replaceQuery(null).build().normalize().toUriString();
+            if (identifierText.isBlank() || base.endsWith("/" + identifierText)) {
+                return base;
+            }
+            return ServletUriComponentsBuilder.fromUriString(base).pathSegment(identifierText).build().normalize().toUriString();
+        } catch (IllegalStateException ex) {
+            return identifierText;
+        }
+    }
+
+    private Object responseIdentifier(Object source) {
+        if (source == null) {
+            return null;
+        }
+        if (source instanceof CharSequence || source instanceof Number || source instanceof java.util.UUID) {
+            return source;
+        }
+        if (source instanceof ObjectNode objectNode) {
+            Object identifier = jsonIdentifierValue(objectNode, "id");
+            if (identifier != null) {
+                return identifier;
+            }
+            Iterator<Map.Entry<String, JsonNode>> fields = objectNode.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                if (field.getKey() != null && field.getKey().toLowerCase(java.util.Locale.ROOT).endsWith("id")) {
+                    identifier = jsonIdentifierValue(objectNode, field.getKey());
+                    if (identifier != null) {
+                        return identifier;
+                    }
+                }
+            }
+            return null;
+        }
+        try {
+            Method getId = source.getClass().getMethod("getId");
+            return invokeGetter(source, getId);
+        } catch (ReflectiveOperationException | RuntimeException ex) {
+            return null;
+        }
+    }
+
+    private Object jsonIdentifierValue(ObjectNode objectNode, String fieldName) {
+        JsonNode value = objectNode.get(fieldName);
+        if (value == null || value.isMissingNode() || value.isNull() || value.isContainerNode()) {
+            return null;
+        }
+        return value.asText();
+    }
+
     private <T> T requireValidResponseDiscriminators(T body, List<DiscriminatorRule> rules) {
         if (!hasValidDiscriminators(body, rules)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found");
@@ -1133,6 +1562,58 @@ _%>
                 return valid;
             })
             .toList();
+    }
+
+    private <T> T requireValidResponseRequiredProperties(T body, List<RequiredPropertyRule> rules) {
+        if (!hasRequiredResponseProperties(body, rules)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found");
+        }
+        return body;
+    }
+
+    private <T> List<T> filterValidResponseRequiredProperties(List<T> bodies, List<RequiredPropertyRule> rules) {
+        if (bodies == null || bodies.isEmpty() || rules == null || rules.isEmpty()) {
+            return bodies;
+        }
+        return bodies.stream()
+            .filter(body -> {
+                boolean valid = hasRequiredResponseProperties(body, rules);
+                if (!valid) {
+                    LOG.debug("Skipping response body with missing OpenAPI-required response properties");
+                }
+                return valid;
+            })
+            .toList();
+    }
+
+    private boolean hasRequiredResponseProperties(Object body, List<RequiredPropertyRule> rules) {
+        if (rules == null || rules.isEmpty()) {
+            return true;
+        }
+        if (body == null) {
+            return false;
+        }
+        JsonNode node;
+        try {
+            node = this.objectMapper.valueToTree(body);
+        } catch (IllegalArgumentException ex) {
+            return false;
+        }
+        for (RequiredPropertyRule rule : rules) {
+            if (rule == null || rule.propertyName() == null || rule.propertyName().isBlank()) {
+                continue;
+            }
+            for (JsonNode target : discriminatorTargets(node, rule.pointer())) {
+                if (!(target instanceof ObjectNode objectNode)) {
+                    return false;
+                }
+                JsonNode value = objectNode.get(rule.propertyName());
+                if (value == null || value.isMissingNode() || (!rule.nullable() && value.isNull())) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private boolean hasValidDiscriminators(Object payload, List<DiscriminatorRule> rules) {
@@ -1170,13 +1651,19 @@ _%>
     }
 
     private List<JsonNode> discriminatorTargets(JsonNode root, String pointer) {
+        return discriminatorTargetLocations(root, pointer).stream().map(JsonNodeLocation::node).toList();
+    }
+
+    private List<JsonNodeLocation> discriminatorTargetLocations(JsonNode root, String pointer) {
         List<JsonNode> current = new ArrayList<>();
+        List<String> currentPointers = new ArrayList<>();
         if (root == null || root.isMissingNode()) {
-            return current;
+            return List.of();
         }
         current.add(root);
+        currentPointers.add("");
         if (pointer == null || pointer.isBlank()) {
-            return current;
+            return List.of(new JsonNodeLocation(root, ""));
         }
         String[] segments = pointer.split("/");
         for (String rawSegment : segments) {
@@ -1185,36 +1672,61 @@ _%>
             }
             String segment = rawSegment.replace("~1", "/").replace("~0", "~");
             List<JsonNode> next = new ArrayList<>();
-            for (JsonNode candidate : current) {
+            List<String> nextPointers = new ArrayList<>();
+            for (int index = 0; index < current.size(); index++) {
+                JsonNode candidate = current.get(index);
+                String candidatePointer = currentPointers.get(index);
                 if ("*".equals(segment)) {
-                    if (candidate.isArray() || candidate.isObject()) {
-                        candidate.elements().forEachRemaining(next::add);
+                    if (candidate.isArray()) {
+                        for (int childIndex = 0; childIndex < candidate.size(); childIndex++) {
+                            next.add(candidate.get(childIndex));
+                            nextPointers.add(candidatePointer + "/" + childIndex);
+                        }
+                    } else if (candidate.isObject()) {
+                        Iterator<Map.Entry<String, JsonNode>> fields = candidate.fields();
+                        while (fields.hasNext()) {
+                            Map.Entry<String, JsonNode> field = fields.next();
+                            next.add(field.getValue());
+                            nextPointers.add(candidatePointer + "/" + escapeJsonPointerSegment(field.getKey()));
+                        }
                     }
                 } else if (candidate.isObject()) {
                     JsonNode child = candidate.get(segment);
                     if (!isNullOrMissing(child)) {
                         next.add(child);
+                        nextPointers.add(candidatePointer + "/" + escapeJsonPointerSegment(segment));
                     }
                 } else if (candidate.isArray() && segment.matches("\\d+")) {
                     JsonNode child = candidate.get(Integer.parseInt(segment));
                     if (!isNullOrMissing(child)) {
                         next.add(child);
+                        nextPointers.add(candidatePointer + "/" + segment);
                     }
                 }
             }
             if (next.isEmpty()) {
-                return next;
+                return List.of();
             }
             current = next;
+            currentPointers = nextPointers;
         }
-        return current;
+        List<JsonNodeLocation> locations = new ArrayList<>();
+        for (int index = 0; index < current.size(); index++) {
+            locations.add(new JsonNodeLocation(current.get(index), currentPointers.get(index)));
+        }
+        return locations;
     }
 
-    private <S, T> List<T> mapValidResponseBodies(List<S> sources, Function<S, T> mapper) {
+    private String escapeJsonPointerSegment(String segment) {
+        return segment.replace("~", "~0").replace("/", "~1");
+    }
+
+    private <S, T> List<T> mapValidResponseBodies(List<S> sources, Function<S, T> mapper, List<RequiredPropertyRule> requiredRules) {
         return sources.stream()
             .map(source -> {
                 try {
                     T body = mapper.apply(source);
+                    body = completeResponseRequiredProperties(body, source, requiredRules);
                     return isValidResponseBody(body) ? body : null;
                 } catch (RuntimeException ex) {
                     LOG.debug("Skipping response body that could not be mapped", ex);
@@ -1233,6 +1745,7 @@ _%>
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (RuntimeException ex) {
+            LOG.debug("Response body could not be mapped", ex);
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found", ex);
         }
     }
@@ -1287,7 +1800,7 @@ _%>
             }
             Object nested = invokeGetter(unwrapped, method);
             Object nestedValue = unwrapJsonNullable(nested);
-            if (hasEmailAnnotation(method) && isBlankEmailValue(nestedValue)) {
+            if (hasEmailAnnotation(method) && isInvalidOpenApiEmailValue(nestedValue)) {
                 return true;
             }
             if (hasStrictOpenApiEmailViolation(nestedValue, visited)) {
@@ -1337,8 +1850,8 @@ _%>
         return false;
     }
 
-    private boolean isBlankEmailValue(Object value) {
-        return value instanceof CharSequence text && text.toString().isBlank();
+    private boolean isInvalidOpenApiEmailValue(Object value) {
+        return value instanceof CharSequence text && !STRICT_OPENAPI_EMAIL_PATTERN.matcher(text).matches();
     }
 
     private Object unwrapJsonNullable(Object value) {
@@ -1384,6 +1897,9 @@ _%>
                 JsonNode patchedChild = patched.get(field);
                 if (isIdentifierField(field)) {
                     if (!isNullOrMissing(originalChild) && !isNullOrMissing(patchedChild) && !originalChild.equals(patchedChild)) {
+                        if (!isRoot && "id".equals(field) && hasSameStableReferenceIdentifier(original, patched)) {
+                            return;
+                        }
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Field '" + field + "' is immutable");
                     }
                     return;
@@ -1395,36 +1911,53 @@ _%>
         } else if (original.isArray() && patched.isArray()) {
             Map<String, JsonNode> patchedByIdentifier = new LinkedHashMap<>();
             patched.forEach(node -> {
-                if (node != null && node.isObject()) {
-                    node.fieldNames().forEachRemaining(field -> {
-                        if (isIdentifierField(field)) {
-                            JsonNode identifierNode = node.get(field);
-                            if (!isNullOrMissing(identifierNode)) {
-                                patchedByIdentifier.put(identifierKey(field, identifierNode), node);
-                            }
-                        }
-                    });
+                String key = primaryIdentifierKey(node);
+                if (key != null) {
+                    patchedByIdentifier.putIfAbsent(key, node);
                 }
             });
             original.forEach(node -> {
-                JsonNode match = null;
-                if (node != null && node.isObject()) {
-                    Iterator<String> fields = node.fieldNames();
-                    while (fields.hasNext() && match == null) {
-                        String field = fields.next();
-                        if (isIdentifierField(field)) {
-                            JsonNode identifierNode = node.get(field);
-                            if (!isNullOrMissing(identifierNode)) {
-                                match = patchedByIdentifier.get(identifierKey(field, identifierNode));
-                            }
-                        }
-                    }
-                }
+                String key = primaryIdentifierKey(node);
+                JsonNode match = key != null ? patchedByIdentifier.get(key) : null;
                 if (match != null) {
                     enforceImmutableRecursive(node, match, false);
                 }
             });
         }
+    }
+
+    private String primaryIdentifierKey(JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        for (String preferred : List.of("tmfId", "href", "id")) {
+            JsonNode value = node.get(preferred);
+            if (!isNullOrMissing(value)) {
+                return identifierKey(preferred, value);
+            }
+        }
+        Iterator<String> fields = node.fieldNames();
+        while (fields.hasNext()) {
+            String field = fields.next();
+            if (isIdentifierField(field)) {
+                JsonNode value = node.get(field);
+                if (!isNullOrMissing(value)) {
+                    return identifierKey(field, value);
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean hasSameStableReferenceIdentifier(JsonNode original, JsonNode patched) {
+        for (String preferred : List.of("tmfId", "href")) {
+            JsonNode originalValue = original.get(preferred);
+            JsonNode patchedValue = patched.get(preferred);
+            if (!isNullOrMissing(originalValue) && !isNullOrMissing(patchedValue) && originalValue.equals(patchedValue)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean isIdentifierField(String fieldName) {
@@ -1439,7 +1972,7 @@ _%>
         return node == null || node.isMissingNode() || node.isNull();
     }
 
-    private <T> T filterFields(T value, Object fields, Class<T> targetType) {
+    private <T> T filterFields(T value, Object fields, Class<T> targetType, List<RequiredPropertyRule> requiredRules) {
         if (value == null || fields == null || targetType == null) {
             return value;
         }
@@ -1459,13 +1992,20 @@ _%>
         if (!requested.contains("id")) {
             requested.add("id");
         }
+        if (requiredRules != null) {
+            for (RequiredPropertyRule rule : requiredRules) {
+                if (rule != null && (rule.pointer() == null || rule.pointer().isBlank()) && rule.propertyName() != null) {
+                    requested.add(rule.propertyName());
+                }
+            }
+        }
         try {
             JsonNode node = this.objectMapper.valueToTree(value);
             if (node instanceof ObjectNode objectNode) {
                 ObjectNode pruned = objectNode.deepCopy();
                 pruned.retain(requested);
                 T filtered = this.objectMapper.convertValue(pruned, targetType);
-                return isValidResponseBody(filtered) ? filtered : value;
+                return isValidResponseBody(filtered) && hasRequiredResponseProperties(filtered, requiredRules) ? filtered : value;
             }
             return value;
         } catch (Exception ex) {

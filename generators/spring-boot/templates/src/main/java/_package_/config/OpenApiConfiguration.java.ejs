@@ -83,6 +83,7 @@ public class OpenApiConfiguration {
         }
     }
 
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     private void normalizeDiscriminatorSchemas(OpenAPI openApi) {
         if (openApi.getComponents() == null || openApi.getComponents().getSchemas() == null) {
             return;
@@ -98,6 +99,7 @@ public class OpenApiConfiguration {
         });
     }
 
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     private void ensureDiscriminatorProperty(Schema schema, String propertyName) {
         if (schema.getType() == null || schema.getType().isBlank()) {
             schema.setType("object");

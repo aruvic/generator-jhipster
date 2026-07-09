@@ -125,7 +125,7 @@ import org.hibernate.type.SqlTypes;
   <%_ if (relationship.relationshipOneToMany) { -%>
     @OneToMany(fetch = FetchType.LAZY, mappedBy = "<%= relationship.otherEntityRelationshipName %>"<% if (enableSwaggerCodegen) { %>, cascade = CascadeType.ALL<% } %>)
   <%_ } else if (relationship.relationshipManyToOne) { -%>
-    @ManyToOne(<% if (enableSwaggerCodegen) { %>cascade = CascadeType.ALL<% if (relationship.relationshipRequired) { %>, optional = false<% } else { %>, fetch = FetchType.LAZY<% } %><% } else if (relationship.relationshipRequired) { %>optional = false<% } else { %>fetch = FetchType.LAZY<% } %>)
+    @ManyToOne(<% if (enableSwaggerCodegen) { %>cascade = { CascadeType.PERSIST, CascadeType.MERGE }<% if (relationship.relationshipRequired) { %>, optional = false<% } else { %>, fetch = FetchType.LAZY<% } %><% } else if (relationship.relationshipRequired) { %>optional = false<% } else { %>fetch = FetchType.LAZY<% } %>)
       <%_ if (relationship.relationshipValidate && relationship.relationshipRequired) { _%>
     @NotNull
       <%_ } _%>

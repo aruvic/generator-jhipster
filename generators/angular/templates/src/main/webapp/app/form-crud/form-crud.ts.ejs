@@ -1,0 +1,2678 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+import { CommonModule, DOCUMENT } from '@angular/common';
+import { HttpClient, HttpContext, HttpHeaders, HttpParams, HttpResponse } from '@angular/common/http';
+import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { AbstractControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { FieldArrayType, FieldWrapper, FormlyConfig, FormlyFieldConfig, FormlyForm, FormlyModule } from '@ngx-formly/core';
+import { Subscription } from 'rxjs';
+import { finalize } from 'rxjs/operators';
+
+import SharedModule from 'app/shared/shared.module';
+import { SKIP_AUTH_EXPIRED_LOGOUT } from 'app/core/interceptor/auth-expired.interceptor';
+
+import {
+  FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+  FormCrudReferencePickerConfig,
+  OPENAPI_OPERATIONS,
+  OpenApiOperationDefinition,
+  OpenApiOperationParameter,
+  OpenApiSchemaField,
+} from 'app/openapi-operations/openapi-operations.model';
+
+type FormCrudModel = {
+  parameters: Record<string, unknown>;
+  body: unknown;
+};
+
+type ResponseRow = {
+  item: unknown;
+  cells: Record<string, unknown>;
+};
+
+type ReferencePickerState = {
+  fieldPath: string;
+  field: OpenApiSchemaField;
+  config: FormCrudReferencePickerConfig;
+  targetModel: Record<string, unknown>;
+  targetForm: FormGroup;
+  formValue: Record<string, unknown>;
+};
+
+type CrudResource = {
+  key: string;
+  label: string;
+  basePath: string;
+  operations: readonly OpenApiOperationDefinition[];
+  listOperation?: OpenApiOperationDefinition;
+  createOperation?: OpenApiOperationDefinition;
+  detailOperation?: OpenApiOperationDefinition;
+  updateOperation?: OpenApiOperationDefinition;
+  deleteOperation?: OpenApiOperationDefinition;
+};
+
+type CrudResourceGroup = {
+  key: string;
+  label: string;
+  resources: readonly CrudResource[];
+  childGroups?: readonly CrudResourceGroup[];
+};
+
+type FormCrudDebugWindow = Window & {
+  __formsDebug?: Record<string, unknown>;
+};
+
+type BodySerializationOptions = {
+  includeEmptyStructures?: boolean;
+  omitAbsentEmptyStructures?: boolean;
+  originalSource?: unknown;
+};
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-form-crud-section-wrapper',
+  standalone: true,
+  imports: [CommonModule],
+  template: `
+    <div class="accordion mb-3" [attr.data-cy]="'formCrudSection-' + (props.label ?? 'section')">
+      <div class="accordion-item" [class.border-danger]="hasValidationErrors()">
+        <h4 class="accordion-header">
+          <button class="accordion-button" [class.collapsed]="!isOpen" [attr.aria-expanded]="isOpen" type="button" (click)="toggle()">
+            <span>{{ props.label }}</span>
+            <span *ngIf="props.requiredIndicator ?? props.required" class="badge text-bg-primary ms-2">Required</span>
+            <span *ngIf="hasValidationErrors()" class="badge text-bg-danger ms-2">Contains errors</span>
+            <span class="ms-auto"></span>
+          </button>
+        </h4>
+        <div class="accordion-collapse collapse" [class.show]="isOpen">
+          <div class="accordion-body">
+            <div class="d-flex justify-content-end mb-2" *ngIf="props.clearable">
+              <button class="btn btn-outline-secondary btn-sm" type="button" (click)="clearValue()">Clear</button>
+            </div>
+            <div *ngIf="props.description" class="form-text mb-3">{{ props.description }}</div>
+            <ng-container #fieldComponent></ng-container>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+})
+class FormCrudSectionWrapper extends FieldWrapper implements OnInit {
+  isOpen = false;
+
+  ngOnInit(): void {
+    this.isOpen = this.props.expanded === true;
+  }
+
+  toggle(): void {
+    this.isOpen = !this.isOpen;
+  }
+
+  clearValue(): void {
+    this.formControl.reset({});
+  }
+
+  hasValidationErrors(): boolean {
+    return this.formControl.invalid && (this.formControl.touched || this.formControl.dirty);
+  }
+}
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-form-crud-accordion-wrapper',
+  standalone: true,
+  imports: [CommonModule],
+  template: `
+    <div class="accordion mb-3" [attr.data-cy]="'formCrudAccordion-' + (props.label ?? 'section')">
+      <div class="accordion-item" [class.border-danger]="hasValidationErrors()">
+        <h4 class="accordion-header">
+          <button class="accordion-button" [class.collapsed]="!isOpen" [attr.aria-expanded]="isOpen" type="button" (click)="toggle()">
+            <span>{{ props.label }}</span>
+            <span *ngIf="props.requiredIndicator ?? props.required" class="badge text-bg-primary ms-2">Required</span>
+            <span *ngIf="hasValidationErrors()" class="badge text-bg-danger ms-2">Contains errors</span>
+            <span class="ms-auto"></span>
+          </button>
+        </h4>
+        <div class="accordion-collapse collapse" [class.show]="isOpen">
+          <div class="accordion-body">
+            <div class="d-flex justify-content-end mb-2" *ngIf="props.clearable">
+              <button class="btn btn-outline-secondary btn-sm" type="button" (click)="clearValue()">Clear</button>
+            </div>
+            <div *ngIf="props.description" class="form-text mb-3">{{ props.description }}</div>
+            <ng-container #fieldComponent></ng-container>
+          </div>
+        </div>
+      </div>
+    </div>
+  `,
+})
+class FormCrudAccordionWrapper extends FieldWrapper implements OnInit {
+  isOpen = false;
+
+  ngOnInit(): void {
+    this.isOpen = this.props.expanded === true;
+  }
+
+  toggle(): void {
+    this.isOpen = !this.isOpen;
+  }
+
+  clearValue(): void {
+    this.formControl.reset({});
+  }
+
+  hasValidationErrors(): boolean {
+    return this.formControl.invalid && (this.formControl.touched || this.formControl.dirty);
+  }
+}
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-form-crud-repeat',
+  standalone: true,
+  imports: [CommonModule, FormlyModule],
+  template: `
+    <div class="mb-3" [attr.data-cy]="'formCrudArray-' + (props.label ?? 'array')">
+      <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div>
+          <div class="form-label mb-0">
+            {{ props.label }}
+            <span *ngIf="props.requiredIndicator ?? props.required" class="text-danger" aria-hidden="true">*</span>
+          </div>
+          <div *ngIf="props.description" class="form-text">{{ props.description }}</div>
+        </div>
+        <div class="btn-group btn-group-sm">
+          <button
+            *ngIf="props.referencePicker"
+            class="btn btn-outline-secondary"
+            type="button"
+            (click)="props.openReferencePicker?.()"
+            [disabled]="props.disabled"
+            data-cy="formCrudReferencePickerButton"
+          >
+            Select existing
+          </button>
+          <button class="btn btn-outline-primary" type="button" (click)="add()" [disabled]="props.disabled">
+            Add
+          </button>
+          <button class="btn btn-outline-secondary" type="button" (click)="clear()" [disabled]="props.disabled || !field.fieldGroup?.length">
+            Clear all
+          </button>
+        </div>
+      </div>
+
+      <div *ngFor="let childField of field.fieldGroup; let index = index" class="accordion mb-2" data-cy="formCrudArrayItem">
+        <div class="accordion-item">
+          <h5 class="accordion-header d-flex align-items-center">
+            <button
+              class="accordion-button py-2"
+              [class.collapsed]="!isItemOpen(index)"
+              [attr.aria-expanded]="isItemOpen(index)"
+              type="button"
+              (click)="toggleItem(index)"
+            >
+              <span class="fw-semibold">{{ props.itemLabel ?? 'Item' }} {{ index + 1 }}</span>
+            </button>
+            <div class="btn-group btn-group-sm me-2">
+              <button class="btn btn-outline-secondary" type="button" (click)="duplicate(index)" [disabled]="props.disabled">Duplicate</button>
+              <button class="btn btn-outline-danger" type="button" (click)="remove(index)" [disabled]="props.disabled">Remove</button>
+            </div>
+          </h5>
+          <div class="accordion-collapse collapse" [class.show]="isItemOpen(index)">
+            <div class="accordion-body">
+              <formly-field [field]="childField"></formly-field>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="!field.fieldGroup?.length" class="alert alert-secondary py-2 mb-0">No items</div>
+    </div>
+  `,
+})
+class FormCrudRepeatType extends FieldArrayType<FormlyFieldConfig> {
+  private readonly openItems = new Set<number>();
+
+  add(index?: number, initialModel?: unknown): void {
+    super.add(index, initialModel === undefined ? this.cloneValue(this.itemDefaultValue()) : this.cloneValue(initialModel));
+  }
+
+  duplicate(index: number): void {
+    const current = Array.isArray(this.model) ? this.model[index] : undefined;
+    this.add(index + 1, current);
+  }
+
+  clear(): void {
+    for (let index = (this.field.fieldGroup?.length ?? 0) - 1; index >= 0; index--) {
+      this.remove(index);
+    }
+    this.openItems.clear();
+  }
+
+  override remove(index: number): void {
+    super.remove(index);
+    this.openItems.delete(index);
+  }
+
+  isItemOpen(index: number): boolean {
+    return this.openItems.has(index);
+  }
+
+  toggleItem(index: number): void {
+    if (this.openItems.has(index)) {
+      this.openItems.delete(index);
+    } else {
+      this.openItems.add(index);
+    }
+  }
+
+  private itemDefaultValue(): unknown {
+    const fieldArray = this.field.fieldArray;
+    if (!fieldArray || Array.isArray(fieldArray) || typeof fieldArray === 'function') return undefined;
+    return fieldArray.defaultValue;
+  }
+
+  private cloneValue<T>(value: T): T {
+    if (value === undefined || value === null) return value;
+    if (typeof globalThis.structuredClone === 'function') return globalThis.structuredClone(value);
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+}
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-form-crud',
+  templateUrl: './form-crud.html',
+  imports: [SharedModule, ReactiveFormsModule, RouterLink, FormlyForm],
+})
+export default class FormCrud implements OnInit, OnDestroy {
+  readonly operations = OPENAPI_OPERATIONS;
+  readonly resources = this.resourcesForOperations(this.operations);
+  readonly resourceGroups = this.resourceGroupsForResources(this.resources);
+  readonly selectedOperation = signal<OpenApiOperationDefinition>(this.firstOperation());
+  readonly responseStatus = signal<number | null>(null);
+  readonly responseBody = signal('');
+  readonly responseError = signal('');
+  readonly responseSuccess = signal('');
+  readonly responseRows = signal<readonly ResponseRow[]>([]);
+  readonly responseColumns = signal<readonly string[]>([]);
+  readonly selectedResponseItem = signal<unknown>(null);
+  readonly selectedResponseRow = signal<ResponseRow | null>(null);
+  readonly detailStatus = signal<number | null>(null);
+  readonly detailError = signal('');
+  readonly deleteStatus = signal<number | null>(null);
+  readonly referencePickerState = signal<ReferencePickerState | null>(null);
+  readonly referencePickerSearch = signal('');
+  readonly referencePickerRows = signal<readonly ResponseRow[]>([]);
+  readonly referencePickerColumns = signal<readonly string[]>([]);
+  readonly referencePickerError = signal('');
+  readonly isReferencePickerLoading = signal(false);
+  readonly isSubmitting = signal(false);
+  readonly isDetailSubmitting = signal(false);
+  readonly isDeleting = signal(false);
+  readonly isResourcePanelCollapsed = signal(false);
+
+  form = new FormGroup({});
+  responseDetailForm = new FormGroup({});
+  model: FormCrudModel = { parameters: {}, body: {} };
+  fields: FormlyFieldConfig[] = [];
+  responseDetailModel: Record<string, unknown> = {};
+  responseDetailFields: FormlyFieldConfig[] = [];
+
+  private readonly http = inject(HttpClient);
+  private readonly route = inject(ActivatedRoute);
+  private readonly document = inject(DOCUMENT);
+  private readonly formlyConfig = inject(FormlyConfig);
+  private readonly subscription = new Subscription();
+
+  constructor() {
+    this.formlyConfig.addConfig({
+      wrappers: [
+        { name: 'form-crud-section', component: FormCrudSectionWrapper },
+        { name: 'form-crud-accordion', component: FormCrudAccordionWrapper },
+      ],
+      types: [{ name: 'form-crud-repeat', component: FormCrudRepeatType }],
+    });
+  }
+
+  ngOnInit(): void {
+    this.subscription.add(
+      this.route.paramMap.subscribe(params => {
+        this.selectOperation(params.get('operationId') ?? this.firstOperation().id);
+      }),
+    );
+  }
+
+  ngOnDestroy(): void {
+    this.subscription.unsubscribe();
+  }
+
+  selectOperation(operationId: string): void {
+    const operation = this.operations.find(candidate => candidate.id === operationId) ?? this.firstOperation();
+    this.selectedOperation.set(operation);
+    this.form = new FormGroup({});
+    this.model = this.initialModel(operation);
+    this.fields = this.fieldsForOperation(operation);
+    this.responseStatus.set(null);
+    this.responseBody.set('');
+    this.responseError.set('');
+    this.responseSuccess.set('');
+    this.detailStatus.set(null);
+    this.detailError.set('');
+    this.deleteStatus.set(null);
+    this.clearReadResponse();
+    this.publishDebugHook();
+  }
+
+  submit(): void {
+    if (this.form.invalid || this.isSubmitting()) {
+      this.form.markAllAsTouched();
+      this.responseError.set(this.invalidFormSummary(this.form));
+      this.publishDebugHook();
+      return;
+    }
+    const operation = this.selectedOperation();
+    const request = this.buildRequest(operation);
+    this.isSubmitting.set(true);
+    this.responseStatus.set(null);
+    this.responseBody.set('');
+    this.responseError.set('');
+    this.responseSuccess.set('');
+    if (this.isReadOperation(operation)) {
+      this.clearReadResponse();
+    }
+
+    this.http
+      .request(request.method, request.url, {
+        observe: 'response',
+        responseType: 'text',
+        body: request.body,
+        headers: request.headers,
+        params: request.params,
+      })
+      .pipe(finalize(() => this.isSubmitting.set(false)))
+      .subscribe({
+        next: response => {
+          this.captureResponse(operation, response);
+          this.handleSuccessfulMutation(operation, response);
+          this.publishDebugHook();
+        },
+        error: error => {
+          this.responseStatus.set(error.status ?? null);
+          this.responseError.set(this.formatError(error.error, error.status));
+          this.applyBackendValidationErrors(error.error, this.form);
+          if (this.isReadOperation(operation)) {
+            this.clearReadResponse();
+          }
+          this.publishDebugHook();
+        },
+      });
+  }
+
+  operationLabel(operation: OpenApiOperationDefinition): string {
+    const resource = this.resourceForOperation(operation);
+    return `${this.actionForOperation(operation)} ${resource ? this.resourceActionLabel(resource, operation) : operation.path}`;
+  }
+
+  isReadOperation(operation: OpenApiOperationDefinition): boolean {
+    return operation.method === 'GET';
+  }
+
+  currentResource(): CrudResource | undefined {
+    return this.resourceForOperation(this.selectedOperation());
+  }
+
+  toggleResourcePanel(): void {
+    this.isResourcePanelCollapsed.update(value => !value);
+    this.publishDebugHook();
+  }
+
+  operationMenuLabel(resource: CrudResource, operation: OpenApiOperationDefinition): string {
+    return `${this.actionForOperation(operation)} ${this.resourceActionLabel(resource, operation)}`;
+  }
+
+  selectResponseItem(row: ResponseRow): void {
+    this.selectedResponseRow.set(row);
+    this.selectedResponseItem.set(row.item);
+    this.detailStatus.set(null);
+    this.detailError.set('');
+    const resource = this.currentResource();
+    const detailOperation = resource?.detailOperation;
+    if (detailOperation) {
+      const pathValues = this.pathValuesForItem(detailOperation, row.item);
+      if (pathValues) {
+        this.isDetailSubmitting.set(true);
+        const request = this.buildRequest(detailOperation, { pathValues });
+        this.http
+          .request(request.method, request.url, {
+            observe: 'response',
+            responseType: 'text',
+            body: request.body,
+            headers: request.headers,
+            params: request.params,
+          })
+          .pipe(finalize(() => this.isDetailSubmitting.set(false)))
+          .subscribe({
+            next: response => {
+              const parsed = this.parseResponseBody(response.body);
+              this.detailStatus.set(response.status);
+              this.loadDetailForm(parsed, resource);
+              this.publishDebugHook();
+            },
+            error: error => {
+              this.detailStatus.set(error.status ?? null);
+              this.detailError.set(this.formatError(error.error, error.status));
+              this.loadDetailForm(row.item, resource);
+              this.publishDebugHook();
+            },
+          });
+        return;
+      }
+    }
+    this.loadDetailForm(row.item, resource);
+    this.publishDebugHook();
+  }
+
+  saveSelectedItem(): void {
+    const resource = this.currentResource();
+    const operation = resource?.updateOperation;
+    const row = this.selectedResponseRow();
+    if (!operation || !row) return;
+    if (this.responseDetailForm.invalid || this.isDetailSubmitting()) {
+      this.responseDetailForm.markAllAsTouched();
+      this.detailError.set(this.invalidFormSummary(this.responseDetailForm));
+      this.publishDebugHook();
+      return;
+    }
+    const pathValues = this.pathValuesForItem(operation, this.selectedResponseItem());
+    if (!pathValues) {
+      this.detailError.set('Unable to determine the item identifier for this operation.');
+      return;
+    }
+    const request = this.buildRequest(operation, {
+      pathValues,
+      bodySource: this.responseDetailModel,
+      fields: this.detailSchemaFields(resource),
+      includeEmptyStructures: true,
+      omitAbsentEmptyStructures: true,
+      originalBodySource: this.selectedResponseItem(),
+    });
+    const submittedBody = this.deepClone(request.body);
+    this.isDetailSubmitting.set(true);
+    this.detailStatus.set(null);
+    this.detailError.set('');
+    this.http
+      .request(request.method, request.url, {
+        observe: 'response',
+        responseType: 'text',
+        body: request.body,
+        headers: request.headers,
+        params: request.params,
+      })
+      .pipe(finalize(() => this.isDetailSubmitting.set(false)))
+      .subscribe({
+        next: response => {
+          this.detailStatus.set(response.status);
+          const parsed = this.parseResponseBody(response.body);
+          if (parsed !== undefined && parsed !== '') {
+            this.loadDetailForm(this.mergeSubmittedDetailWithResponse(submittedBody, parsed), resource);
+          }
+          this.publishDebugHook();
+        },
+        error: error => {
+          this.detailStatus.set(error.status ?? null);
+          this.detailError.set(this.formatError(error.error, error.status));
+          this.applyBackendValidationErrors(error.error, this.responseDetailForm);
+          this.publishDebugHook();
+        },
+      });
+  }
+
+  deleteResponseItem(row: ResponseRow): void {
+    const resource = this.currentResource();
+    const operation = resource?.deleteOperation;
+    if (!operation || this.isDeleting()) return;
+    const view = this.document.defaultView;
+    if (view && !view.confirm(`Delete this ${resource.label} item?`)) return;
+    const pathValues = this.pathValuesForItem(operation, row.item);
+    if (!pathValues) {
+      this.responseError.set('Unable to determine the item identifier for delete.');
+      return;
+    }
+    const request = this.buildRequest(operation, { pathValues });
+    this.isDeleting.set(true);
+    this.deleteStatus.set(null);
+    this.http
+      .request(request.method, request.url, {
+        observe: 'response',
+        responseType: 'text',
+        body: request.body,
+        headers: request.headers,
+        params: request.params,
+      })
+      .pipe(finalize(() => this.isDeleting.set(false)))
+      .subscribe({
+        next: response => {
+          this.deleteStatus.set(response.status);
+          this.responseRows.set(this.responseRows().filter(candidate => !this.sameItem(candidate.item, row.item)));
+          if (this.selectedResponseRow() === row) this.clearDetailForm();
+          this.responseSuccess.set('Item deleted.');
+          this.publishDebugHook();
+        },
+        error: error => {
+          this.deleteStatus.set(error.status ?? null);
+          this.responseError.set(this.formatError(error.error, error.status));
+          this.publishDebugHook();
+        },
+      });
+  }
+
+  openReferencePicker(
+    field: OpenApiSchemaField,
+    targetModel: Record<string, unknown> = this.model.body as Record<string, unknown>,
+    targetForm: FormGroup = this.form,
+    formValue: Record<string, unknown> = this.model as unknown as Record<string, unknown>,
+    operation: OpenApiOperationDefinition = this.selectedOperation(),
+  ): void {
+    const config = this.referencePickerForField(field, operation);
+    if (!config) return;
+    this.referencePickerState.set({ fieldPath: this.pathWithoutArrayIndexes(this.fieldConfigPath(field)), field, config, targetModel, targetForm, formValue });
+    this.referencePickerSearch.set('');
+    this.referencePickerRows.set([]);
+    this.referencePickerColumns.set([]);
+    this.referencePickerError.set('');
+    this.loadReferencePickerResults();
+  }
+
+  closeReferencePicker(): void {
+    this.referencePickerState.set(null);
+    this.referencePickerRows.set([]);
+    this.referencePickerColumns.set([]);
+    this.referencePickerError.set('');
+  }
+
+  loadReferencePickerResults(): void {
+    const state = this.referencePickerState();
+    if (!state) return;
+    let params = new HttpParams();
+    const search = this.referencePickerSearch().trim();
+    if (search && state.config.searchParam) params = params.set(state.config.searchParam, search);
+    this.isReferencePickerLoading.set(true);
+    this.referencePickerError.set('');
+    this.http
+      .get(this.referencePickerUrl(state.config), {
+        observe: 'response',
+        responseType: 'text',
+        params,
+        context: new HttpContext().set(SKIP_AUTH_EXPIRED_LOGOUT, true),
+      })
+      .pipe(finalize(() => this.isReferencePickerLoading.set(false)))
+      .subscribe({
+        next: response => {
+          const rows = this.rowsFromResponse(this.parseResponseBody(response.body));
+          const columns = state.config.displayFields?.length ? [...state.config.displayFields] : this.columnsForRows(rows);
+          this.referencePickerRows.set(rows.map(item => ({ item, cells: this.cellsForItem(item, columns) })));
+          this.referencePickerColumns.set(columns);
+          this.publishDebugHook();
+        },
+        error: error => {
+          this.referencePickerError.set(this.formatError(error.error, error.status));
+          this.publishDebugHook();
+        },
+      });
+  }
+
+  selectReferencePickerItem(row: ResponseRow): void {
+    const state = this.referencePickerState();
+    if (!state) return;
+    const selectedValue = this.referencePickerSelectedValue(state.config, row.item, state.field);
+    const currentValue = this.valueAtPath(state.targetModel, state.fieldPath);
+    if (Array.isArray(currentValue) || state.config.multiple !== false) {
+      this.setValueAtPath(state.targetModel, state.fieldPath, this.mergeReferencePickerArrayValue(currentValue, selectedValue, state.config, state.field));
+    } else {
+      this.setValueAtPath(state.targetModel, state.fieldPath, selectedValue);
+    }
+    state.targetForm.patchValue(state.formValue);
+    state.targetForm.markAsDirty();
+    state.targetForm.updateValueAndValidity({ emitEvent: true });
+    this.refreshReferencePickerTargetFields(state);
+    this.closeReferencePicker();
+    this.publishDebugHook();
+  }
+
+  loadDetailForm(item: unknown, resource: CrudResource | undefined): void {
+    this.selectedResponseItem.set(item);
+    this.responseDetailForm = new FormGroup({});
+    const fields = this.detailSchemaFields(resource);
+    this.responseDetailModel = this.detailModelForItem(item, fields);
+    this.responseDetailFields = this.detailFieldsForItem(item, fields, !resource?.updateOperation);
+  }
+
+  responseCellValue(value: unknown): string {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+    if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+    return JSON.stringify(value);
+  }
+
+  private refreshReferencePickerTargetFields(state: ReferencePickerState): void {
+    if (state.targetForm === this.responseDetailForm) {
+      const selectedItem = this.selectedResponseItem();
+      const fields = this.detailSchemaFields(this.currentResource());
+      const readonly = !this.currentResource()?.updateOperation;
+      const effectiveFields = fields.length ? fields : this.inferredFieldsFromItem(selectedItem);
+      this.responseDetailFields = [
+        {
+          wrappers: ['form-crud-accordion'],
+          props: { label: 'Item details', expanded: false },
+          fieldGroupClassName: 'row g-3',
+          fieldGroup: effectiveFields.map(field =>
+            this.schemaField(field, readonly, 0, this.responseDetailModel, this.responseDetailForm, this.responseDetailModel, this.currentResource()?.updateOperation ?? this.selectedOperation()),
+          ),
+        },
+      ];
+      return;
+    }
+    this.fields = this.fieldsForOperation(this.selectedOperation());
+  }
+
+  private fieldsForOperation(operation: OpenApiOperationDefinition): FormlyFieldConfig[] {
+    const fields: FormlyFieldConfig[] = [];
+    const parameterFields = this.parameterFields(operation);
+    if (parameterFields.length) {
+      fields.push({
+        fieldGroupClassName: 'row g-3',
+        props: { label: 'Parameters' },
+        fieldGroup: parameterFields,
+      });
+    }
+
+    const bodyFields = operation.requestBodyFields ?? [];
+    if (operation.requestContentType && bodyFields.length) {
+      fields.push({
+        key: 'body',
+        wrappers: ['form-crud-accordion'],
+        props: { label: 'Main information', description: operation.requestContentType, expanded: false },
+        fieldGroupClassName: 'row g-3',
+        fieldGroup: this.schemaFieldGroup(bodyFields, false, 0, this.model.body as Record<string, unknown>, this.form, this.model as unknown as Record<string, unknown>, operation),
+      });
+    }
+
+    return fields;
+  }
+
+  private parameterFields(operation: OpenApiOperationDefinition): FormlyFieldConfig[] {
+    return operation.parameters.map(parameter => ({
+      key: `parameters.${this.parameterKey(parameter)}`,
+      type: parameter.enumValues?.length ? 'select' : 'input',
+      className: 'col-12 col-md-6',
+      props: {
+        label: `${parameter.location}: ${parameter.name}`,
+        required: parameter.required,
+        type: this.inputType(parameter.type, parameter.format),
+        step: this.inputStep(parameter.format),
+        min: parameter.minimum,
+        max: parameter.maximum,
+        minLength: parameter.minLength,
+        maxLength: parameter.maxLength,
+        pattern: parameter.pattern,
+        options: parameter.enumValues?.map(value => ({ label: value, value })),
+      },
+      expressions: {
+        'props.description': () => parameter.description ?? (parameter.required ? 'Required' : ''),
+      },
+    }));
+  }
+
+  private schemaField(
+    field: OpenApiSchemaField,
+    readonly = false,
+    depth = 0,
+    targetModel: Record<string, unknown> = this.model.body as Record<string, unknown>,
+    targetForm: FormGroup = this.form,
+    formValue: Record<string, unknown> = this.model as unknown as Record<string, unknown>,
+    operation: OpenApiOperationDefinition = this.selectedOperation(),
+  ): FormlyFieldConfig {
+    const disabled = readonly || field.readOnly === true;
+    if (field.type === 'object' && field.fields?.length) {
+      return {
+        key: field.name,
+        className: 'col-12',
+        wrappers: ['form-crud-accordion'],
+        props: {
+          label: this.fieldLabel(field),
+          required: field.required,
+          disabled,
+          description: field.description,
+          expanded: false,
+          clearable: !disabled && !field.required,
+        },
+        fieldGroupClassName: 'row g-3',
+        fieldGroup: this.schemaFieldGroup(field.fields, readonly, depth + 1, targetModel, targetForm, formValue, operation),
+      };
+    }
+
+    if (field.type === 'array') {
+      const itemField = this.arrayItemField(this.effectiveArrayItemField(field), readonly, depth + 1, field, targetModel, targetForm, formValue, operation);
+      const referencePicker = this.referencePickerForField(field, operation);
+      return {
+        key: field.name,
+        type: 'form-crud-repeat',
+        className: 'col-12',
+        defaultValue: this.deepClone(this.initialFieldValue(field)),
+        props: {
+          label: this.fieldLabel(field),
+          required: field.required,
+          disabled,
+          description: field.description,
+          itemLabel: this.singularLabel(this.fieldLabel(field)),
+          minItems: field.minItems,
+          maxItems: field.maxItems,
+          referencePicker,
+          openReferencePicker: disabled ? undefined : () => this.openReferencePicker(field, targetModel, targetForm, formValue, operation),
+        },
+        fieldArray: itemField,
+      };
+    }
+
+    if (field.type === 'object') {
+      return this.objectJsonField(field, disabled);
+    }
+
+    return {
+      key: field.name,
+      type: field.enumValues?.length ? 'select' : field.type === 'boolean' ? 'checkbox' : 'input',
+      className: 'col-12 col-md-6',
+      defaultValue: this.isFileInputField(field, operation) ? '' : this.initialFieldValue(field),
+      props: {
+        label: this.fieldLabel(field),
+        required: this.formlyRequired(field),
+        requiredIndicator: field.required,
+        disabled,
+        description: field.description,
+        type: this.inputType(field.type, field.format, operation.requestContentType),
+        step: this.inputStep(field.format),
+        min: field.minimum,
+        max: field.maximum,
+        minLength: field.minLength,
+        maxLength: field.maxLength,
+        pattern: field.pattern,
+        options: field.enumValues?.map(value => ({ label: value, value })),
+      },
+    };
+  }
+
+  private schemaFieldGroup(
+    fields: readonly OpenApiSchemaField[],
+    readonly = false,
+    depth = 0,
+    targetModel: Record<string, unknown> = this.model.body as Record<string, unknown>,
+    targetForm: FormGroup = this.form,
+    formValue: Record<string, unknown> = this.model as unknown as Record<string, unknown>,
+    operation: OpenApiOperationDefinition = this.selectedOperation(),
+  ): FormlyFieldConfig[] {
+    const orderedFields = this.orderSchemaFields(fields);
+    const metadataFields = orderedFields.filter(field => this.isMetadataField(field));
+    const businessFields = orderedFields.filter(field => !this.isMetadataField(field));
+    const output = businessFields.map(field => this.schemaField(field, readonly, depth, targetModel, targetForm, formValue, operation));
+    if (metadataFields.length) {
+      output.push({
+        className: 'col-12',
+        wrappers: ['form-crud-accordion'],
+        props: {
+          label: 'Metadata',
+          expanded: false,
+          description: 'Type and schema metadata from the OpenAPI model.',
+        },
+        fieldGroupClassName: 'row g-3',
+        fieldGroup: metadataFields.map(field => this.schemaField(field, readonly, depth + 1, targetModel, targetForm, formValue, operation)),
+      });
+    }
+    return output;
+  }
+
+  private orderSchemaFields(fields: readonly OpenApiSchemaField[]): OpenApiSchemaField[] {
+    const priority = new Map([
+      ['id', 0],
+      ['tmfid', 1],
+      ['href', 2],
+      ['name', 3],
+      ['description', 4],
+      ['lifecyclestatus', 5],
+    ]);
+    return [...fields].sort((left, right) => {
+      const leftPriority = priority.get(this.normalizedName(left.name)) ?? 100;
+      const rightPriority = priority.get(this.normalizedName(right.name)) ?? 100;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      return 0;
+    });
+  }
+
+  private isMetadataField(field: OpenApiSchemaField): boolean {
+    return ['@type', '@baseType', '@referredType', '@schemaLocation'].includes(field.name);
+  }
+
+  private isAdvancedField(field: OpenApiSchemaField): boolean {
+    const normalized = this.normalizedName(field.name);
+    return (
+      ['relationship', 'relationships', 'related', 'characteristic', 'characteristics', 'metadata', 'schema', 'attachment'].some(keyword =>
+        normalized.includes(keyword),
+      ) || field.type === 'array'
+    );
+  }
+
+  private arrayItemField(
+    field: OpenApiSchemaField,
+    readonly: boolean,
+    depth: number,
+    arrayField?: OpenApiSchemaField,
+    targetModel: Record<string, unknown> = this.model.body as Record<string, unknown>,
+    targetForm: FormGroup = this.form,
+    formValue: Record<string, unknown> = this.model as unknown as Record<string, unknown>,
+    operation: OpenApiOperationDefinition = this.selectedOperation(),
+  ): FormlyFieldConfig {
+    const disabled = readonly || field.readOnly === true;
+    const inferredItemFields = this.inferredArrayItemFields(field, arrayField);
+    if (inferredItemFields.length && (field.type !== 'object' || !field.fields?.length)) {
+      return {
+        defaultValue: this.deepClone(this.initialFieldValue({ ...field, type: 'object', fields: inferredItemFields })),
+        fieldGroupClassName: 'row g-3',
+        fieldGroup: this.schemaFieldGroup(inferredItemFields, readonly, depth + 1, targetModel, targetForm, formValue, operation),
+      };
+    }
+    if (field.type === 'object') {
+      const itemFields = field.fields?.length ? field.fields : inferredItemFields;
+      if (itemFields.length) {
+        return {
+          defaultValue: this.deepClone(this.initialFieldValue({ ...field, fields: itemFields })),
+          fieldGroupClassName: 'row g-3',
+          fieldGroup: this.schemaFieldGroup(itemFields, readonly, depth + 1, targetModel, targetForm, formValue, operation),
+        };
+      }
+      return {
+        ...this.objectJsonField(field, disabled, false),
+        defaultValue: this.structuredDefaultValue(field),
+      };
+    }
+    if (field.type === 'array') {
+      return this.schemaField({ ...field, name: 'value', path: ['value'], pointer: '/value' }, disabled, depth + 1, targetModel, targetForm, formValue, operation);
+    }
+    return {
+      type: field.enumValues?.length ? 'select' : field.type === 'boolean' ? 'checkbox' : 'input',
+      props: {
+        label: this.fieldLabel(field),
+        required: this.formlyRequired(field),
+        requiredIndicator: field.required,
+        disabled,
+        description: field.description,
+        type: this.inputType(field.type, field.format, operation.requestContentType),
+        step: this.inputStep(field.format),
+        min: field.minimum,
+        max: field.maximum,
+        minLength: field.minLength,
+        maxLength: field.maxLength,
+        pattern: field.pattern,
+        options: field.enumValues?.map(value => ({ label: value, value })),
+      },
+    };
+  }
+
+  private initialModel(operation: OpenApiOperationDefinition): FormCrudModel {
+    const parameters = Object.fromEntries(
+      operation.parameters.map(parameter => [this.parameterKey(parameter), this.initialParameterValue(parameter)]),
+    );
+    const body = operation.requestBodyFields?.length ? this.initialBodyModel(operation.requestBodyFields, operation.requestBodyExample) : {};
+    return { parameters, body };
+  }
+
+  private initialParameterValue(parameter: OpenApiOperationParameter): unknown {
+    const source = parameter.example ?? parameter.defaultValue;
+    if (source !== undefined) {
+      const value = parameter.type === 'string' ? String(source) : source;
+      if (parameter.type !== 'string' || !this.stringViolatesConstraints(this.parameterAsSchemaField(parameter), value as string)) return value;
+    }
+    return parameter.required ? this.generatedParameterValue(parameter) : (parameter.defaultValue ?? '');
+  }
+
+  private generatedParameterValue(parameter: OpenApiOperationParameter): unknown {
+    if (parameter.enumValues?.length) return parameter.enumValues[0];
+    if (parameter.type === 'boolean') return false;
+    if (parameter.type === 'integer' || parameter.type === 'number') return 1;
+    if (parameter.format === 'uuid') return '00000000-0000-4000-8000-000000000000';
+    if (parameter.format === 'date') return '2026-01-01';
+    if (parameter.format === 'date-time') return '2026-01-01T00:00:00';
+    const field = this.parameterAsSchemaField(parameter);
+    const patternValue = this.patternStringDefaultValue(field);
+    if (patternValue !== undefined) return patternValue;
+    const minimumLength = Math.max(parameter.minLength ?? 1, 1);
+    const maximumLength = parameter.maxLength ?? Math.max(minimumLength, 8);
+    const length = Math.min(minimumLength, maximumLength);
+    return 'x'.repeat(length);
+  }
+
+  private parameterAsSchemaField(parameter: OpenApiOperationParameter): OpenApiSchemaField {
+    return {
+      name: parameter.name,
+      pointer: `/${parameter.location}/${parameter.name}`,
+      path: [parameter.location, parameter.name],
+      required: parameter.required,
+      nullable: false,
+      type: parameter.type,
+      format: parameter.format,
+      enumValues: parameter.enumValues,
+      minLength: parameter.minLength,
+      maxLength: parameter.maxLength,
+      minimum: parameter.minimum,
+      maximum: parameter.maximum,
+      pattern: parameter.pattern,
+    };
+  }
+
+  private initialBodyModel(fields: readonly OpenApiSchemaField[], source?: unknown): Record<string, unknown> {
+    const model: Record<string, unknown> = {};
+    const sourceObject = source && typeof source === 'object' && !Array.isArray(source) ? (source as Record<string, unknown>) : {};
+    for (const field of fields) {
+      model[field.name] =
+        sourceObject[field.name] !== undefined ? this.initialValueFromRaw(field, sourceObject[field.name]) : this.initialFieldValue(field);
+    }
+    return model;
+  }
+
+  private initialFieldValue(field: OpenApiSchemaField): unknown {
+    if (field.discriminatorValues?.length) return field.discriminatorValues[0];
+    if (field.example !== undefined) return this.initialValueFromRaw(field, field.example);
+    if (field.defaultValue !== undefined) return this.initialValueFromRaw(field, field.defaultValue);
+    return this.generatedInitialFieldValue(field);
+  }
+
+  private generatedInitialFieldValue(field: OpenApiSchemaField): unknown {
+    if (field.type === 'object' && field.fields?.length) return this.initialBodyModel(field.fields);
+    if (field.type === 'array') {
+      const minimumItems = Math.max(field.minItems ?? 0, field.required ? 1 : 0);
+      const maximumItems = field.maxItems ?? minimumItems;
+      const itemCount = Math.min(minimumItems, maximumItems);
+      const itemField = this.effectiveArrayItemField(field);
+      return itemField && itemCount > 0 ? Array.from({ length: itemCount }, () => this.initialFieldValue(itemField)) : [];
+    }
+    if (field.type === 'object') return this.structuredDefaultValue(field);
+    if (field.discriminatorValues?.length) return field.discriminatorValues[0];
+    if (field.enumValues?.length) return field.enumValues[0];
+    if (field.type === 'boolean') return false;
+    if (field.type === 'integer' || field.type === 'number') return this.numericDefaultValue(field);
+    if (field.type === 'string') return this.stringDefaultValue(field);
+    return '';
+  }
+
+  private initialValueFromRaw(field: OpenApiSchemaField, rawValue: unknown): unknown {
+    if (field.type === 'object' && field.fields?.length) {
+      const rawObject = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) ? (rawValue as Record<string, unknown>) : {};
+      return Object.fromEntries(
+        field.fields.map(child => [
+          child.name,
+          rawObject[child.name] !== undefined
+            ? this.initialValueFromRaw(child, rawObject[child.name])
+            : child.example !== undefined
+              ? this.initialValueFromRaw(child, child.example)
+              : child.defaultValue !== undefined
+                ? this.initialValueFromRaw(child, child.defaultValue)
+                : this.generatedInitialFieldValue(child),
+        ]),
+      );
+    }
+    if (field.type === 'array') {
+      const source = Array.isArray(rawValue) ? rawValue : [];
+      if (
+        !field.required &&
+        !field.items &&
+        !field.minItems &&
+        source.length > 0 &&
+        (source.every(item => this.isEmptyStructuredValue(item)) || this.hasUnsafeOptionalArrayExample(field, source))
+      ) {
+        return [];
+      }
+      const itemField = this.effectiveArrayItemField(field, this.firstArrayValue(source));
+      if (!itemField) return source;
+      const values = source.map(item => this.initialValueFromRaw(itemField, item));
+      const minimumItems = Math.max(field.minItems ?? 0, field.required ? 1 : 0);
+      const maximumItems = field.maxItems ?? minimumItems;
+      const targetItemCount = Math.min(minimumItems, maximumItems);
+      while (values.length < targetItemCount) values.push(this.initialFieldValue(itemField));
+      return values;
+    }
+    if (field.type === 'object') return JSON.stringify(this.normalizedCompactObjectValue(field, rawValue), null, 2);
+    if (field.discriminatorValues?.length) return this.allowedStringValue(rawValue, field.discriminatorValues);
+    if (field.enumValues?.length) return this.allowedStringValue(rawValue, field.enumValues);
+    if (field.type === 'string' && field.format === 'date-time') return this.dateTimeInputValue(rawValue);
+    if (field.type === 'string' && this.isPlaceholderMetadataValue(field, rawValue)) return this.generatedInitialFieldValue(field);
+    if (field.type === 'string') return this.validStringInputValue(field, rawValue);
+    return rawValue ?? this.generatedInitialFieldValue(field);
+  }
+
+  private isPlaceholderMetadataValue(field: OpenApiSchemaField, rawValue: unknown): boolean {
+    if (field.required || rawValue !== 'string') return false;
+    return ['@type', '@baseType', '@schemaLocation', '@referredType'].includes(field.name);
+  }
+
+  private normalizedCompactObjectValue(field: OpenApiSchemaField, rawValue: unknown): Record<string, unknown> {
+    const value = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) ? { ...(rawValue as Record<string, unknown>) } : {};
+    const example = field.example && typeof field.example === 'object' && !Array.isArray(field.example) ? (field.example as Record<string, unknown>) : {};
+    for (const [key, exampleValue] of Object.entries(example)) {
+      if (value[key] === undefined || this.isPlaceholderExampleValue(value[key], exampleValue)) {
+        value[key] = this.deepClone(exampleValue);
+      }
+    }
+    return value;
+  }
+
+  private isPlaceholderExampleValue(value: unknown, exampleValue: unknown): boolean {
+    return value === 'string' && typeof exampleValue === 'string' && exampleValue.length > 0 && exampleValue !== 'string';
+  }
+
+  private structuredDefaultValue(field: OpenApiSchemaField): string {
+    const value = field.example ?? field.defaultValue ?? (field.type === 'array' ? [] : {});
+    return JSON.stringify(value, null, 2);
+  }
+
+  private objectJsonField(field: OpenApiSchemaField, readonly: boolean, includeKey = true): FormlyFieldConfig {
+    const config: FormlyFieldConfig = {
+      type: 'textarea',
+      className: 'col-12',
+      defaultValue: this.structuredDefaultValue(field),
+      props: {
+        label: this.fieldLabel(field),
+        required: field.required,
+        disabled: readonly,
+        rows: 5,
+        description: field.description ?? 'JSON object',
+      },
+      validators: {
+        json: {
+          expression: (control: { value: unknown }) => this.validJson(control.value),
+          message: () => 'Valid JSON is required',
+        },
+      },
+    };
+    if (includeKey) config.key = field.name;
+    return config;
+  }
+
+  private numericDefaultValue(field: OpenApiSchemaField): number {
+    if (typeof field.minimum === 'number') return field.minimum;
+    if (typeof field.maximum === 'number' && field.maximum < 0) return field.maximum;
+    return 0;
+  }
+
+  private stringDefaultValue(field: OpenApiSchemaField): string {
+    if (!field.required) return '';
+    if (field.format === 'date') return '2026-01-01';
+    if (field.format === 'date-time') return '2026-01-01T00:00:00';
+    if (field.format === 'email') return 'user@example.com';
+    const patternValue = this.patternStringDefaultValue(field);
+    if (patternValue !== undefined) return patternValue;
+    const minimumLength = Math.max(field.minLength ?? 1, 1);
+    const maximumLength = field.maxLength ?? Math.max(minimumLength, 8);
+    const length = Math.min(Math.max(minimumLength, 1), maximumLength);
+    return 'x'.repeat(length);
+  }
+
+  private validStringInputValue(field: OpenApiSchemaField, rawValue: unknown): unknown {
+    if (rawValue === undefined || rawValue === null) return this.generatedInitialFieldValue(field);
+    const value = String(rawValue);
+    if (!this.stringViolatesConstraints(field, value)) return value;
+    return this.generatedInitialFieldValue(field);
+  }
+
+  private patternStringDefaultValue(field: OpenApiSchemaField): string | undefined {
+    if (!field.pattern) return undefined;
+    const generated = this.defaultFromSimplePattern(field.pattern, field.minLength ?? 1);
+    if (generated === undefined) return undefined;
+    const minimumLength = field.minLength ?? 0;
+    const maximumLength = field.maxLength ?? Number.POSITIVE_INFINITY;
+    const padded = generated.length < minimumLength ? generated + this.repeatPatternPadCharacter(generated).repeat(minimumLength - generated.length) : generated;
+    if (padded.length > maximumLength) return undefined;
+    return this.stringViolatesConstraints(field, padded) ? undefined : padded;
+  }
+
+  private defaultFromSimplePattern(pattern: string, minimumLength: number): string | undefined {
+    const source = pattern.replace(/^\^/, '').replace(/\$$/, '');
+    let output = '';
+    for (let index = 0; index < source.length; ) {
+      const parsed = this.patternTokenDefault(source, index, minimumLength);
+      if (!parsed) {
+        index++;
+        continue;
+      }
+      output += parsed.value;
+      index = parsed.nextIndex;
+    }
+    if (!output && source.includes('\\S')) output = 'x';
+    return output || undefined;
+  }
+
+  private patternTokenDefault(source: string, index: number, minimumLength: number): { value: string; nextIndex: number } | undefined {
+    if (source.startsWith('\\S', index)) return this.repeatedPatternToken('x', source, index + 2, minimumLength);
+    if (source.startsWith('\\d', index)) return this.repeatedPatternToken('0', source, index + 2, minimumLength);
+    if (source[index] === '[') {
+      const end = source.indexOf(']', index + 1);
+      if (end === -1) return undefined;
+      return this.repeatedPatternToken(this.characterForClass(source.slice(index + 1, end)), source, end + 1, minimumLength);
+    }
+    const literal = source[index];
+    if (/^[A-Za-z0-9]$/.test(literal)) return this.repeatedPatternToken(literal, source, index + 1, minimumLength);
+    return undefined;
+  }
+
+  private repeatedPatternToken(character: string, source: string, index: number, minimumLength: number): { value: string; nextIndex: number } {
+    const exact = source.slice(index).match(/^\{(\d+)(?:,(\d*))?}/);
+    if (exact) {
+      const count = Number.parseInt(exact[1], 10);
+      return { value: character.repeat(count), nextIndex: index + exact[0].length };
+    }
+    if (source[index] === '+') return { value: character.repeat(Math.max(minimumLength, 1)), nextIndex: index + 1 };
+    if (source[index] === '?') return { value: character, nextIndex: index + 1 };
+    if (source[index] === '*') return { value: '', nextIndex: index + 1 };
+    return { value: character, nextIndex: index };
+  }
+
+  private characterForClass(characterClass: string): string {
+    if (characterClass.includes('A-Z')) return 'A';
+    if (characterClass.includes('a-z')) return 'a';
+    const digitRange = characterClass.match(/(\d)-\d/);
+    if (digitRange) return digitRange[1];
+    const literal = characterClass.replace(/\\/g, '').match(/[A-Za-z0-9]/);
+    return literal?.[0] ?? 'x';
+  }
+
+  private repeatPatternPadCharacter(value: string): string {
+    return value[value.length - 1] ?? 'x';
+  }
+
+  private stringViolatesConstraints(field: OpenApiSchemaField, value: string): boolean {
+    if (field.minLength !== undefined && value.length < field.minLength) return true;
+    if (field.maxLength !== undefined && value.length > field.maxLength) return true;
+    if (!field.pattern) return false;
+    try {
+      return !new RegExp(field.pattern).test(value);
+    } catch {
+      return false;
+    }
+  }
+
+  private buildRequest(
+    operation: OpenApiOperationDefinition,
+    options: {
+      pathValues?: Record<string, unknown>;
+      bodySource?: unknown;
+      fields?: readonly OpenApiSchemaField[];
+      includeEmptyStructures?: boolean;
+      omitAbsentEmptyStructures?: boolean;
+      originalBodySource?: unknown;
+    } = {},
+  ): {
+    method: string;
+    url: string;
+    params: HttpParams;
+    headers: HttpHeaders;
+    body: unknown;
+  } {
+    let url = this.apiPath(operation.path);
+    let params = new HttpParams();
+    let headers = new HttpHeaders();
+
+    for (const parameter of operation.parameters) {
+      const value = parameter.location === 'path' && options.pathValues ? options.pathValues[parameter.name] : this.model.parameters[this.parameterKey(parameter)];
+      if (value === '' || value === undefined || value === null) continue;
+      const stringValue = this.scalarValueToString(value);
+      switch (parameter.location) {
+        case 'path':
+          url = url.replace(`{${parameter.name}}`, encodeURIComponent(stringValue));
+          break;
+        case 'query':
+          params = params.set(parameter.name, stringValue);
+          break;
+        case 'header':
+          headers = headers.set(parameter.name, stringValue);
+          break;
+        case 'cookie':
+          this.setCookieParameter(parameter.name, stringValue);
+          break;
+      }
+    }
+    for (const [name, value] of Object.entries(options.pathValues ?? {})) {
+      if (value !== undefined && value !== null) url = url.replace(`{${name}}`, encodeURIComponent(this.scalarValueToString(value)));
+    }
+
+    let body: unknown;
+    if (operation.requestContentType) {
+      body = this.bodyForOperation(operation, options.bodySource, options.fields, {
+        includeEmptyStructures: options.includeEmptyStructures,
+        omitAbsentEmptyStructures: options.omitAbsentEmptyStructures,
+        originalSource: options.originalBodySource,
+      });
+      if (!this.isMultipartContentType(operation.requestContentType)) {
+        headers = headers.set('Content-Type', operation.requestContentType);
+      }
+    }
+
+    return { method: operation.method, url, params, headers, body };
+  }
+
+  private bodyForOperation(
+    operation: OpenApiOperationDefinition,
+    bodySource: unknown = this.model.body,
+    bodyFields?: readonly OpenApiSchemaField[],
+    options: boolean | BodySerializationOptions = false,
+  ): unknown {
+    const serializationOptions = this.bodySerializationOptions(options);
+    const fields = this.payloadFieldsForOperation(operation, bodyFields ?? operation.requestBodyFields ?? []);
+    const body =
+      fields.length === 1 && fields[0].path.length === 0
+        ? this.valueForField(fields[0], bodySource, serializationOptions)
+        : this.objectFromFields(fields, bodySource, serializationOptions);
+    const contentType = operation.requestContentType ?? '';
+    if (contentType.includes('application/x-www-form-urlencoded') && body && typeof body === 'object' && !Array.isArray(body)) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(body)) {
+        if (value !== undefined && value !== null) params.set(key, this.scalarValueToString(value));
+      }
+      return params.toString();
+    }
+    if (this.isMultipartContentType(contentType)) {
+      const formData = new FormData();
+      if (body && typeof body === 'object' && !Array.isArray(body)) {
+        for (const [key, value] of Object.entries(body)) {
+          this.appendFormDataValue(formData, key, value);
+        }
+      }
+      return formData;
+    }
+    return body;
+  }
+
+  private bodySerializationOptions(options: boolean | BodySerializationOptions): BodySerializationOptions {
+    return typeof options === 'boolean' ? { includeEmptyStructures: options } : options;
+  }
+
+  private payloadFieldsForOperation(operation: OpenApiOperationDefinition, fields: readonly OpenApiSchemaField[]): readonly OpenApiSchemaField[] {
+    const pathParameters = new Set(this.pathParameterNames(operation).map(parameter => this.normalizedName(parameter)));
+    return fields
+      .filter(field => this.isWritablePayloadField(operation, field, pathParameters))
+      .map(field => this.payloadFieldForOperation(operation, field, pathParameters));
+  }
+
+  private payloadFieldForOperation(
+    operation: OpenApiOperationDefinition,
+    field: OpenApiSchemaField,
+    pathParameters: ReadonlySet<string>,
+  ): OpenApiSchemaField {
+    const next: OpenApiSchemaField = { ...field };
+    if (field.fields?.length) {
+      next.fields = field.fields
+        .filter(child => this.isWritablePayloadField(operation, child, pathParameters, true))
+        .map(child => this.payloadFieldForOperation(operation, child, pathParameters));
+    }
+    if (field.items) {
+      next.items = this.payloadFieldForOperation(operation, field.items, pathParameters);
+    }
+    return next;
+  }
+
+  private isWritablePayloadField(
+    operation: OpenApiOperationDefinition,
+    field: OpenApiSchemaField,
+    pathParameters: ReadonlySet<string>,
+    nested = false,
+  ): boolean {
+    if (field.readOnly && !this.isReferencePickerCopiedPayloadField(operation, field)) return false;
+    if (!nested && pathParameters.size && ['PATCH', 'PUT'].includes(operation.method) && pathParameters.has(this.normalizedName(field.name))) return false;
+    return true;
+  }
+
+  private isReferencePickerCopiedPayloadField(operation: OpenApiOperationDefinition, field: OpenApiSchemaField): boolean {
+    const fieldPath = this.pathWithoutArrayIndexes(this.normalizeFieldPath(field.path.length ? field.path.join('.') : field.name));
+    if (!fieldPath) return false;
+    for (const config of this.referencePickerConfigs().filter(candidate => this.referencePickerMatchesOperation(candidate, operation))) {
+      const sourcePath = this.pathWithoutArrayIndexes(this.normalizeFieldPath(config.sourcePath));
+      if (!sourcePath) continue;
+      const targetField = this.findSchemaFieldByPath(operation.requestBodyFields ?? [], sourcePath);
+      for (const mapping of this.effectiveReferencePickerMappings(config, config.copyFields ?? [], targetField)) {
+        const targetPath = this.pathWithoutArrayIndexes(this.normalizeFieldPath(mapping.target));
+        if (!targetPath) continue;
+        const rootedTargetPath = targetPath === sourcePath || targetPath.startsWith(`${sourcePath}.`) ? targetPath : `${sourcePath}.${targetPath}`;
+        if (fieldPath === rootedTargetPath) return true;
+      }
+    }
+    return false;
+  }
+
+  private objectFromFields(fields: readonly OpenApiSchemaField[], source: unknown, options: boolean | BodySerializationOptions = false): Record<string, unknown> {
+    const serializationOptions = this.bodySerializationOptions(options);
+    const output: Record<string, unknown> = {};
+    const sourceObject = source && typeof source === 'object' && !Array.isArray(source) ? (source as Record<string, unknown>) : {};
+    const originalObject =
+      serializationOptions.originalSource && typeof serializationOptions.originalSource === 'object' && !Array.isArray(serializationOptions.originalSource)
+        ? (serializationOptions.originalSource as Record<string, unknown>)
+        : {};
+    for (const field of fields) {
+      const value = this.valueForField(field, sourceObject[field.name], {
+        ...serializationOptions,
+        originalSource: originalObject[field.name],
+      });
+      if (this.includeValue(field, value, serializationOptions.includeEmptyStructures === true)) output[field.name] = value;
+    }
+    return output;
+  }
+
+  private valueForField(field: OpenApiSchemaField, rawValue: unknown, options: boolean | BodySerializationOptions = false): unknown {
+    const serializationOptions = this.bodySerializationOptions(options);
+    if (field.type === 'object' && field.fields?.length) {
+      const source = typeof rawValue === 'string' ? this.parseJsonValue(rawValue) : rawValue;
+      const value = this.objectFromFields(field.fields, source, serializationOptions);
+      if (!field.required && this.hasDirectPlaceholderType(value)) {
+        return undefined;
+      }
+      if (this.isOptionalPolymorphicPlaceholderObject(field, value)) {
+        return undefined;
+      }
+      if (!field.required && !this.hasRequiredPayloadValues(field, value)) {
+        return undefined;
+      }
+      if (
+        serializationOptions.omitAbsentEmptyStructures &&
+        !field.required &&
+        (!this.hasOriginalStructuredValue(serializationOptions.originalSource) ||
+          this.isEmptyStructuredValue(serializationOptions.originalSource)) &&
+        Object.keys(value).length === 0
+      ) {
+        return undefined;
+      }
+      return value;
+    }
+    if (field.type === 'array') {
+      const source = Array.isArray(rawValue) ? rawValue : [];
+      if (serializationOptions.omitAbsentEmptyStructures && !Array.isArray(serializationOptions.originalSource) && source.length === 0) return undefined;
+      const itemField = this.effectiveArrayItemField(field, this.firstArrayValue(source));
+      return itemField
+        ? source
+            .map((item, index) =>
+              this.valueForField(itemField, item, {
+                ...serializationOptions,
+                originalSource: Array.isArray(serializationOptions.originalSource) ? serializationOptions.originalSource[index] : undefined,
+              }),
+            )
+            .filter(value => value !== undefined && !this.hasDirectPlaceholderType(value))
+        : source;
+    }
+    if (field.type === 'object') {
+      const value = this.sanitizePlaceholderPayload(this.parseJsonValue(rawValue));
+      if (!field.required && value === undefined) {
+        return undefined;
+      }
+      if (
+        serializationOptions.omitAbsentEmptyStructures &&
+        !field.required &&
+        this.isEmptyStructuredValue(value) &&
+        (!this.hasOriginalStructuredValue(serializationOptions.originalSource) ||
+          this.isEmptyStructuredValue(serializationOptions.originalSource))
+      ) {
+        return undefined;
+      }
+      return value;
+    }
+    if (rawValue === '') return field.nullable ? null : undefined;
+    if (field.type === 'string' && field.format === 'binary') return this.fileUploadValue(rawValue);
+    if (field.type === 'string' && field.format === 'date-time') return this.normalizeDateTimeValue(rawValue);
+    if (field.type === 'integer') return typeof rawValue === 'number' ? Math.trunc(rawValue) : Number.parseInt(String(rawValue), 10);
+    if (field.type === 'number') return typeof rawValue === 'number' ? rawValue : Number(rawValue);
+    if (field.type === 'boolean') return rawValue === true || rawValue === 'true';
+    if (field.discriminatorValues?.length) return this.allowedStringValue(rawValue, field.discriminatorValues);
+    if (field.enumValues?.length) return this.allowedStringValue(rawValue, field.enumValues);
+    return rawValue;
+  }
+
+  private hasDirectPlaceholderType(value: unknown): boolean {
+    return Boolean(value && typeof value === 'object' && !Array.isArray(value) && (value as Record<string, unknown>)['@type'] === 'string');
+  }
+
+  private sanitizePlaceholderPayload(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value
+        .map(item => this.sanitizePlaceholderPayload(item))
+        .filter(item => item !== undefined && !this.hasDirectPlaceholderType(item));
+    }
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+    if (this.hasDirectPlaceholderType(value)) {
+      return undefined;
+    }
+    const output: Record<string, unknown> = {};
+    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+      const sanitizedValue = this.sanitizePlaceholderPayload(nestedValue);
+      if (sanitizedValue !== undefined) {
+        output[key] = sanitizedValue;
+      }
+    }
+    return output;
+  }
+
+  private isOptionalPolymorphicPlaceholderObject(field: OpenApiSchemaField, value: unknown): boolean {
+    if (field.required || !field.fields?.length || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const discriminatorField = field.fields.find(child => child.discriminatorValues?.length || (child.name === '@type' && child.enumValues?.length));
+    if (!discriminatorField) return false;
+    const requiredFields = field.fields.filter(child => child.required);
+    if (requiredFields.some(child => child.name !== discriminatorField.name)) return false;
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, childValue]) => childValue !== undefined && childValue !== null);
+    if (!entries.length) return false;
+    return entries.every(([key, childValue]) => key === discriminatorField.name || this.isPlaceholderPayloadValue(childValue));
+  }
+
+  private isPlaceholderPayloadValue(value: unknown): boolean {
+    if (value === undefined || value === null || value === '') return true;
+    if (value === 'string') return true;
+    if (Array.isArray(value)) return value.every(item => this.isPlaceholderPayloadValue(item));
+    if (typeof value === 'object') return Object.values(value as Record<string, unknown>).every(child => this.isPlaceholderPayloadValue(child));
+    return false;
+  }
+
+  private hasRequiredPayloadValues(field: OpenApiSchemaField, value: unknown): boolean {
+    if (field.type === 'object' && field.fields?.length) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+      const objectValue = value as Record<string, unknown>;
+      for (const child of field.fields) {
+        const childValue = objectValue[child.name];
+        if (child.required && !this.payloadValuePresent(child, childValue)) return false;
+        if (childValue !== undefined && childValue !== null && !this.hasRequiredPayloadValues(child, childValue)) return false;
+      }
+      return true;
+    }
+    if (field.type === 'array') {
+      if (!Array.isArray(value)) return false;
+      if ((field.minItems ?? 0) > value.length) return false;
+      const itemField = this.effectiveArrayItemField(field, this.firstArrayValue(value));
+      return itemField ? value.every(item => this.hasRequiredPayloadValues(itemField, item)) : true;
+    }
+    return true;
+  }
+
+  private payloadValuePresent(field: OpenApiSchemaField, value: unknown): boolean {
+    if (value === undefined) return false;
+    if (value === null) return field.nullable;
+    if (field.type === 'string' && value === '') return false;
+    if (field.type === 'array') return Array.isArray(value);
+    if (field.type === 'object') return typeof value === 'object' && !Array.isArray(value);
+    return true;
+  }
+
+  private hasOriginalStructuredValue(value: unknown): boolean {
+    return value !== undefined && value !== null && typeof value === 'object';
+  }
+
+  private isEmptyStructuredValue(value: unknown): boolean {
+    return (
+      (Array.isArray(value) && value.length === 0) ||
+      (value !== undefined && value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+    );
+  }
+
+  private hasUnsafeOptionalArrayExample(field: OpenApiSchemaField, source: readonly unknown[]): boolean {
+    if (field.items || field.required || field.minItems) return false;
+    const samples = [this.firstArrayExampleItem(field), ...source].filter(sample => sample !== undefined && sample !== null);
+    return samples.some(sample => this.hasPlaceholderMetadataString(sample) || this.isMetadataOnlyObject(sample));
+  }
+
+  private hasPlaceholderMetadataString(value: unknown): boolean {
+    if (Array.isArray(value)) return value.some(item => this.hasPlaceholderMetadataString(item));
+    if (!value || typeof value !== 'object') return false;
+    return Object.entries(value as Record<string, unknown>).some(([key, child]) =>
+      ['@type', '@baseType', '@schemaLocation', '@referredType'].includes(key) && child === 'string'
+        ? true
+        : this.hasPlaceholderMetadataString(child),
+    );
+  }
+
+  private isMetadataOnlyObject(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const entries = Object.entries(value as Record<string, unknown>).filter(([, child]) => child !== undefined && child !== null && child !== '');
+    return entries.length > 0 && entries.every(([key]) => ['@type', '@baseType', '@schemaLocation', '@referredType'].includes(key));
+  }
+
+  private allowedStringValue(rawValue: unknown, allowedValues: readonly string[]): string {
+    const value =
+      typeof rawValue === 'string' || typeof rawValue === 'number' || typeof rawValue === 'boolean' ? String(rawValue) : '';
+    return allowedValues.includes(value) ? value : allowedValues[0];
+  }
+
+  private normalizeDateTimeValue(rawValue: unknown): unknown {
+    if (typeof rawValue !== 'string') return rawValue;
+    const value = rawValue.trim();
+    if (!value) return undefined;
+    if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return value;
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return `${value}:00Z`;
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)) return `${value}Z`;
+    return value;
+  }
+
+  private dateTimeInputValue(rawValue: unknown): unknown {
+    if (typeof rawValue !== 'string') return rawValue ?? '2026-01-01T00:00:00';
+    const value = rawValue.trim();
+    if (!value) return '';
+    const match = value.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?$/i);
+    if (!match) return value;
+    return `${match[1]}:${match[2] || '00'}`;
+  }
+
+  private deepClone<T>(value: T): T {
+    if (value === undefined || value === null) return value;
+    if (typeof globalThis.structuredClone === 'function') return globalThis.structuredClone(value);
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
+
+  private includeValue(field: OpenApiSchemaField, value: unknown, includeEmptyStructures = false): boolean {
+    if (value === undefined) return false;
+    if (value === null) return field.required || field.nullable;
+    if (typeof value === 'number' && Number.isNaN(value)) return false;
+    if (!field.required && Array.isArray(value) && value.length === 0) return includeEmptyStructures;
+    if (!field.required && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return includeEmptyStructures;
+    return true;
+  }
+
+  private parseJsonValue(value: unknown): unknown {
+    if (typeof value !== 'string') return value;
+    if (!value.trim()) return undefined;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private validJson(value: unknown): boolean {
+    if (value === undefined || value === null || value === '') return true;
+    if (typeof value !== 'string') return true;
+    try {
+      JSON.parse(value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private applyBackendValidationErrors(value: unknown, form: FormGroup): void {
+    const body = this.parseResponseBody(value);
+    const violations = this.validationViolations(body);
+    for (const violation of violations) {
+      const control = this.findControlForPath(form, violation.path);
+      if (control) {
+        control.setErrors({ ...(control.errors ?? {}), backend: violation.message });
+        control.markAsTouched();
+      }
+    }
+  }
+
+  private validationViolations(value: unknown): { path: string; message: string }[] {
+    if (!value || typeof value !== 'object') return [];
+    const body = value as Record<string, unknown>;
+    const direct = [body.fieldErrors, body.errors, body.violations].find(Array.isArray) as Record<string, unknown>[] | undefined;
+    const output: { path: string; message: string }[] = [];
+    for (const item of direct ?? []) {
+      const path = this.safeString(item.field ?? item.fieldName ?? item.propertyPath ?? item.path ?? item.name ?? '');
+      const message = this.safeString(item.message ?? item.defaultMessage ?? item.reason ?? 'Invalid value');
+      if (path) output.push({ path, message });
+    }
+    if (typeof body.message === 'string') {
+      const matches = [...body.message.matchAll(/['"]?([A-Za-z_][A-Za-z0-9_.-]*)['"]?\s+(?:is|required|must|should|may not|must not)/g)];
+      for (const match of matches) output.push({ path: match[1], message: body.message });
+    }
+    for (const key of ['detail', 'requestError', 'parseError', 'debugMessage', 'message', 'error']) {
+      const message = this.safeString(body[key]);
+      const path = this.pathFromBackendMessage(message);
+      if (path) output.push({ path, message });
+    }
+    return output;
+  }
+
+  private errorSummary(value: unknown, status?: number): string {
+    const body = this.parseResponseBody(value);
+    if (!body || typeof body !== 'object') return this.safeString(body ?? `HTTP ${status ?? 'error'}`);
+    const problem = body as Record<string, unknown>;
+    const lines = [
+      this.safeString(problem.title),
+      this.safeString(problem.detail),
+      this.safeString(problem.requestError),
+      this.safeString(problem.parseError),
+      this.safeString(problem.debugMessage),
+      this.safeString(problem.reason),
+      this.safeString(problem.message),
+      this.safeString(problem.error),
+    ].filter(Boolean);
+    for (const violation of this.validationViolations(problem)) {
+      lines.push(`${violation.path}: ${violation.message}`);
+    }
+    const cause = problem.cause;
+    if (cause && typeof cause === 'object') {
+      const causeObject = cause as Record<string, unknown>;
+      for (const key of ['title', 'detail', 'message', 'requestError', 'parseError']) {
+        const line = this.safeString(causeObject[key]);
+        if (line) lines.push(line);
+      }
+    } else {
+      const causeLine = this.safeString(cause);
+      if (causeLine) lines.push(causeLine);
+    }
+    return [...new Set(lines)].join('\n');
+  }
+
+  private formatError(value: unknown, status?: number): string {
+    const summary = this.errorSummary(value, status);
+    const body = this.parseResponseBody(value);
+    const formattedBody = this.formatBody(body);
+    if (!summary) return formattedBody || `HTTP ${status ?? 'error'}`;
+    if (!formattedBody || formattedBody === summary) return summary;
+    return `${summary}\n\n${formattedBody}`;
+  }
+
+  private findControlForPath(form: FormGroup, path: string): AbstractControl | null {
+    for (const candidate of this.controlPathCandidates(path)) {
+      const control = form.get(candidate);
+      if (control) return control;
+    }
+    return null;
+  }
+
+  private controlPathCandidates(path: string): string[] {
+    const normalizedPath = this.normalizeFieldPath(path);
+    const withoutBody = normalizedPath.replace(/^body\./, '');
+    const segments = withoutBody.split('.').filter(Boolean);
+    const lastSegment = segments.length ? segments[segments.length - 1] : withoutBody;
+    return [
+      normalizedPath,
+      withoutBody,
+      `body.${withoutBody}`,
+      lastSegment,
+    ].filter((candidate, index, candidates) => candidate.length > 0 && candidates.indexOf(candidate) === index);
+  }
+
+  private normalizeFieldPath(path: string): string {
+    const pointerPath = path.startsWith('/')
+      ? path
+          .slice(1)
+          .split('/')
+          .map(segment => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
+          .join('.')
+      : path;
+    return pointerPath
+      .replace(/\[['"]?([^'"\]]+)['"]?\]/g, '.$1')
+      .replace(/\[(\d+)]/g, '.$1')
+      .replace(/^[$.]+/, '')
+      .replace(/^\.+|\.+$/g, '');
+  }
+
+  private pathWithoutArrayIndexes(path: string): string {
+    return path
+      .split('.')
+      .filter(segment => segment && !/^\d+$/.test(segment))
+      .join('.');
+  }
+
+  private pathFromBackendMessage(message: string): string {
+    if (!message) return '';
+    const referenceChain = message.match(/through reference chain:\s*(.+)$/i);
+    if (referenceChain) {
+      const segments: string[] = [];
+      for (const match of referenceChain[1].matchAll(/\["([^"]+)"]|\[(\d+)]/g)) {
+        if (match[1]) {
+          segments.push(match[1]);
+        } else if (match[2]) {
+          segments.push(match[2]);
+        }
+      }
+      if (segments.length) return segments.join('.');
+    }
+    const fieldMatch =
+      message.match(/\bfield\s+['"]?([A-Za-z_][A-Za-z0-9_.\-[\]]*)['"]?/i) ??
+      message.match(/\bproperty\s+['"]?([A-Za-z_][A-Za-z0-9_.\-[\]]*)['"]?/i) ??
+      message.match(/\bpath\s+['"]?([A-Za-z_/$][A-Za-z0-9_./~\-[\]]*)['"]?/i);
+    return fieldMatch ? this.normalizeFieldPath(fieldMatch[1]) : '';
+  }
+
+  private safeString(value: unknown): string {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+    return JSON.stringify(value);
+  }
+
+  private inputType(type: string, format?: string, contentType = ''): string {
+    if (type === 'integer' || type === 'number') return 'number';
+    if (format === 'date') return 'date';
+    if (format === 'date-time') return 'datetime-local';
+    if (format === 'email') return 'email';
+    if (format === 'binary' && this.isFileUploadContentType(contentType)) return 'file';
+    return 'text';
+  }
+
+  private isFileInputField(field: OpenApiSchemaField, operation: OpenApiOperationDefinition): boolean {
+    return field.type === 'string' && field.format === 'binary' && this.isFileUploadContentType(operation.requestContentType ?? '');
+  }
+
+  private isFileUploadContentType(contentType: string): boolean {
+    return this.isMultipartContentType(contentType) || contentType.includes('application/octet-stream');
+  }
+
+  private inputStep(format?: string): number | undefined {
+    return format === 'date-time' ? 1 : undefined;
+  }
+
+  private formlyRequired(field: OpenApiSchemaField): boolean {
+    return field.required && field.type !== 'boolean';
+  }
+
+  private fieldLabel(field: OpenApiSchemaField): string {
+    return this.titleLabel(field.name);
+  }
+
+  private scalarValueToString(value: unknown): string {
+    return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value);
+  }
+
+  private appendFormDataValue(formData: FormData, key: string, value: unknown): void {
+    const uploadValue = this.fileUploadValue(value);
+    if (uploadValue === undefined || uploadValue === null) return;
+    if (typeof Blob !== 'undefined' && uploadValue instanceof Blob) {
+      formData.append(key, uploadValue);
+      return;
+    }
+    formData.append(key, typeof uploadValue === 'string' ? uploadValue : JSON.stringify(uploadValue));
+  }
+
+  private fileUploadValue(value: unknown): unknown {
+    if (typeof FileList !== 'undefined' && value instanceof FileList) return value.item(0) ?? undefined;
+    if (Array.isArray(value) && value.length === 1) return this.fileUploadValue(value[0]);
+    return value;
+  }
+
+  private parameterKey(parameter: OpenApiOperationParameter): string {
+    return encodeURIComponent(`${parameter.location}:${parameter.name}`);
+  }
+
+  private actionForMethod(method: string): string {
+    switch (method) {
+      case 'POST':
+        return 'Create';
+      case 'PUT':
+        return 'Replace';
+      case 'PATCH':
+        return 'Update';
+      case 'DELETE':
+        return 'Delete';
+      case 'GET':
+        return 'Read';
+      default:
+        return method;
+    }
+  }
+
+  private actionForOperation(operation: OpenApiOperationDefinition): string {
+    if (operation.method === 'GET' && !this.hasPathParameters(operation.path)) return 'List';
+    if (operation.method === 'GET') return 'View';
+    return this.actionForMethod(operation.method);
+  }
+
+  private resourceActionLabel(resource: CrudResource, operation: OpenApiOperationDefinition): string {
+    if (operation.method === 'POST') return this.singularLabel(resource.label);
+    if (operation.method === 'GET' && this.hasPathParameters(operation.path)) return this.singularLabel(resource.label);
+    if (operation.method === 'PATCH' || operation.method === 'PUT' || operation.method === 'DELETE') return this.singularLabel(resource.label);
+    return resource.label;
+  }
+
+  private resourcesForOperations(operations: readonly OpenApiOperationDefinition[]): CrudResource[] {
+    const resources = new Map<string, CrudResource>();
+    for (const operation of operations) {
+      const basePath = this.collectionPathFor(operation.path);
+      const key = this.resourceKey(basePath);
+      const existing =
+        resources.get(key) ??
+        ({
+          key,
+          label: this.pathLabel(basePath),
+          basePath,
+          operations: operations.filter(candidate => this.resourceKey(this.collectionPathFor(candidate.path)) === key),
+        } as CrudResource);
+      if (!this.hasPathParameters(operation.path) && operation.method === 'GET') existing.listOperation ??= operation;
+      if (!this.hasPathParameters(operation.path) && operation.method === 'POST') existing.createOperation ??= operation;
+      if (this.hasPathParameters(operation.path) && operation.method === 'GET') existing.detailOperation ??= operation;
+      if (this.hasPathParameters(operation.path) && (operation.method === 'PATCH' || operation.method === 'PUT')) existing.updateOperation ??= operation;
+      if (this.hasPathParameters(operation.path) && operation.method === 'DELETE') existing.deleteOperation ??= operation;
+      resources.set(key, existing);
+    }
+    return [...resources.values()]
+      .filter(resource => resource.listOperation !== undefined || resource.createOperation !== undefined)
+      .sort((left, right) => left.label.localeCompare(right.label));
+  }
+
+  private resourceGroupsForResources(resources: readonly CrudResource[]): CrudResourceGroup[] {
+    const tmfStyleApi = this.isTmfStyleApi(this.operations);
+    if (!tmfStyleApi) {
+      return [{ key: 'resources', label: 'Resources', resources }];
+    }
+    const eventResources = resources.filter(resource => this.isEventResource(resource));
+    const integrationResources = resources.filter(resource => this.isIntegrationResource(resource) && !this.isEventResource(resource));
+    const businessResources = resources.filter(resource => !this.isIntegrationResource(resource) && !this.isEventResource(resource));
+    const groups: CrudResourceGroup[] = [];
+    if (businessResources.length) groups.push({ key: 'resources', label: 'Resources', resources: businessResources });
+    if (integrationResources.length || eventResources.length) {
+      groups.push({
+        key: 'integration',
+        label: 'Integration',
+        resources: integrationResources,
+        childGroups: eventResources.length ? [{ key: 'events', label: 'Events', resources: eventResources }] : [],
+      });
+    }
+    return groups;
+  }
+
+  private isTmfStyleApi(operations: readonly OpenApiOperationDefinition[]): boolean {
+    const hasHubOrListener = operations.some(operation => /(^|\/)(hub|listener)(\/|$)/i.test(operation.path) || /^(hub|listener)$/i.test(operation.tag));
+    const hasEvent = operations.some(operation => this.normalizedName(`${operation.path} ${operation.tag} ${operation.operationId}`).includes('event'));
+    return hasHubOrListener && hasEvent;
+  }
+
+  private isIntegrationResource(resource: CrudResource): boolean {
+    const text = this.normalizedName(`${resource.basePath} ${resource.label} ${resource.operations.map(operation => `${operation.tag} ${operation.operationId}`).join(' ')}`);
+    return ['hub', 'listener', 'importjob', 'exportjob', 'event'].some(keyword => text.includes(keyword));
+  }
+
+  private isEventResource(resource: CrudResource): boolean {
+    const text = this.normalizedName(`${resource.basePath} ${resource.label} ${resource.operations.map(operation => `${operation.tag} ${operation.operationId}`).join(' ')}`);
+    return text.includes('event');
+  }
+
+  private resourceForOperation(operation: OpenApiOperationDefinition): CrudResource | undefined {
+    const key = this.resourceKey(this.collectionPathFor(operation.path));
+    return this.resources.find(resource => resource.key === key);
+  }
+
+  private hasPathParameters(path: string): boolean {
+    return /\{[^}]+}/.test(path);
+  }
+
+  private collectionPathFor(path: string): string {
+    const segments = path.split('/').filter(Boolean);
+    const firstParam = segments.findIndex(segment => segment.startsWith('{') && segment.endsWith('}'));
+    return `/${(firstParam === -1 ? segments : segments.slice(0, firstParam)).join('/')}`;
+  }
+
+  private resourceKey(path: string): string {
+    return path
+      .split('/')
+      .filter(Boolean)
+      .map(segment => segment.toLowerCase())
+      .join('-');
+  }
+
+  private pathLabel(path: string): string {
+    const segment =
+      path
+        .split('/')
+        .filter(Boolean)
+        .filter(part => !part.startsWith('{'))
+        .pop() ?? 'Resources';
+    return this.titleLabel(segment);
+  }
+
+  private titleLabel(value: string): string {
+    return value
+      .replace(/[-_]+/g, ' ')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/\b([A-Za-z]*[bcdfghjklmnpqrstvwxz])ys\b/gi, '$1ies')
+      .replace(/\b\w/g, chr => chr.toUpperCase());
+  }
+
+  private singularLabel(value: string): string {
+    return value.replace(/ies$/i, 'y').replace(/s$/i, '');
+  }
+
+  private pathParameterNames(operation: OpenApiOperationDefinition): string[] {
+    const fromTemplate = [...operation.path.matchAll(/\{([^}]+)}/g)].map(match => match[1]);
+    const fromParameters = operation.parameters.filter(parameter => parameter.location === 'path').map(parameter => parameter.name);
+    return [...new Set([...fromTemplate, ...fromParameters])];
+  }
+
+  private pathValuesForItem(operation: OpenApiOperationDefinition, item: unknown): Record<string, unknown> | undefined {
+    const values: Record<string, unknown> = {};
+    for (const parameter of this.pathParameterNames(operation)) {
+      const value = this.valueForPathParameter(parameter, item);
+      if (value === undefined || value === null || value === '') return undefined;
+      values[parameter] = value;
+    }
+    return Object.keys(values).length ? values : {};
+  }
+
+  private valueForPathParameter(parameterName: string, item: unknown): unknown {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const objectItem = item as Record<string, unknown>;
+    const normalized = this.normalizedName(parameterName);
+    const candidates = Object.entries(objectItem);
+    const exact = candidates.find(([key]) => this.normalizedName(key) === normalized);
+    if (exact) return exact[1];
+    const withoutId = normalized.endsWith('id') ? normalized.slice(0, -2) : normalized;
+    const idCompatible = candidates.find(([key]) => this.normalizedName(key) === 'id' || this.normalizedName(key) === `${withoutId}id`);
+    if (idCompatible) return idCompatible[1];
+    const suffix = candidates.find(([key]) => normalized.endsWith(this.normalizedName(key)) || this.normalizedName(key).endsWith(normalized));
+    return suffix?.[1];
+  }
+
+  private normalizedName(value: string): string {
+    return value.replace(/[^A-Za-z0-9]/g, '').toLowerCase();
+  }
+
+  private apiPath(path: string): string {
+    return path.startsWith('/api/') || path === '/api' ? path : `/api${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
+  private firstOperation(): OpenApiOperationDefinition {
+    return this.resources[0]?.listOperation ?? this.resources[0]?.createOperation ?? this.operations[0];
+  }
+
+  private setCookieParameter(name: string, value: string): void {
+    this.document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; SameSite=Lax`;
+  }
+
+  private isMultipartContentType(contentType: string): boolean {
+    return contentType.includes('multipart/form-data');
+  }
+
+  private captureResponse(operation: OpenApiOperationDefinition, response: HttpResponse<string>): void {
+    this.responseStatus.set(response.status);
+    this.responseBody.set(this.formatBody(response.body));
+    if (this.isReadOperation(operation)) {
+      const parsed = this.parseResponseBody(response.body);
+      const rows = this.rowsFromResponse(parsed);
+      const columns = this.columnsForRows(rows);
+      this.responseRows.set(rows.map(item => ({ item, cells: this.cellsForItem(item, columns) })));
+      this.responseColumns.set(columns);
+      this.clearDetailForm();
+    }
+  }
+
+  private handleSuccessfulMutation(operation: OpenApiOperationDefinition, response: HttpResponse<string>): void {
+    if (operation.method !== 'POST') return;
+    const resource = this.resourceForOperation(operation);
+    const created = this.parseResponseBody(response.body);
+    this.responseSuccess.set(`Created ${resource ? this.singularLabel(resource.label) : 'item'}.`);
+    if (resource && created && typeof created === 'object') {
+      this.loadDetailForm(created, resource);
+    }
+    if (resource?.listOperation) {
+      this.showListOperation(resource);
+      this.refreshList(resource, created);
+    }
+  }
+
+  private showListOperation(resource: CrudResource): void {
+    const listOperation = resource.listOperation;
+    if (!listOperation) return;
+    this.selectedOperation.set(listOperation);
+    this.form = new FormGroup({});
+    this.model = this.initialModel(listOperation);
+    this.fields = this.fieldsForOperation(listOperation);
+    this.responseStatus.set(null);
+    this.responseBody.set('');
+    this.responseError.set('');
+  }
+
+  private refreshList(resource: CrudResource, preferredItem?: unknown): void {
+    const listOperation = resource.listOperation;
+    if (!listOperation) return;
+    const request = this.buildRequest(listOperation);
+    this.http
+      .request(request.method, request.url, {
+        observe: 'response',
+        responseType: 'text',
+        body: request.body,
+        headers: request.headers,
+        params: request.params,
+      })
+      .subscribe({
+        next: response => {
+          this.captureResponse(listOperation, response);
+          const rows = this.responseRows();
+          const row = rows.find(candidate => this.sameItem(candidate.item, preferredItem));
+          if (row !== undefined) {
+            this.selectedResponseRow.set(row);
+            this.loadDetailForm(row.item, resource);
+          } else if (rows.length > 0) {
+            this.selectedResponseRow.set(rows[0]);
+            this.loadDetailForm(rows[0].item, resource);
+          } else if (preferredItem !== null && typeof preferredItem === 'object') {
+            this.loadDetailForm(preferredItem, resource);
+          }
+          this.publishDebugHook();
+        },
+        error: error => {
+          this.responseError.set(this.formatError(error.error, error.status));
+          if (preferredItem && typeof preferredItem === 'object') this.loadDetailForm(preferredItem, resource);
+          this.publishDebugHook();
+        },
+      });
+  }
+
+  private clearReadResponse(): void {
+    this.responseRows.set([]);
+    this.responseColumns.set([]);
+    this.clearDetailForm();
+  }
+
+  private clearDetailForm(): void {
+    this.selectedResponseItem.set(null);
+    this.selectedResponseRow.set(null);
+    this.detailStatus.set(null);
+    this.detailError.set('');
+    this.responseDetailForm = new FormGroup({});
+    this.responseDetailModel = {};
+    this.responseDetailFields = [];
+  }
+
+  private referencePickerForField(field: OpenApiSchemaField, operation: OpenApiOperationDefinition = this.selectedOperation()): FormCrudReferencePickerConfig | undefined {
+    const fieldPath = this.pathWithoutArrayIndexes(this.fieldConfigPath(field));
+    return this.referencePickerConfigs().find(
+      config =>
+        this.referencePickerMatchesOperation(config, operation) &&
+        this.pathWithoutArrayIndexes(this.normalizeFieldPath(config.sourcePath)) === fieldPath,
+    );
+  }
+
+  private referencePickerMatchesOperation(config: FormCrudReferencePickerConfig, operation: OpenApiOperationDefinition): boolean {
+    if (!config.formId) return true;
+    const configured = this.normalizedName(config.formId);
+    return [operation.id, operation.operationId, `${operation.method}-${operation.operationId}`, `${operation.method}-${operation.path}`].some(candidate =>
+      configured === this.normalizedName(candidate),
+    );
+  }
+
+  private referencePickerConfigs(): FormCrudReferencePickerConfig[] {
+    const storage = this.document.defaultView?.localStorage;
+    if (!storage) return [];
+    try {
+      const parsed = JSON.parse(storage.getItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY) ?? '[]');
+      return Array.isArray(parsed) ? parsed.filter(config => this.isReferencePickerConfig(config)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private isReferencePickerConfig(value: unknown): value is FormCrudReferencePickerConfig {
+    if (!value || typeof value !== 'object') return false;
+    const config = value as Record<string, unknown>;
+    return typeof config.sourcePath === 'string' && typeof config.collectionPath === 'string';
+  }
+
+  private referencePickerUrl(config: FormCrudReferencePickerConfig): string {
+    const baseUrl = config.targetBaseUrl?.replace(/\/+$/, '') ?? '';
+    const collectionPath = config.collectionPath.startsWith('/') ? config.collectionPath : `/${config.collectionPath}`;
+    const baseEndsWithApi = /\/api$/i.test(baseUrl);
+    const path = collectionPath.startsWith('/api/') || collectionPath === '/api'
+      ? collectionPath
+      : this.apiPath(collectionPath);
+    if (this.isSameOriginUrl(baseUrl)) {
+      return path;
+    }
+    return `${baseUrl}${baseEndsWithApi && path.startsWith('/api/') ? path.slice(4) : path}`;
+  }
+
+  private isSameOriginUrl(url: string): boolean {
+    if (!url) return true;
+    const view = this.document.defaultView;
+    if (!view) return false;
+    try {
+      return new URL(url, view.location.origin).origin === view.location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  private referencePickerSelectedValue(config: FormCrudReferencePickerConfig, item: unknown, targetField?: OpenApiSchemaField): unknown {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    const sourceObject = item as Record<string, unknown>;
+    const copyFields = config.copyFields ?? [];
+    if (!copyFields.length && config.mode !== 'reference') return JSON.parse(JSON.stringify(sourceObject));
+    const output: Record<string, unknown> = {};
+    const mappings = this.effectiveReferencePickerMappings(config, copyFields, targetField);
+    for (const mapping of mappings) {
+      const value = this.valueAtPath(sourceObject, this.normalizeFieldPath(mapping.source));
+      if (value !== undefined) this.setValueAtPath(output, this.normalizeFieldPath(mapping.target), value);
+    }
+    return output;
+  }
+
+  private mergeReferencePickerArrayValue(
+    currentValue: unknown,
+    selectedValue: unknown,
+    config: FormCrudReferencePickerConfig,
+    targetField?: OpenApiSchemaField,
+  ): unknown[] {
+    const currentItems = Array.isArray(currentValue) ? currentValue : [];
+    const matchIndex = currentItems.findIndex(item => this.referencePickerValuesMatch(item, selectedValue, config, targetField));
+    if (matchIndex < 0) return [...currentItems, selectedValue];
+    return currentItems.map((item, index) => (index === matchIndex ? this.mergeReferencePickerValue(item, selectedValue) : item));
+  }
+
+  private referencePickerValuesMatch(
+    existingValue: unknown,
+    selectedValue: unknown,
+    config: FormCrudReferencePickerConfig,
+    targetField?: OpenApiSchemaField,
+  ): boolean {
+    for (const path of this.referencePickerMatchPaths(config, targetField)) {
+      const existing = this.valueAtPath(existingValue, path);
+      const selected = this.valueAtPath(selectedValue, path);
+      if (this.isComparableReferenceValue(existing) && existing === selected) return true;
+    }
+    return false;
+  }
+
+  private referencePickerMatchPaths(config: FormCrudReferencePickerConfig, targetField?: OpenApiSchemaField): string[] {
+    const mappings = this.effectiveReferencePickerMappings(config, config.copyFields ?? [], targetField).map(mapping =>
+      this.normalizeFieldPath(mapping.target),
+    );
+    const orderedNames = ['tmfId', 'href', 'id', 'name'];
+    const orderedPaths: string[] = [];
+    for (const name of orderedNames) {
+      for (const path of mappings) {
+        const leaf = path.split('.').filter(Boolean).pop() ?? path;
+        if (this.normalizedName(leaf) === this.normalizedName(name) && !orderedPaths.includes(path)) orderedPaths.push(path);
+      }
+    }
+    for (const path of mappings) {
+      if (!orderedPaths.includes(path)) orderedPaths.push(path);
+    }
+    return orderedPaths;
+  }
+
+  private isComparableReferenceValue(value: unknown): value is string | number | boolean {
+    return (typeof value === 'string' && value.length > 0) || typeof value === 'number' || typeof value === 'boolean';
+  }
+
+  private mergeReferencePickerValue(existingValue: unknown, selectedValue: unknown): unknown {
+    if (!existingValue || !selectedValue || typeof existingValue !== 'object' || typeof selectedValue !== 'object') return selectedValue;
+    if (Array.isArray(existingValue) || Array.isArray(selectedValue)) return selectedValue;
+    const existing = existingValue as Record<string, unknown>;
+    const selected = selectedValue as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...existing };
+    for (const [key, value] of Object.entries(selected)) {
+      const existingChild = existing[key];
+      merged[key] = this.mergeReferencePickerValue(existingChild, value);
+    }
+    return merged;
+  }
+
+  private effectiveReferencePickerMappings(
+    config: FormCrudReferencePickerConfig,
+    configuredMappings: readonly { source: string; target: string }[] = config.copyFields ?? [],
+    targetField?: OpenApiSchemaField,
+  ): { source: string; target: string }[] {
+    const targetPrefix = this.referencePickerTargetPrefix(targetField);
+    const mappings = configuredMappings
+      .map(mapping => this.qualifiedReferencePickerMapping(mapping, targetPrefix, targetField))
+      .filter(mapping => this.referencePickerTargetPathAllowed(mapping.target, targetField, targetPrefix));
+    if (config.mode === 'reference' || targetField) {
+      for (const defaultMapping of this.defaultReferencePickerMappings(config, targetPrefix, targetField)) {
+        const defaultTarget = this.normalizeFieldPath(defaultMapping.target);
+        const alreadyMapped = mappings.some(mapping => this.normalizeFieldPath(mapping.target) === defaultTarget);
+        if (!alreadyMapped) mappings.push(defaultMapping);
+      }
+    }
+    return mappings.length ? mappings : this.defaultReferencePickerMappings(config, targetPrefix, targetField);
+  }
+
+  private defaultReferencePickerMappings(
+    _config: FormCrudReferencePickerConfig,
+    targetPrefix = '',
+    targetField?: OpenApiSchemaField,
+  ): { source: string; target: string }[] {
+    return this.referencePickerDefaultFieldNames(targetField, targetPrefix).map(name => ({
+      source: name,
+      target: targetPrefix ? `${targetPrefix}.${name}` : name,
+    }));
+  }
+
+  private qualifiedReferencePickerMapping(
+    mapping: { source: string; target: string },
+    targetPrefix: string,
+    targetField?: OpenApiSchemaField,
+  ): { source: string; target: string } {
+    const target = this.normalizeFieldPath(mapping.target);
+    if (!targetPrefix || target.startsWith(`${targetPrefix}.`) || target.includes('.')) return mapping;
+    const targetNames = this.referencePickerDefaultFieldNames(targetField, targetPrefix);
+    if (!targetNames.some(name => this.normalizedName(name) === this.normalizedName(target))) return mapping;
+    return { ...mapping, target: `${targetPrefix}.${target}` };
+  }
+
+  private referencePickerTargetPrefix(field?: OpenApiSchemaField): string {
+    const target = field?.type === 'array' ? field.items : field;
+    if (!target?.fields?.length) return '';
+    if (this.schemaFieldGroupHasReferenceIdentity(target.fields)) return '';
+    const nestedReference = target.fields.find(child => child.type === 'object' && this.schemaFieldGroupHasReferenceIdentity(child.fields ?? []));
+    return nestedReference?.name ?? '';
+  }
+
+  private schemaFieldGroupHasReferenceIdentity(fields: readonly OpenApiSchemaField[]): boolean {
+    const names = new Set(fields.map(field => this.normalizedName(field.name)));
+    return this.referencePickerIdentityFields().some(name => names.has(this.normalizedName(name)));
+  }
+
+  private referencePickerDefaultFieldNames(field?: OpenApiSchemaField, targetPrefix = ''): string[] {
+    const candidateFields = this.referencePickerCopyCandidateFields(field, targetPrefix);
+    const names = field
+      ? this.referencePickerIdentityFields().filter(identity =>
+          candidateFields.some(candidate => this.normalizedName(candidate.name) === this.normalizedName(identity)),
+        )
+      : [...this.referencePickerIdentityFields()];
+    for (const candidate of candidateFields) {
+      if (!names.some(name => this.normalizedName(name) === this.normalizedName(candidate.name))) names.push(candidate.name);
+    }
+    return names;
+  }
+
+  private referencePickerCopyCandidateFields(field?: OpenApiSchemaField, targetPrefix = ''): readonly OpenApiSchemaField[] {
+    const target = this.referencePickerCopyTargetField(field, targetPrefix);
+    return (target?.fields ?? []).filter(candidate => this.isReferencePickerCopyCandidateField(candidate));
+  }
+
+  private referencePickerCopyTargetField(field?: OpenApiSchemaField, targetPrefix = ''): OpenApiSchemaField | undefined {
+    const target = field?.type === 'array' ? field.items : field;
+    if (!targetPrefix) return target;
+    return target?.fields?.find(candidate => this.normalizeFieldPath(candidate.name) === targetPrefix) ?? target;
+  }
+
+  private isReferencePickerCopyCandidateField(field: OpenApiSchemaField): boolean {
+    return !field.writeOnly && !field.fields?.length && !field.items && field.type !== 'object' && field.type !== 'array' && !field.discriminatorValues?.length;
+  }
+
+  private referencePickerTargetPathAllowed(targetPath: string, targetField?: OpenApiSchemaField, targetPrefix = ''): boolean {
+    if (!targetField) return true;
+    let path = this.normalizeFieldPath(targetPath);
+    if (targetPrefix && path.startsWith(`${targetPrefix}.`)) path = path.slice(targetPrefix.length + 1);
+    return this.schemaFieldPathExists(this.referencePickerCopyTargetField(targetField, targetPrefix), path);
+  }
+
+  private schemaFieldPathExists(field: OpenApiSchemaField | undefined, path: string): boolean {
+    if (!field) return false;
+    const parts = path.split('.').filter(Boolean);
+    let current: OpenApiSchemaField | undefined = field.type === 'array' ? field.items : field;
+    for (const part of parts) {
+      if (/^\d+$/.test(part)) continue;
+      current = current?.fields?.find(candidate => this.normalizedName(candidate.name) === this.normalizedName(part));
+      if (!current) return false;
+      if (current.type === 'array') current = current.items;
+    }
+    return true;
+  }
+
+  private findSchemaFieldByPath(fields: readonly OpenApiSchemaField[], path: string): OpenApiSchemaField | undefined {
+    const parts = this.pathWithoutArrayIndexes(this.normalizeFieldPath(path)).split('.').filter(Boolean);
+    if (!parts.length) return undefined;
+    let currentFields: readonly OpenApiSchemaField[] | undefined = fields;
+    let current: OpenApiSchemaField | undefined;
+    for (const part of parts) {
+      current = currentFields?.find(field => this.normalizedName(field.name) === this.normalizedName(part));
+      if (!current) return undefined;
+      currentFields = (current.type === 'array' ? current.items : current)?.fields;
+    }
+    return current;
+  }
+
+  private referencePickerIdentityFields(): string[] {
+    return ['id', 'tmfId', 'href', 'name'];
+  }
+
+  private fieldConfigPath(field: OpenApiSchemaField): string {
+    return this.normalizeFieldPath(field.path.length ? field.path.join('.') : field.name);
+  }
+
+  private valueAtPath(source: unknown, path: string): unknown {
+    if (!path) return source;
+    return path.split('.').filter(Boolean).reduce<unknown>((current, segment) => {
+      if (current === undefined || current === null) return undefined;
+      if (Array.isArray(current) && /^\d+$/.test(segment)) return current[Number(segment)];
+      if (typeof current === 'object') return (current as Record<string, unknown>)[segment];
+      return undefined;
+    }, source);
+  }
+
+  private setValueAtPath(target: Record<string, unknown>, path: string, value: unknown): void {
+    const segments = path.split('.').filter(Boolean);
+    if (!segments.length) return;
+    let current: Record<string, unknown> = target;
+    for (const segment of segments.slice(0, -1)) {
+      const next = current[segment];
+      if (!next || typeof next !== 'object' || Array.isArray(next)) current[segment] = {};
+      current = current[segment] as Record<string, unknown>;
+    }
+    current[segments[segments.length - 1]] = value;
+  }
+
+  private parseResponseBody(value: unknown): unknown {
+    if (typeof value !== 'string' || !value.trim()) return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private mergeSubmittedDetailWithResponse(submitted: unknown, response: unknown): unknown {
+    if (!submitted || !response || typeof submitted !== 'object' || typeof response !== 'object') return response;
+    if (Array.isArray(submitted) || Array.isArray(response)) return response;
+    const merged: Record<string, unknown> = this.deepClone(submitted) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(response as Record<string, unknown>)) {
+      const submittedValue = merged[key];
+      merged[key] = this.mergeSubmittedDetailWithResponse(submittedValue, value);
+    }
+    return merged;
+  }
+
+  private rowsFromResponse(value: unknown): unknown[] {
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') {
+      const objectValue = value as Record<string, unknown>;
+      const preferredKeys = ['content', 'data', 'items', 'results', 'values'];
+      const preferred = preferredKeys.map(key => objectValue[key]).find(Array.isArray);
+      if (Array.isArray(preferred)) return preferred;
+      const firstArray = Object.values(objectValue).find(Array.isArray);
+      if (Array.isArray(firstArray)) return firstArray;
+      return [objectValue];
+    }
+    return value === undefined || value === null || value === '' ? [] : [value];
+  }
+
+  private columnsForRows(items: readonly unknown[]): string[] {
+    const columns: string[] = [];
+    for (const item of items.slice(0, 20)) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      for (const [key, value] of Object.entries(item)) {
+        if (columns.includes(key) || !this.isTableColumnValue(value)) continue;
+        columns.push(key);
+        if (columns.length >= 6) return columns;
+      }
+    }
+    return columns.length ? columns : ['value'];
+  }
+
+  private isTableColumnValue(value: unknown): boolean {
+    return value === undefined || value === null || ['string', 'number', 'boolean'].includes(typeof value);
+  }
+
+  private cellsForItem(item: unknown, columns: readonly string[]): Record<string, unknown> {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { value: item };
+    const objectValue = item as Record<string, unknown>;
+    return Object.fromEntries(columns.map(column => [column, objectValue[column]]));
+  }
+
+  private sameItem(left: unknown, right: unknown): boolean {
+    if (left === right) return true;
+    const leftId = this.itemIdentity(left);
+    const rightId = this.itemIdentity(right);
+    return leftId !== undefined && rightId !== undefined && leftId === rightId;
+  }
+
+  private itemIdentity(item: unknown): string | undefined {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+    const objectValue = item as Record<string, unknown>;
+    for (const key of ['id', 'href', 'uuid', 'code', 'name']) {
+      const value = objectValue[key];
+      if (typeof value === 'string' || typeof value === 'number') return `${key}:${value}`;
+    }
+    return undefined;
+  }
+
+  private detailFieldsForItem(item: unknown, fields: readonly OpenApiSchemaField[], readonly: boolean): FormlyFieldConfig[] {
+    const effectiveFields = fields.length ? fields : this.inferredFieldsFromItem(item);
+    const operation = this.currentResource()?.updateOperation ?? this.currentResource()?.detailOperation ?? this.selectedOperation();
+    return [
+      {
+        wrappers: ['form-crud-accordion'],
+        props: { label: 'Item details', expanded: false },
+        fieldGroupClassName: 'row g-3',
+        fieldGroup: effectiveFields.map(field => this.schemaField(field, readonly, 0, this.responseDetailModel, this.responseDetailForm, this.responseDetailModel, operation)),
+      },
+    ];
+  }
+
+  private detailModelForItem(item: unknown, fields: readonly OpenApiSchemaField[]): Record<string, unknown> {
+    if (fields.length) return this.detailModelFromFields(fields, item);
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return { value: item };
+    return this.detailModelFromFields(this.inferredFieldsFromItem(item), item);
+  }
+
+  private detailSchemaFields(resource: CrudResource | undefined): readonly OpenApiSchemaField[] {
+    const updateFields = resource?.updateOperation?.requestBodyFields ?? [];
+    const detailFields = resource?.detailOperation ? this.responseItemSchemaFields(resource.detailOperation) : [];
+    if (updateFields.length && detailFields.length) return this.mergeSchemaFields(updateFields, detailFields);
+    if (updateFields.length) return updateFields;
+    if (detailFields.length) return detailFields;
+    return this.responseItemSchemaFields(this.selectedOperation());
+  }
+
+  private mergeSchemaFields(primaryFields: readonly OpenApiSchemaField[], secondaryFields: readonly OpenApiSchemaField[]): OpenApiSchemaField[] {
+    const fields = primaryFields.map(field => this.deepClone(field));
+    for (const secondary of secondaryFields) {
+      const index = fields.findIndex(primary => primary.name === secondary.name);
+      if (index === -1) {
+        fields.push(this.readonlySchemaField(secondary));
+      } else {
+        fields[index] = this.mergeSchemaField(fields[index], secondary);
+      }
+    }
+    return fields;
+  }
+
+  private mergeSchemaField(primary: OpenApiSchemaField, secondary: OpenApiSchemaField): OpenApiSchemaField {
+    const merged: OpenApiSchemaField = { ...secondary, ...primary };
+    if (primary.fields?.length || secondary.fields?.length) {
+      merged.fields = this.mergeSchemaFields(primary.fields ?? [], secondary.fields ?? []);
+    }
+    if (primary.items || secondary.items) {
+      merged.items = primary.items && secondary.items ? this.mergeSchemaField(primary.items, secondary.items) : this.deepClone(primary.items ?? secondary.items!);
+    }
+    return merged;
+  }
+
+  private readonlySchemaField(field: OpenApiSchemaField): OpenApiSchemaField {
+    const readonlyField = this.deepClone(field);
+    readonlyField.readOnly = true;
+    if (readonlyField.fields?.length) {
+      readonlyField.fields = readonlyField.fields.map(child => this.readonlySchemaField(child));
+    }
+    if (readonlyField.items) {
+      readonlyField.items = this.readonlySchemaField(readonlyField.items);
+    }
+    if (readonlyField.additionalProperties) {
+      readonlyField.additionalProperties = this.readonlySchemaField(readonlyField.additionalProperties);
+    }
+    return readonlyField;
+  }
+
+  private responseItemSchemaFields(operation: OpenApiOperationDefinition): readonly OpenApiSchemaField[] {
+    const fields = operation.responseBodyFields ?? [];
+    if (fields.length !== 1) return fields;
+    const root = fields[0];
+    if (root.type === 'array' && root.items?.fields?.length) return root.items.fields;
+    if (root.type === 'object' && root.fields?.length && root.path.length === 0) return root.fields;
+    return fields;
+  }
+
+  private detailModelFromFields(fields: readonly OpenApiSchemaField[], item: unknown): Record<string, unknown> {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return fields.length === 1 ? { [fields[0].name]: this.detailValueForField(fields[0], item) } : {};
+    }
+    const objectValue = item as Record<string, unknown>;
+    return Object.fromEntries(fields.map(field => [field.name, this.detailValueForField(field, objectValue[field.name])]));
+  }
+
+  private detailValueForField(field: OpenApiSchemaField, value: unknown): unknown {
+    if (field.type === 'object' && field.fields?.length) return this.detailModelFromFields(field.fields, value);
+    if (field.type === 'array') {
+      const itemField = this.effectiveArrayItemField(field);
+      if (Array.isArray(value)) return itemField ? value.map(item => this.detailValueForField(itemField, item)) : value;
+      return [];
+    }
+    if (field.type === 'object') {
+      return JSON.stringify(value ?? {}, null, 2);
+    }
+    if (field.type === 'string' && field.format === 'date-time') return this.dateTimeInputValue(value);
+    return value ?? '';
+  }
+
+  private inferredFieldsFromItem(item: unknown): OpenApiSchemaField[] {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return [this.inferredField('value', ['value'], item)];
+    }
+    return Object.entries(item as Record<string, unknown>).map(([key, value]) => this.inferredField(key, [key], value));
+  }
+
+  private inferredArrayItemFields(field: OpenApiSchemaField, arrayField?: OpenApiSchemaField): OpenApiSchemaField[] {
+    const sample = this.firstObjectValue(field.example) ?? this.firstObjectValue(field.defaultValue) ?? this.firstArrayExampleItem(arrayField);
+    return sample && typeof sample === 'object' && !Array.isArray(sample) ? this.inferredFieldsFromItem(sample) : [];
+  }
+
+  private effectiveArrayItemField(field: OpenApiSchemaField, sampleOverride?: unknown): OpenApiSchemaField {
+    const sample = this.firstArrayExampleItem(field) ?? sampleOverride;
+    if (sample && typeof sample === 'object' && !Array.isArray(sample) && (!field.items || field.items.type !== 'object' || !field.items.fields?.length)) {
+      return field.items
+        ? { ...field.items, ...this.inferredField(field.items.name || 'item', field.items.path?.length ? field.items.path : ['0'], sample) }
+        : this.inferredField('item', ['0'], sample);
+    }
+    if (field.items) {
+      return field.items;
+    }
+    return this.inferredField('item', ['0'], sample ?? '');
+  }
+
+  private firstArrayValue(value: unknown): unknown {
+    return Array.isArray(value) ? value.find(item => item !== undefined && item !== null) : undefined;
+  }
+
+  private firstArrayExampleItem(field?: OpenApiSchemaField): unknown {
+    if (!field) return undefined;
+    const sample = this.firstObjectValue(field.example) ?? this.firstObjectValue(field.defaultValue);
+    if (sample !== undefined) return sample;
+    const array = Array.isArray(field.example) ? field.example : Array.isArray(field.defaultValue) ? field.defaultValue : undefined;
+    return array?.find(item => item !== undefined && item !== null);
+  }
+
+  private firstObjectValue(value: unknown): unknown {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (Array.isArray(value)) return value.find(item => item && typeof item === 'object' && !Array.isArray(item));
+    return undefined;
+  }
+
+  private inferredField(name: string, path: string[], value: unknown): OpenApiSchemaField {
+    const pointer = path.length ? `/${path.map(part => part.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}` : '';
+    if (Array.isArray(value)) {
+      const sample = value.find(item => item !== undefined && item !== null) ?? '';
+      return { name, pointer, path, required: false, nullable: false, type: 'array', example: value, items: this.inferredField(`${name} item`, [...path, '0'], sample) };
+    }
+    if (value && typeof value === 'object') {
+      return {
+        name,
+        pointer,
+        path,
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: this.inferredFieldsFromItem(value).map(field => ({ ...field, path: [name, ...field.path], pointer: `${pointer}${field.pointer}` })),
+      };
+    }
+    return {
+      name,
+      pointer,
+      path,
+      required: false,
+      nullable: value === null,
+      type: typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : 'string',
+      example: value,
+    };
+  }
+
+  private formatBody(value: unknown): string {
+    if (typeof value === 'string') {
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value === undefined || value === null ? '' : JSON.stringify(value, null, 2);
+  }
+
+  private publishDebugHook(): void {
+    const view = this.document.defaultView as FormCrudDebugWindow | null;
+    if (!view) return;
+    view.__formsDebug ??= {};
+    view.__formsDebug.formCrud = () => ({
+      operationId: this.selectedOperation().id,
+      valid: this.form.valid,
+      invalidControls: this.invalidControlSummaries(this.form),
+      model: this.model,
+      fields: this.fields,
+      resourceGroups: this.resourceGroups,
+      resourcePanelCollapsed: this.isResourcePanelCollapsed(),
+      responseRows: this.responseRows(),
+      selectedResponseItem: this.selectedResponseItem(),
+      responseDetailModel: this.responseDetailModel,
+      responseDetailFields: this.responseDetailFields,
+      responseDetailValid: this.responseDetailForm.valid,
+      responseDetailInvalidControls: this.invalidControlSummaries(this.responseDetailForm),
+      responseStatus: this.responseStatus(),
+      referencePickerConfigs: this.referencePickerConfigs(),
+      referencePickerRows: this.referencePickerRows(),
+    });
+    view.__formsDebug.setFormCrudResponseDetailValue = (path: string, value: unknown) => {
+      if (!path) return false;
+      const normalizedPath = this.normalizeFieldPath(path);
+      const control = this.responseDetailForm.get(normalizedPath);
+      if (!control) return false;
+      this.setValueAtPath(this.responseDetailModel, normalizedPath, value);
+      control.patchValue(value);
+      control.markAsDirty();
+      this.responseDetailForm.updateValueAndValidity({ emitEvent: true });
+      this.publishDebugHook();
+      return true;
+    };
+  }
+
+  private invalidFormSummary(form: FormGroup): string {
+    const invalidControls = this.invalidControlSummaries(form);
+    return invalidControls.length
+      ? `Fix validation errors before submitting:\n${invalidControls.map(item => `${item.path}: ${Object.keys(item.errors).join(', ')}`).join('\n')}`
+      : 'Fix validation errors before submitting.';
+  }
+
+  private invalidControlSummaries(control: AbstractControl, path = ''): { path: string; errors: Record<string, unknown> }[] {
+    const output: { path: string; errors: Record<string, unknown> }[] = [];
+    if (control.errors) output.push({ path: path || '$', errors: control.errors });
+    const childControls = 'controls' in control ? (control.controls as unknown) : undefined;
+    if (Array.isArray(childControls)) {
+      childControls.forEach((child, index) => output.push(...this.invalidControlSummaries(child as AbstractControl, path ? `${path}.${index}` : String(index))));
+    } else if (childControls && typeof childControls === 'object') {
+      for (const [name, child] of Object.entries(childControls)) {
+        output.push(...this.invalidControlSummaries(child as AbstractControl, path ? `${path}.${name}` : name));
+      }
+    }
+    return output;
+  }
+}

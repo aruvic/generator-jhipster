@@ -1,0 +1,182 @@
+--- orig/runtime_loop.sh	2026-07-06 07:45:59.637647699 +0000
++++ new/runtime_loop.sh	2026-07-06 07:45:59.660045850 +0000
+@@ -98,9 +98,9 @@
+   EVOMASTER_EXTRA_HEADER="${EVOMASTER_EXTRA_HEADER:-true}"
+   EVOMASTER_EXTRA_QUERY_PARAM="${EVOMASTER_EXTRA_QUERY_PARAM:-true}"
+   EVOMASTER_ACCEPT_HEADER="${EVOMASTER_ACCEPT_HEADER:-}"
+-  EVOMASTER_SEED_FROM_SMOKE="${EVOMASTER_SEED_FROM_SMOKE:-true}"
++  EVOMASTER_SEED_FROM_SMOKE="${EVOMASTER_SEED_FROM_SMOKE:-false}"
+   EVOMASTER_OPENAPI_EXAMPLES_FROM_SMOKE="${EVOMASTER_OPENAPI_EXAMPLES_FROM_SMOKE:-true}"
+-  EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES="${EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES:-true}"
++  EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES="${EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES:-false}"
+   EVOMASTER_PREMATURE_STOP="${EVOMASTER_PREMATURE_STOP:-10m}"
+   EVOMASTER_SEED_BODY_MODE="${EVOMASTER_SEED_BODY_MODE:-safe}"
+   EVOMASTER_REUSE_SMOKE_DB_STATE="${EVOMASTER_REUSE_SMOKE_DB_STATE:-false}"
+@@ -132,7 +132,7 @@
+   EVOMASTER_COVERAGE_SWEEP_AUTO_MAX_DECLARED_ENDPOINTS="${EVOMASTER_COVERAGE_SWEEP_AUTO_MAX_DECLARED_ENDPOINTS:-10}"
+   EVOMASTER_COVERAGE_SWEEP_AUTO_SMALL_APIS="${EVOMASTER_COVERAGE_SWEEP_AUTO_SMALL_APIS:-true}"
+   EVOMASTER_COVERAGE_SWEEP_AUTO_SEEDED_APIS="${EVOMASTER_COVERAGE_SWEEP_AUTO_SEEDED_APIS:-true}"
+-  EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS="${EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS:-true}"
++  EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS="${EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS:-false}"
+   EVOMASTER_COVERAGE_SWEEP_RETRY_PATH_ONLY_SEEDS="${EVOMASTER_COVERAGE_SWEEP_RETRY_PATH_ONLY_SEEDS:-false}"
+   EVOMASTER_COVERAGE_SWEEP_SECURITY="${EVOMASTER_COVERAGE_SWEEP_SECURITY:-true}"
+   EVOMASTER_COVERAGE_SWEEP_EXTRA_HEADER="${EVOMASTER_COVERAGE_SWEEP_EXTRA_HEADER:-false}"
+@@ -146,9 +146,10 @@
+ EVOMASTER_SKIP_FAILURE_SQL_IN_TEST_FILE="${EVOMASTER_SKIP_FAILURE_SQL_IN_TEST_FILE:-true}"
+ EVOMASTER_AUTH_FROM_SMOKE_TOKEN="${EVOMASTER_AUTH_FROM_SMOKE_TOKEN:-true}"
+ EVOMASTER_ACCEPT_HEADER="${EVOMASTER_ACCEPT_HEADER:-}"
+-EVOMASTER_SEED_FROM_SMOKE="${EVOMASTER_SEED_FROM_SMOKE:-true}"
++EVOMASTER_SEED_FROM_SMOKE="${EVOMASTER_SEED_FROM_SMOKE:-false}"
+ EVOMASTER_OPENAPI_EXAMPLES_FROM_SMOKE="${EVOMASTER_OPENAPI_EXAMPLES_FROM_SMOKE:-true}"
+-EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES="${EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES:-true}"
++EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES="${EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES:-false}"
++EVOMASTER_POSTMAN_SEEDS_ENABLED="${EVOMASTER_POSTMAN_SEEDS_ENABLED:-false}"
+ EVOMASTER_PREMATURE_STOP="${EVOMASTER_PREMATURE_STOP:-}"
+ EVOMASTER_SEED_BODY_MODE="${EVOMASTER_SEED_BODY_MODE:-safe}"
+ EVOMASTER_REUSE_SMOKE_DB_STATE="${EVOMASTER_REUSE_SMOKE_DB_STATE:-false}"
+@@ -1045,7 +1046,7 @@
+   fi
+   if [[ -n "$seed_file" && -f "$seed_file" ]]; then
+     seed_count="$(jq -r '.item | length // 0' "$seed_file")"
+-    if [[ "$EVOMASTER_SEED_FROM_SMOKE" == "true" && "$seed_count" != "0" ]] &&
++    if [[ "$EVOMASTER_POSTMAN_SEEDS_ENABLED" == "true" && "$EVOMASTER_SEED_FROM_SMOKE" == "true" && "$seed_count" != "0" ]] &&
+       [[ ! -f "$openapi_examples_file" || "$EVOMASTER_POSTMAN_SEEDS_WITH_OPENAPI_EXAMPLES" == "true" ]]; then
+       seed_args+=(
+         --seedTestCases true
+@@ -1319,7 +1320,7 @@
+         "$focus_option" "$focus_path"
+       )
+       sweep_seed_args=()
+-      if [[ "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" && -f "$seed_file" ]]; then
++      if [[ "$EVOMASTER_POSTMAN_SEEDS_ENABLED" == "true" && "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" && -f "$seed_file" ]]; then
+         node "$EVOMASTER_SEED_FILTER" "$seed_file" "$sweep_seed_file" "$endpoint_id" > "$sweep_seed_summary_file"
+         sweep_seed_count="$(jq -r '.itemCount // 0' "$sweep_seed_summary_file")"
+         if [[ "$sweep_seed_count" != "0" ]]; then
+@@ -1636,6 +1637,26 @@
+ failure_summary_lines_file="$OUTPUT_DIR/runtime-failures.jsonl"
+ : > "$failure_summary_lines_file"
+ 
++write_artifact_runtime_status() {
++  local phase="${1:-runtime-loop}"
++  local exit_code="${2:-0}"
++  local artifact_end_epoch
++  artifact_end_epoch="$(now_epoch)"
++  jq -n \
++    --arg artifact "$name" \
++    --arg phase "$phase" \
++    --arg exitCode "$exit_code" \
++    --arg startEpoch "$artifact_start_epoch" \
++    --arg startIso "$(iso_from_epoch "$artifact_start_epoch")" \
++    --arg endEpoch "$artifact_end_epoch" \
++    --arg endIso "$(iso_from_epoch "$artifact_end_epoch")" \
++    --arg durationSeconds "$(duration_seconds "$artifact_start_epoch" "$artifact_end_epoch")" \
++    --arg evomasterEnabled "$EVOMASTER_ENABLED" \
++    --arg evomasterStatusFile "$artifact_output_dir/evomaster/status.json" \
++    '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), startEpoch: ($startEpoch | tonumber), startIso: $startIso, endEpoch: ($endEpoch | tonumber), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber), evomasterEnabled: ($evomasterEnabled == "true"), evomasterStatusFile: $evomasterStatusFile}' \
++    > "$artifact_output_dir/harness/runtime-status.json"
++}
++
+ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_name <&3; do
+   if [[ -z "$name" ]]; then
+     continue
+@@ -1688,7 +1709,34 @@
+   echo "auth=ok"
+ 
+   timestamped_step "$name" "YAML smoke"
++  smoke_exit=0
++  set +e
+   node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$artifact_output_dir" < /dev/null | tee "$smoke_file"
++  smoke_exit="${PIPESTATUS[0]}"
++  set -e
++  if [[ "$smoke_exit" != "0" ]]; then
++    failure_count=$((failure_count + 1))
++    jq -n \
++      --arg artifact "$name" \
++      --arg phase "yaml-smoke" \
++      --arg exitCode "$smoke_exit" \
++      --arg smokeFile "$smoke_file" \
++      --arg failureFile "$artifact_output_dir/failure.json" \
++      --arg appLog "$log_file" \
++      '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), smokeFile: $smokeFile, failureFile: $failureFile, appLog: $appLog}' \
++      >> "$failure_summary_lines_file"
++    cleanup_driver "$driver_pid"
++    driver_pid=""
++    cleanup_app "$app_pid" "$app_dir"
++    app_pid=""
++    write_artifact_runtime_status "yaml-smoke" "$smoke_exit"
++    trap - EXIT
++    if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
++      exit "$smoke_exit"
++    fi
++    echo "Continuing after YAML smoke failure for $name; recorded exit code $smoke_exit" >&2
++    continue
++  fi
+ 
+   if [[ "$FORM_CRUD_GUI_ENABLED" == "true" ]]; then
+     if run_form_crud_gui_smoke "$name" "$app_dir" "$artifact_output_dir"; then
+@@ -1714,7 +1762,7 @@
+     fi
+   fi
+ 
+-  if [[ "$EVOMASTER_ENABLED" == "true" && ( "$EVOMASTER_SEED_FROM_SMOKE" == "true" || "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" ) ]]; then
++  if [[ "$EVOMASTER_ENABLED" == "true" && "$EVOMASTER_POSTMAN_SEEDS_ENABLED" == "true" && ( "$EVOMASTER_SEED_FROM_SMOKE" == "true" || "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" ) ]]; then
+     timestamped_step "$name" "build EvoMaster seed collection"
+     EVOMASTER_SEED_AUTH_TOKEN="$token" \
+     EVOMASTER_SEED_BODY_MODE="$EVOMASTER_SEED_BODY_MODE" \
+@@ -1755,8 +1803,35 @@
+     evomaster_db_seed_dir="$artifact_output_dir/evomaster-db-seed"
+     evomaster_db_seed_file="$artifact_output_dir/evomaster-db-seed.json"
+     timestamped_step "$name" "prepare live PostgreSQL state for EvoMaster"
++    evomaster_db_seed_exit=0
++    set +e
+     OPENAPI_SMOKE_SKIP_DELETE=true node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$evomaster_db_seed_dir" < /dev/null | tee "$evomaster_db_seed_file"
+-    if [[ "$EVOMASTER_SEED_FROM_SMOKE" == "true" || "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" ]]; then
++    evomaster_db_seed_exit="${PIPESTATUS[0]}"
++    set -e
++    if [[ "$evomaster_db_seed_exit" != "0" ]]; then
++      failure_count=$((failure_count + 1))
++      jq -n \
++        --arg artifact "$name" \
++        --arg phase "evomaster-db-seed-smoke" \
++        --arg exitCode "$evomaster_db_seed_exit" \
++        --arg smokeFile "$evomaster_db_seed_file" \
++        --arg failureFile "$evomaster_db_seed_dir/failure.json" \
++        --arg appLog "$log_file" \
++        '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), smokeFile: $smokeFile, failureFile: $failureFile, appLog: $appLog}' \
++        >> "$failure_summary_lines_file"
++      cleanup_driver "$driver_pid"
++      driver_pid=""
++      cleanup_app "$app_pid" "$app_dir"
++      app_pid=""
++      write_artifact_runtime_status "evomaster-db-seed-smoke" "$evomaster_db_seed_exit"
++      trap - EXIT
++      if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
++        exit "$evomaster_db_seed_exit"
++      fi
++      echo "Continuing after EvoMaster DB seed smoke failure for $name; recorded exit code $evomaster_db_seed_exit" >&2
++      continue
++    fi
++    if [[ "$EVOMASTER_POSTMAN_SEEDS_ENABLED" == "true" && ( "$EVOMASTER_SEED_FROM_SMOKE" == "true" || "$EVOMASTER_COVERAGE_SWEEP_WITH_SEEDS" == "true" ) ]]; then
+       timestamped_step "$name" "refresh EvoMaster seed collection from live state"
+       EVOMASTER_SEED_AUTH_TOKEN="$token" \
+       EVOMASTER_SEED_BODY_MODE="$EVOMASTER_SEED_BODY_MODE" \
+@@ -1826,18 +1901,7 @@
+   fi
+ 
+   cleanup_app "" "$app_dir"
+-  artifact_end_epoch="$(now_epoch)"
+-  jq -n \
+-    --arg artifact "$name" \
+-    --arg startEpoch "$artifact_start_epoch" \
+-    --arg startIso "$(iso_from_epoch "$artifact_start_epoch")" \
+-    --arg endEpoch "$artifact_end_epoch" \
+-    --arg endIso "$(iso_from_epoch "$artifact_end_epoch")" \
+-    --arg durationSeconds "$(duration_seconds "$artifact_start_epoch" "$artifact_end_epoch")" \
+-    --arg evomasterEnabled "$EVOMASTER_ENABLED" \
+-    --arg evomasterStatusFile "$artifact_output_dir/evomaster/status.json" \
+-    '{artifact: $artifact, startEpoch: ($startEpoch | tonumber), startIso: $startIso, endEpoch: ($endEpoch | tonumber), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber), evomasterEnabled: ($evomasterEnabled == "true"), evomasterStatusFile: $evomasterStatusFile}' \
+-    > "$artifact_output_dir/harness/runtime-status.json"
++  write_artifact_runtime_status "runtime-loop" "0"
+   trap - EXIT
+ done 3< <(
+   node "$SCRIPT_DIR/artifact-utils.mjs" list \

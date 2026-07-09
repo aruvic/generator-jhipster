@@ -39,6 +39,10 @@
     "@fortawesome/fontawesome-svg-core": "<%= nodeDependencies['@fortawesome/fontawesome-svg-core'] %>",
     "@fortawesome/free-solid-svg-icons": "<%= nodeDependencies['@fortawesome/free-solid-svg-icons'] %>",
     "@ng-bootstrap/ng-bootstrap": "<%= nodeDependencies['@ng-bootstrap/ng-bootstrap'] %>",
+<%_ if (openApiOperations?.length) { _%>
+    "@ngx-formly/bootstrap": "<%= nodeDependencies['@ngx-formly/bootstrap'] %>",
+    "@ngx-formly/core": "<%= nodeDependencies['@ngx-formly/core'] %>",
+<%_ } _%>
 <%_ if (enableTranslation) { _%>
     "@ngx-translate/core": "<%= nodeDependencies['@ngx-translate/core'] %>",
     "@ngx-translate/http-loader": "<%= nodeDependencies['@ngx-translate/http-loader'] %>",

@@ -62,6 +62,23 @@ const routes: Routes = [
     title: 'login.title',
   },
 <%_ } _%>
+<%_ if (openApiOperations?.length) { _%>
+  {
+    path: 'openapi-operations',
+    loadComponent: () => import('./openapi-operations/openapi-operations'),
+    canActivate: [UserRouteAccessService],
+  },
+  {
+    path: 'form-crud/:operationId',
+    loadComponent: () => import('./form-crud/form-crud'),
+    canActivate: [UserRouteAccessService],
+  },
+  {
+    path: 'form-crud',
+    loadComponent: () => import('./form-crud/form-crud'),
+    canActivate: [UserRouteAccessService],
+  },
+<%_ } _%>
   {
     path: '<%= applicationTypeMicroservice ? lowercaseBaseName : '' %>',
     loadChildren: () => import(`./entities/entity.routes`),

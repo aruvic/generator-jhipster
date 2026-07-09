@@ -35,7 +35,7 @@ import PasswordStrengthBar from '../password/password-strength-bar/password-stre
   templateUrl: './register.html',
 })
 export default class Register implements AfterViewInit {
-  login = viewChild.required<ElementRef>('login');
+  login = viewChild<ElementRef>('login');
 
   doNotMatch = signal(false);
   error = signal(false);
@@ -71,7 +71,7 @@ export default class Register implements AfterViewInit {
   private readonly registerService = inject(RegisterService);
 
   ngAfterViewInit(): void {
-    this.login().nativeElement.focus();
+    this.login()?.nativeElement.focus();
   }
 
   register(): void {

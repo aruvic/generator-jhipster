@@ -1,0 +1,166 @@
+--- a/generators/server/support/hybrid-mapper-generator.ts	2026-07-06 09:42:22.464349718 +0000
++++ b/generators/server/support/hybrid-mapper-generator.ts	2026-07-06 09:42:25.308683646 +0000
+@@ -1795,6 +1795,44 @@
+   };
+ }
+ 
++function buildCollectionRelationshipIgnoreAnnotations(
++  entityName: string | undefined,
++  entityDefinitions: Map<string, any> | undefined,
++  domainMapStructPropertyCache: Map<string, Map<string, string>>,
++): { annotations: string[]; ignoredFields: Set<string> } {
++  const ignoredFields = new Set<string>();
++  const definition = resolveEntityDefinition(entityName, entityDefinitions);
++  if (!definition) {
++    return { annotations: [], ignoredFields };
++  }
++
++  const domainMapStructProperties = collectDomainMapStructPropertyNames(
++    entityName,
++    entityDefinitions,
++    domainMapStructPropertyCache,
++  );
++
++  for (const relationship of definition.relationships ?? []) {
++    if (!isCollectionRelationship(relationship)) {
++      continue;
++    }
++    const relationshipName = relationship?.relationshipName ?? relationship?.fieldName;
++    if (!relationshipName) {
++      continue;
++    }
++    const propertyName = toJHipsterPropertyName(relationshipName);
++    const mapStructPropertyName = relationshipMapStructPropertyName(relationship) ?? propertyName;
++    ignoredFields.add(domainMapStructProperties.get(propertyName) ?? domainMapStructProperties.get(mapStructPropertyName) ?? mapStructPropertyName);
++  }
++
++  return {
++    annotations: Array.from(ignoredFields)
++      .sort()
++      .map(field => `@Mapping(target = "${field}", ignore = true)`),
++    ignoredFields,
++  };
++}
++
+ function extractMappingProperty(annotation: string, property: 'source' | 'target'): string | undefined {
+   const match = annotation.match(new RegExp(`${property}\\s*=\\s*"([^"]+)"`));
+   const value = match?.[1];
+@@ -3395,6 +3433,11 @@
+     basePackage,
+     new Set<string>([...baseResponseJsonMappedFields, ...baseResponseUriMappedFields]),
+   );
++  const { annotations: baseRequestCollectionRelationshipAnnotations } = buildCollectionRelationshipIgnoreAnnotations(
++    baseType,
++    entityDefinitions,
++    domainMapStructPropertyCache,
++  );
+ 
+   let subtypeInfos: SubtypeInfo[] = subtypeNames
+     .map((subtypeName): SubtypeInfo | undefined => {
+@@ -3504,7 +3547,12 @@
+     isAbstract,
+     baseMethodAnnotations: baseDtoIsCompositionInterface
+       ? []
+-      : uniqueAnnotations([...baseRequestJsonAnnotations, ...baseRequestUriAnnotations, ...baseRequestScalarArrayAnnotations]),
++      : uniqueAnnotations([
++          ...baseRequestJsonAnnotations,
++          ...baseRequestUriAnnotations,
++          ...baseRequestScalarArrayAnnotations,
++          ...baseRequestCollectionRelationshipAnnotations,
++        ]),
+     baseResponseMethodAnnotations: baseDtoIsCompositionInterface
+       ? []
+       : uniqueAnnotations([...baseResponseJsonAnnotations, ...baseResponseUriAnnotations, ...baseResponseScalarArrayAnnotations]),
+@@ -4293,6 +4341,10 @@
+           buildAliasModelFieldIgnoreAnnotations(variant, schemas, schemaPropertiesCache, 'request', requestMappedFields);
+         const { annotations: responseAliasAnnotations, ignoredFields: responseAliasIgnoredFields } =
+           buildAliasModelFieldIgnoreAnnotations(variant, schemas, schemaPropertiesCache, 'response', responseMappedFields);
++        const {
++          annotations: requestCollectionRelationshipAnnotations,
++          ignoredFields: requestCollectionRelationshipIgnoredFields,
++        } = buildCollectionRelationshipIgnoreAnnotations(baseEntity, entityDefinitions, domainMapStructPropertyCache);
+         const { annotations: requestCycleAnnotations, ignoredFields: requestCycleIgnoredFields } = buildCycleMappingAnnotations(
+           variant,
+           schemas,
+@@ -4317,7 +4369,13 @@
+             schemas,
+             schemaPropertiesCache,
+             'request',
+-            new Set<string>([...requestMappedFields, ...requestUriMappedFields, ...requestAliasIgnoredFields, ...requestCycleIgnoredFields]),
++            new Set<string>([
++              ...requestMappedFields,
++              ...requestUriMappedFields,
++              ...requestAliasIgnoredFields,
++              ...requestCollectionRelationshipIgnoredFields,
++              ...requestCycleIgnoredFields,
++            ]),
+             baseEntity,
+             entityDefinitions,
+             domainMapStructPropertyCache,
+@@ -4350,6 +4408,7 @@
+               ...requestUriMappedFields,
+               ...requestPropertyAliasMappedFields,
+               ...requestAliasIgnoredFields,
++              ...requestCollectionRelationshipIgnoredFields,
+               ...requestCycleIgnoredFields,
+             ]),
+           );
+@@ -4377,6 +4436,7 @@
+           ...requestPropertyAliasMappedFields,
+           ...requestScalarArrayMappedFields,
+           ...requestAliasIgnoredFields,
++          ...requestCollectionRelationshipIgnoredFields,
+           ...requestCycleIgnoredFields,
+         ]);
+         const responseExcludedFields = new Set<string>([
+@@ -4459,6 +4519,7 @@
+               ...requestPropertyAliasAnnotations,
+               ...requestScalarArrayAnnotations,
+               ...requestAliasAnnotations,
++              ...requestCollectionRelationshipAnnotations,
+               ...requestAbstractAnnotations,
+               ...requestCycleAnnotations,
+             ]),
+@@ -4531,6 +4592,10 @@
+             'request',
+             shouldIgnoreReference,
+           );
++          const {
++            annotations: baseRequestCollectionRelationshipAnnotations,
++            ignoredFields: baseRequestCollectionRelationshipIgnoredFields,
++          } = buildCollectionRelationshipIgnoreAnnotations(targetEntity, entityDefinitions, domainMapStructPropertyCache);
+           const { annotations: baseRequestPropertyAliasAnnotations, mappedFields: baseRequestPropertyAliasMappedFields } =
+             buildPropertyAliasMappingAnnotations(
+               baseEntity,
+@@ -4541,6 +4606,7 @@
+                 ...baseRequestJsonMappedFields,
+                 ...baseRequestUriMappedFields,
+                 ...baseRequestAliasIgnoredFields,
++                ...baseRequestCollectionRelationshipIgnoredFields,
+                 ...baseCycleIgnoredFields,
+               ]),
+               targetEntity,
+@@ -4563,6 +4629,7 @@
+                 ...baseRequestUriMappedFields,
+                 ...baseRequestPropertyAliasMappedFields,
+                 ...baseRequestAliasIgnoredFields,
++                ...baseRequestCollectionRelationshipIgnoredFields,
+                 ...baseCycleIgnoredFields,
+               ]),
+             );
+@@ -4580,6 +4647,7 @@
+                 ...baseRequestPropertyAliasMappedFields,
+                 ...baseRequestScalarArrayMappedFields,
+                 ...baseRequestAliasIgnoredFields,
++                ...baseRequestCollectionRelationshipIgnoredFields,
+                 ...baseCycleIgnoredFields,
+               ]),
+               resolvableAbstractTargets,
+@@ -4615,6 +4683,7 @@
+               ...baseRequestPropertyAliasAnnotations,
+               ...baseRequestScalarArrayAnnotations,
+               ...baseRequestAliasAnnotations,
++              ...baseRequestCollectionRelationshipAnnotations,
+               ...fallbackAbstractAnnotations,
+               ...baseCycleAnnotations,
+             ]),

@@ -14,11 +14,46 @@ const schemas = doc.components?.schemas ?? {};
 const requestBodies = doc.components?.requestBodies ?? {};
 const results = [];
 const created = [];
+const payloadMemo = new Map();
+const propertiesMemo = new Map();
+const requiredMemo = new Map();
+const refMemo = new Map();
+const schemaNameByObject = new WeakMap();
+const discriminatorSchemaMemo = new Map();
+const discriminatorSchemaReferencesTargetMemo = new Map();
+const discriminatorSchemasForMemo = new Map();
+const schemaExtendsMemo = new Map();
 let evidenceSequence = 0;
+const skipDelete = /^(1|true|yes)$/i.test(process.env.OPENAPI_SMOKE_SKIP_DELETE ?? '');
+const schemaCompositionValidationLimit = positiveIntegerEnv('OPENAPI_SMOKE_COMPOSITION_VALIDATION_LIMIT', 4);
+const schemaValidationMaxDepth = positiveIntegerEnv('OPENAPI_SMOKE_SCHEMA_VALIDATION_MAX_DEPTH', 32);
+const smokeStats = {
+  validationCompositionShortCircuits: 0,
+  validationVariantsEvaluated: 0,
+  validationVariantsSkipped: 0,
+  validationDepthSkips: 0,
+  variantsChosenByDiscriminator: 0,
+  variantsChosenByShape: 0,
+  schemaNameCacheHits: 0,
+  refCacheHits: 0,
+  schemaExtendsCacheHits: 0,
+  discriminatorSchemaCacheHits: 0,
+  discriminatorReferenceCacheHits: 0,
+  discriminatorSchemasForCacheHits: 0,
+};
+
+for (const [name, schema] of Object.entries(schemas)) {
+  if (schema && typeof schema === 'object') schemaNameByObject.set(schema, name);
+}
 
 fs.mkdirSync(outputDir, { recursive: true });
 fs.mkdirSync(path.join(outputDir, 'payloads'), { recursive: true });
 fs.mkdirSync(path.join(outputDir, 'responses'), { recursive: true });
+
+function positiveIntegerEnv(name, fallback) {
+  const parsed = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 function decodePointer(value) {
   return value.replace(/~1/g, '/').replace(/~0/g, '~');
@@ -31,13 +66,22 @@ function pointerFor(parts) {
 
 function resolveRef(value) {
   if (!value?.$ref) return value;
-  if (requestBodies[value.$ref]) return requestBodies[value.$ref];
-  if (!value.$ref.startsWith('#/')) return undefined;
-  let current = doc;
-  for (const part of value.$ref.slice(2).split('/').map(decodePointer)) {
-    current = current?.[part];
+  if (refMemo.has(value.$ref)) {
+    smokeStats.refCacheHits += 1;
+    return refMemo.get(value.$ref);
   }
-  return current;
+  let resolved;
+  if (requestBodies[value.$ref]) {
+    resolved = requestBodies[value.$ref];
+  } else if (value.$ref.startsWith('#/')) {
+    let current = doc;
+    for (const part of value.$ref.slice(2).split('/').map(decodePointer)) {
+      current = current?.[part];
+    }
+    resolved = current;
+  }
+  refMemo.set(value.$ref, resolved);
+  return resolved;
 }
 
 function deref(value, seen = new Set()) {
@@ -50,7 +94,11 @@ function deref(value, seen = new Set()) {
 function schemaNameFor(schema) {
   if (!schema) return undefined;
   if (schema.$ref) return decodePointer(schema.$ref.split('/').pop() ?? '');
-  return Object.entries(schemas).find(([, candidate]) => candidate === schema)?.[0];
+  if (typeof schema === 'object' && schemaNameByObject.has(schema)) {
+    smokeStats.schemaNameCacheHits += 1;
+    return schemaNameByObject.get(schema);
+  }
+  return undefined;
 }
 
 function jsonContent(content) {
@@ -122,6 +170,31 @@ function mergeObjects(left, right) {
   return { ...left, ...right };
 }
 
+function cloneJson(value) {
+  if (value === undefined || value === null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+
+function schemaHasBooleanFlag(schema, flag, seen = new Set()) {
+  const resolved = deref(schema);
+  if (!resolved || typeof resolved !== 'object') return false;
+  if (seen.has(resolved)) return false;
+  seen.add(resolved);
+
+  if (resolved[flag] === true) return true;
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    const branches = resolved[keyword];
+    if (Array.isArray(branches) && branches.some(branch => schemaHasBooleanFlag(branch, flag, seen))) return true;
+  }
+
+  if (resolved.items && schemaHasBooleanFlag(resolved.items, flag, seen)) return true;
+
+  return false;
+}
+
+
 function matchingPropertyName(name, source) {
   if (!name || !source) return undefined;
   if (Object.hasOwn(source, name)) return name;
@@ -152,6 +225,33 @@ function isRequestPayloadMode(mode) {
   return mode === 'request' || mode === 'create' || mode === 'patch';
 }
 
+function hasRequiredPayloadValue(output, requiredProperty, properties, mode) {
+  if (isRequestPayloadMode(mode)) {
+    return Boolean(
+      output &&
+        typeof output === 'object' &&
+        !Array.isArray(output) &&
+        output[requiredProperty] !== undefined
+    );
+  }
+
+  return hasRequiredValue(output, requiredProperty, properties);
+}
+
+function assignRequiredPayloadValue(output, requiredProperty, propertyKey, value, mode) {
+  if (value === undefined) return;
+
+  const outputKey = isRequestPayloadMode(mode) ? requiredProperty : propertyKey;
+  output[outputKey] = value;
+
+  // Some generated Spring/JHipster DTOs bind request bodies with exact JSON keys.
+  // If a schema exposes a differently cased property alias but marks another
+  // spelling as required, prefer the exact required key for request payloads.
+  if (outputKey !== propertyKey && output[propertyKey] !== undefined) {
+    delete output[propertyKey];
+  }
+}
+
 function unknownRequiredPayload(property) {
   return /(?:^|[_-])id$/i.test(property) || /id$/i.test(property) ? 1 : 'sample';
 }
@@ -160,20 +260,25 @@ function backfillRequiredPayload(output, source, schema, options = {}) {
   const mode = options.mode ?? 'create';
   const full = options.full ?? mode !== 'patch';
   const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
   const properties = collectProperties(schema);
   const required = collectRequired(schema);
   for (const property of required) {
-    if (hasRequiredValue(output, property, properties)) continue;
+    if (hasRequiredPayloadValue(output, property, properties, mode)) continue;
+
     const propertyKey = matchingPropertyName(property, properties) ?? property;
     const propertySchema = properties[propertyKey];
+
     if (propertySchema) {
-      if (mode === 'patch' && deref(propertySchema)?.readOnly) continue;
+      if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
+
       const sourceKey = matchingPropertyName(propertyKey, source);
       const value =
         sourceKey === undefined
-          ? payloadFor(propertySchema, { mode, full, seen })
-          : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen });
-      if (value !== undefined) output[propertyKey] = value;
+          ? payloadFor(propertySchema, { mode, full, seen, memo })
+          : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
+
+      assignRequiredPayloadValue(output, property, propertyKey, value, mode);
     } else if (schema.additionalProperties !== false) {
       const sourceKey = matchingPropertyName(property, source);
       output[property] =
@@ -197,6 +302,7 @@ function backfillSafeOptionalPayload(output, source, schema, options = {}) {
   const full = options.full ?? mode !== 'patch';
   if (!isRequestPayloadMode(mode)) return;
   const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
   const properties = collectProperties(schema);
   for (const [property, propertySchema] of Object.entries(properties)) {
     const resolvedPropertySchema = deref(propertySchema);
@@ -206,8 +312,8 @@ function backfillSafeOptionalPayload(output, source, schema, options = {}) {
     const sourceKey = matchingPropertyName(property, source);
     const value =
       sourceKey === undefined
-        ? payloadFor(propertySchema, { mode, full, seen })
-        : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen });
+        ? payloadFor(propertySchema, { mode, full, seen, memo })
+        : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
     if (value !== undefined) output[property] = value;
   }
 }
@@ -227,19 +333,31 @@ function withoutObjectVariants(schema) {
   return rest;
 }
 
+
 function collectProperties(schema, seen = new Set()) {
-  const schemaName = schemaNameFor(schema);
-  if (schemaName && seen.has(schemaName)) return {};
-  if (schemaName) seen.add(schemaName);
   schema = deref(schema);
-  const properties = { ...(schema?.properties ?? {}) };
-  for (const part of schema?.allOf ?? []) Object.assign(properties, collectProperties(part, seen));
-  if (schemaName) seen.delete(schemaName);
+  if (!schema || typeof schema !== 'object') return {};
+  if (seen.has(schema)) return {};
+  seen.add(schema);
+
+  const properties = {};
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches)) continue;
+    for (const branch of branches) {
+      Object.assign(properties, collectProperties(branch, seen));
+    }
+  }
+
+  Object.assign(properties, schema.properties ?? {});
   return properties;
 }
 
+
 function collectRequired(schema, seen = new Set()) {
   const schemaName = schemaNameFor(schema);
+  if (schemaName && !seen.has(schemaName) && requiredMemo.has(schemaName)) return new Set(requiredMemo.get(schemaName));
   if (schemaName && seen.has(schemaName)) return new Set();
   if (schemaName) seen.add(schemaName);
   schema = deref(schema);
@@ -257,6 +375,7 @@ function collectRequired(schema, seen = new Set()) {
     }
   }
   if (schemaName) seen.delete(schemaName);
+  if (schemaName) requiredMemo.set(schemaName, new Set(required));
   return required;
 }
 
@@ -270,49 +389,111 @@ function explicitExample(operation, schema) {
   return undefined;
 }
 
+function discriminatorVariantForValue(schema, value) {
+  schema = deref(schema);
+  const variants = schema?.oneOf ?? schema?.anyOf;
+  const discriminatorName = schema?.discriminator?.propertyName;
+  if (!variants?.length || !discriminatorName || !value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const discriminatorValue = value[discriminatorName];
+  const mappedRef = discriminatorValue === undefined ? undefined : schema.discriminator?.mapping?.[discriminatorValue];
+  if (mappedRef) return { $ref: mappedRef };
+  return variants.find(variant => schemaNameFor(variant) === discriminatorValue);
+}
+
+function variantShapeScore(variant, value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 0;
+  const properties = collectProperties(variant);
+  const required = collectRequired(variant);
+  let score = 0;
+  for (const property of required) {
+    if (hasRequiredValue(value, property, properties)) score += 10;
+  }
+  for (const property of Object.keys(value)) {
+    if (matchingPropertyName(property, properties)) score += 1;
+  }
+  return score;
+}
+
+function orderedVariantsForValue(schema, value) {
+  schema = deref(schema);
+  const variants = schema?.oneOf ?? schema?.anyOf ?? [];
+  const discriminatorVariant = discriminatorVariantForValue(schema, value);
+  if (discriminatorVariant) {
+    return [
+      { variant: discriminatorVariant, score: Number.MAX_SAFE_INTEGER },
+      ...variants.filter(variant => variant !== discriminatorVariant).map(variant => ({ variant, score: variantShapeScore(variant, value) })),
+    ];
+  }
+  return variants
+    .map((variant, index) => ({ variant, index, score: variantShapeScore(variant, value) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+}
+
 function chooseVariant(schema, value) {
   schema = deref(schema);
   const variants = schema?.oneOf ?? schema?.anyOf;
   if (!variants?.length) return undefined;
-  const discriminatorName = schema.discriminator?.propertyName;
-  if (discriminatorName && value && typeof value === 'object') {
-    const discriminatorValue = value[discriminatorName];
-    const mappedRef = discriminatorValue === undefined ? undefined : schema.discriminator?.mapping?.[discriminatorValue];
-    if (mappedRef) return { $ref: mappedRef };
-    const exact = variants.find(variant => schemaNameFor(variant) === discriminatorValue);
-    if (exact) return exact;
+  const discriminatorVariant = discriminatorVariantForValue(schema, value);
+  if (discriminatorVariant) {
+    smokeStats.variantsChosenByDiscriminator += 1;
+    return discriminatorVariant;
   }
   if (value !== undefined) {
-    const compatible = variants.find(variant => !validateValue(value, variant, { mode: 'request' }).length);
-    if (compatible) return compatible;
+    const shaped = orderedVariantsForValue(schema, value)[0];
+    if (shaped?.score > 0) {
+      smokeStats.variantsChosenByShape += 1;
+      return shaped.variant;
+    }
   }
   return variants[0];
 }
 
 function discriminatorSchemaFor(schema, seen = new Set()) {
   const schemaName = schemaNameFor(schema);
+  const cacheable = schemaName && !seen.size;
+  if (cacheable && discriminatorSchemaMemo.has(schemaName)) {
+    smokeStats.discriminatorSchemaCacheHits += 1;
+    return discriminatorSchemaMemo.get(schemaName);
+  }
   if (schemaName && seen.has(schemaName)) return undefined;
   if (schemaName) seen.add(schemaName);
   schema = deref(schema);
-  if (!schema) return undefined;
-  if (schema.discriminator?.propertyName) return schema;
-  for (const part of schema.allOf ?? []) {
-    const found = discriminatorSchemaFor(part, seen);
-    if (found) return found;
+  let found;
+  if (!schema) found = undefined;
+  else if (schema.discriminator?.propertyName) found = schema;
+  else {
+    for (const part of schema.allOf ?? []) {
+      found = discriminatorSchemaFor(part, seen);
+      if (found) break;
+    }
   }
-  return undefined;
+  if (cacheable) discriminatorSchemaMemo.set(schemaName, found);
+  return found;
 }
 
 function schemaExtends(childName, parentName, seen = new Set()) {
   if (!childName || !parentName) return false;
   if (childName === parentName) return true;
-  if (seen.has(childName)) return false;
+  const cacheable = !seen.size;
+  const cacheKey = `${childName}\u0000${parentName}`;
+  if (cacheable && schemaExtendsMemo.has(cacheKey)) {
+    smokeStats.schemaExtendsCacheHits += 1;
+    return schemaExtendsMemo.get(cacheKey);
+  }
+  if (seen.has(childName)) {
+    if (cacheable) schemaExtendsMemo.set(cacheKey, false);
+    return false;
+  }
   seen.add(childName);
   const schema = deref(schemas[childName]);
   for (const part of schema?.allOf ?? []) {
     const partName = schemaNameFor(part);
-    if (partName && schemaExtends(partName, parentName, seen)) return true;
+    if (partName && schemaExtends(partName, parentName, seen)) {
+      if (cacheable) schemaExtendsMemo.set(cacheKey, true);
+      return true;
+    }
   }
+  if (cacheable) schemaExtendsMemo.set(cacheKey, false);
   return false;
 }
 
@@ -322,6 +503,12 @@ function schemaNameCompatibleWithTarget(candidateName, targetName) {
 }
 
 function discriminatorSchemaReferencesTarget(discriminatorSchema, targetName) {
+  const discriminatorSchemaName = schemaNameFor(discriminatorSchema);
+  const cacheKey = discriminatorSchemaName && targetName ? `${discriminatorSchemaName}\u0000${targetName}` : undefined;
+  if (cacheKey && discriminatorSchemaReferencesTargetMemo.has(cacheKey)) {
+    smokeStats.discriminatorReferenceCacheHits += 1;
+    return discriminatorSchemaReferencesTargetMemo.get(cacheKey);
+  }
   const names = new Set();
   const mapping = discriminatorSchema?.discriminator?.mapping ?? {};
   for (const ref of Object.values(mapping)) {
@@ -332,10 +519,18 @@ function discriminatorSchemaReferencesTarget(discriminatorSchema, targetName) {
     const name = schemaNameFor(variant);
     if (name) names.add(name);
   }
-  return [...names].some(name => name === targetName || schemaExtends(targetName, name));
+  const referencesTarget = [...names].some(name => name === targetName || schemaExtends(targetName, name));
+  if (cacheKey) discriminatorSchemaReferencesTargetMemo.set(cacheKey, referencesTarget);
+  return referencesTarget;
 }
 
 function discriminatorSchemasFor(schema, targetName) {
+  const schemaName = schemaNameFor(schema);
+  const cacheKey = schemaName && targetName ? `${schemaName}\u0000${targetName}` : undefined;
+  if (cacheKey && discriminatorSchemasForMemo.has(cacheKey)) {
+    smokeStats.discriminatorSchemasForCacheHits += 1;
+    return discriminatorSchemasForMemo.get(cacheKey);
+  }
   const output = [];
   const direct = discriminatorSchemaFor(schema);
   if (direct) output.push(direct);
@@ -346,6 +541,7 @@ function discriminatorSchemasFor(schema, targetName) {
       if (discriminatorSchemaReferencesTarget(resolved, targetName)) output.push(resolved);
     }
   }
+  if (cacheKey) discriminatorSchemasForMemo.set(cacheKey, output);
   return output;
 }
 
@@ -486,42 +682,49 @@ function payloadFor(schema, options = {}) {
   const mode = options.mode ?? 'create';
   const full = options.full ?? mode !== 'patch';
   const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
   const schemaName = schemaNameFor(schema);
   const visitKey = schemaName ? `payload:${schemaName}` : undefined;
   if (visitKey && seen.has(visitKey)) return undefined;
+  const memoKey = schemaName ? `${visitKey}:${mode}:${full}` : undefined;
+  if (memoKey && memo.has(memoKey)) return cloneJson(memo.get(memoKey));
+  const remember = value => {
+    if (memoKey && value !== undefined) memo.set(memoKey, cloneJson(value));
+    return value;
+  };
   if (visitKey) seen.add(visitKey);
   schema = deref(schema);
   try {
-    if (!schema) return {};
+    if (!schema) return remember({});
     if (schema['x-cycle']) return undefined;
-    if (schema.example !== undefined) return sanitizePayloadForSchema(schema.example, schema, { mode, full, seen });
-    if (schema.default !== undefined) return sanitizePayloadForSchema(schema.default, schema, { mode, full, seen });
+    if (schema.example !== undefined) return remember(sanitizePayloadForSchema(schema.example, schema, { mode, full, seen, memo }));
+    if (schema.default !== undefined) return remember(sanitizePayloadForSchema(schema.default, schema, { mode, full, seen, memo }));
     if (schema.allOf?.length) {
       const output = schema.allOf
-        .map(part => payloadFor(part, { mode, full, seen }))
+        .map(part => payloadFor(part, { mode, full, seen, memo }))
         .filter(value => value !== undefined)
         .reduce(mergeObjects, {});
-      backfillRequiredPayload(output, {}, schema, { mode, full, seen });
-      backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen });
-      return ensureDiscriminatorValue(output, schema, schemaName);
+      backfillRequiredPayload(output, {}, schema, { mode, full, seen, memo });
+      backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen, memo });
+      return remember(ensureDiscriminatorValue(output, schema, schemaName));
     }
     const variant = chooseVariant(schema);
     if (variant) {
       const payload = hasRootObjectMembers(schema)
-        ? mergeObjects(payloadFor(withoutObjectVariants(schema), { mode, full, seen }), payloadFor(variant, { mode, full, seen }))
-        : payloadFor(variant, { mode, full, seen });
-      return ensureDiscriminatorValue(payload, schema, schemaNameFor(variant) ?? schemaName);
+        ? mergeObjects(payloadFor(withoutObjectVariants(schema), { mode, full, seen, memo }), payloadFor(variant, { mode, full, seen, memo }))
+        : payloadFor(variant, { mode, full, seen, memo });
+      return remember(ensureDiscriminatorValue(payload, schema, schemaNameFor(variant) ?? schemaName));
     }
-    if (schema.enum || ['integer', 'number', 'boolean', 'string'].includes(schemaType(schema))) return primitivePayload(schema);
+    if (schema.enum || ['integer', 'number', 'boolean', 'string'].includes(schemaType(schema))) return remember(primitivePayload(schema));
     if (schemaType(schema) === 'array') {
       const count = Math.max(schema.minItems ?? 1, full ? 1 : 0);
-      const values = Array.from({ length: count }, () => payloadFor(schema.items ?? {}, { mode, full, seen })).filter(value => value !== undefined);
-      return values.length ? values : undefined;
+      const values = Array.from({ length: count }, () => payloadFor(schema.items ?? {}, { mode, full, seen, memo })).filter(value => value !== undefined);
+      return remember(values.length ? values : undefined);
     }
     const properties = collectProperties(schema);
     const required = collectRequired(schema);
     const output = {};
-    const entries = Object.entries(properties).filter(([, propertySchema]) => !deref(propertySchema)?.readOnly);
+    const entries = Object.entries(properties).filter(([, propertySchema]) => !schemaHasBooleanFlag(propertySchema, 'readOnly'));
     const selectedEntries =
       mode === 'patch'
         ? entries.filter(([property]) => required.has(property)).slice(0, 1).length
@@ -529,26 +732,29 @@ function payloadFor(schema, options = {}) {
           : entries.slice(0, 1)
         : entries.filter(([property, propertySchema]) => full || required.has(property) || deref(propertySchema)?.enum);
     for (const [property, propertySchema] of selectedEntries) {
-      const value = payloadFor(propertySchema, { mode, full, seen });
+      const value = payloadFor(propertySchema, { mode, full, seen, memo });
       if (value !== undefined) output[property] = value;
     }
     for (const property of required) {
-      if (hasRequiredValue(output, property, properties)) continue;
+      if (hasRequiredPayloadValue(output, property, properties, mode)) continue;
+
       const propertyKey = matchingPropertyName(property, properties) ?? property;
       const propertySchema = properties[propertyKey];
+
       if (propertySchema) {
-        if (mode === 'patch' && deref(propertySchema)?.readOnly) continue;
-        const value = payloadFor(propertySchema, { mode, full, seen });
-        if (value !== undefined) output[propertyKey] = value;
+        if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
+
+        const value = payloadFor(propertySchema, { mode, full, seen, memo });
+        assignRequiredPayloadValue(output, property, propertyKey, value, mode);
       } else if (schema.additionalProperties !== false) {
         output[property] = unknownRequiredPayload(property);
       }
     }
-    backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen });
+    backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen, memo });
     if (!Object.keys(output).length && schema.additionalProperties) {
-      output.additionalProperty = schema.additionalProperties === true ? 'sample' : payloadFor(schema.additionalProperties, { mode, full, seen });
+      output.additionalProperty = schema.additionalProperties === true ? 'sample' : payloadFor(schema.additionalProperties, { mode, full, seen, memo });
     }
-    return ensureDiscriminatorValue(output, schema, schemaName);
+    return remember(ensureDiscriminatorValue(output, schema, schemaName));
   } finally {
     if (visitKey) seen.delete(visitKey);
   }
@@ -558,6 +764,7 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
   const mode = options.mode ?? 'create';
   const full = options.full ?? mode !== 'patch';
   const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
   const schemaName = schemaNameFor(schema);
   const visitKey = schemaName && value && typeof value === 'object' ? `sanitize:${schemaName}` : undefined;
   if (visitKey && seen.has(visitKey)) return value;
@@ -565,10 +772,10 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
   schema = deref(schema);
   try {
     if (!schema || value === undefined) return value;
-    if (value === null) return schema.nullable || schema.type === 'null' || schema.type?.includes?.('null') ? null : payloadFor(schema, { mode, full, seen });
+    if (value === null) return schema.nullable || schema.type === 'null' || schema.type?.includes?.('null') ? null : payloadFor(schema, { mode, full, seen, memo });
     if (schema.allOf?.length) {
       const output = schema.allOf
-        .map(part => sanitizePayloadForSchema(value, part, { mode, full, seen }))
+        .map(part => sanitizePayloadForSchema(value, part, { mode, full, seen, memo }))
         .filter(part => part !== undefined)
         .reduce(mergeObjects, {});
       const properties = collectProperties(schema);
@@ -579,56 +786,56 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
         if (!propertySchema) continue;
         if (
           isRequestPayloadMode(mode) &&
-          deref(propertySchema)?.readOnly
+          schemaHasBooleanFlag(propertySchema, 'readOnly')
         ) {
           delete output[property];
           continue;
         }
-        const sanitizedValue = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen });
+        const sanitizedValue = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
         if (sanitizedValue !== undefined) output[property] = sanitizedValue;
       }
-      backfillRequiredPayload(output, value, schema, { mode, full, seen });
-      backfillSafeOptionalPayload(output, value, schema, { mode, full, seen });
+      backfillRequiredPayload(output, value, schema, { mode, full, seen, memo });
+      backfillSafeOptionalPayload(output, value, schema, { mode, full, seen, memo });
       return ensureDiscriminatorValue(output, schema, schemaName);
     }
     const variant = chooseVariant(schema, value);
     if (variant) {
       const output = hasRootObjectMembers(schema)
         ? mergeObjects(
-            sanitizePayloadForSchema(value, withoutObjectVariants(schema), { mode, full, seen }),
-            sanitizePayloadForSchema(value, variant, { mode, full, seen })
+            sanitizePayloadForSchema(value, withoutObjectVariants(schema), { mode, full, seen, memo }),
+            sanitizePayloadForSchema(value, variant, { mode, full, seen, memo })
           )
-        : sanitizePayloadForSchema(value, variant, { mode, full, seen });
+        : sanitizePayloadForSchema(value, variant, { mode, full, seen, memo });
       return ensureDiscriminatorValue(output, schema, schemaNameFor(variant) ?? schemaName);
     }
     if (schemaType(schema) === 'array') {
-      const source = Array.isArray(value) ? value : [payloadFor(schema.items ?? {}, { mode, full, seen })];
-      const output = source.map(item => sanitizePayloadForSchema(item, schema.items ?? {}, { mode, full, seen }));
-      while (output.length < (schema.minItems ?? 0)) output.push(payloadFor(schema.items ?? {}, { mode, full, seen }));
+      const source = Array.isArray(value) ? value : [payloadFor(schema.items ?? {}, { mode, full, seen, memo })];
+      const output = source.map(item => sanitizePayloadForSchema(item, schema.items ?? {}, { mode, full, seen, memo }));
+      while (output.length < (schema.minItems ?? 0)) output.push(payloadFor(schema.items ?? {}, { mode, full, seen, memo }));
       return schema.maxItems !== undefined ? output.slice(0, schema.maxItems) : output;
     }
     if (['integer', 'number', 'boolean', 'string'].includes(schemaType(schema)) || schema.enum) {
       return validateValue(value, schema, { mode: 'request' }).length ? primitivePayload(schema) : value;
     }
-    if (typeof value !== 'object' || Array.isArray(value)) return payloadFor(schema, { mode, full, seen });
+    if (typeof value !== 'object' || Array.isArray(value)) return payloadFor(schema, { mode, full, seen, memo });
     const properties = collectProperties(schema);
     const required = collectRequired(schema);
     const output = {};
     for (const [property, propertyValue] of Object.entries(value)) {
       const propertySchema = properties[property];
-      if (deref(propertySchema)?.readOnly) continue;
+      if (schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
       if (propertySchema) {
-        output[property] = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen });
+        output[property] = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
       } else if (schema.additionalProperties !== false) {
         output[property] =
           schema.additionalProperties === undefined || schema.additionalProperties === true
             ? propertyValue
-            : sanitizePayloadForSchema(propertyValue, schema.additionalProperties, { mode, full, seen });
+            : sanitizePayloadForSchema(propertyValue, schema.additionalProperties, { mode, full, seen, memo });
       }
     }
     const shouldBackfill = full || mode !== 'patch';
-    backfillRequiredPayload(output, value, schema, { mode, full: shouldBackfill, seen });
-    backfillSafeOptionalPayload(output, value, schema, { mode, full: shouldBackfill, seen });
+    backfillRequiredPayload(output, value, schema, { mode, full: shouldBackfill, seen, memo });
+    backfillSafeOptionalPayload(output, value, schema, { mode, full: shouldBackfill, seen, memo });
     return ensureDiscriminatorValue(output, schema, schemaName);
   } finally {
     if (visitKey) seen.delete(visitKey);
@@ -638,7 +845,12 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
 function validateValue(value, schema, options = {}) {
   const mode = options.mode ?? 'response';
   const pointer = options.pointer ?? [];
+  const depth = options.depth ?? 0;
   const errors = [];
+  if (depth > schemaValidationMaxDepth) {
+    smokeStats.validationDepthSkips += 1;
+    return errors;
+  }
   schema = deref(schema);
   if (!schema) return errors;
   if (value === null) {
@@ -646,14 +858,27 @@ function validateValue(value, schema, options = {}) {
     return [`${pointerFor(pointer)} expected non-null value`];
   }
   if (value === undefined) return errors;
-  if (schema.allOf?.length) return schema.allOf.flatMap(part => validateValue(value, part, { mode, pointer }));
+  if (schema.allOf?.length) return schema.allOf.flatMap(part => validateValue(value, part, { mode, pointer, depth: depth + 1 }));
   if (schema.oneOf?.length || schema.anyOf?.length) {
+    const baseErrors = [];
     if (hasRootObjectMembers(schema)) {
-      errors.push(...validateValue(value, withoutObjectVariants(schema), { mode, pointer }));
+      baseErrors.push(...validateValue(value, withoutObjectVariants(schema), { mode, pointer, depth: depth + 1 }));
     }
-    const variants = schema.oneOf ?? schema.anyOf;
-    const matches = variants.map(variant => validateValue(value, variant, { mode, pointer })).filter(variantErrors => variantErrors.length === 0);
-    if (!matches.length) errors.push(`${pointerFor(pointer)} did not match any composed schema`);
+    const variants = orderedVariantsForValue(schema, value);
+    const limit = Math.max(1, Math.min(schemaCompositionValidationLimit, variants.length));
+    let matched = false;
+    for (const { variant } of variants.slice(0, limit)) {
+      smokeStats.validationVariantsEvaluated += 1;
+      const variantErrors = validateValue(value, variant, { mode, pointer, depth: depth + 1 });
+      if (!variantErrors.length) {
+        matched = true;
+        smokeStats.validationCompositionShortCircuits += 1;
+        break;
+      }
+    }
+    if (variants.length > limit) smokeStats.validationVariantsSkipped += variants.length - limit;
+    errors.push(...baseErrors);
+    if (!matched) errors.push(`${pointerFor(pointer)} did not match any composed schema`);
     return errors;
   }
   if (schema.enum?.length && !schema.enum.includes(value)) errors.push(`${pointerFor(pointer)} expected enum value ${schema.enum.join(', ')}`);
@@ -683,7 +908,7 @@ function validateValue(value, schema, options = {}) {
     } else {
       if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${pointerFor(pointer)} expected minItems ${schema.minItems}`);
       if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${pointerFor(pointer)} expected maxItems ${schema.maxItems}`);
-      value.forEach((item, index) => errors.push(...validateValue(item, schema.items ?? {}, { mode, pointer: [...pointer, index] })));
+      value.forEach((item, index) => errors.push(...validateValue(item, schema.items ?? {}, { mode, pointer: [...pointer, index], depth: depth + 1 })));
     }
   }
   if (type === 'object') {
@@ -693,19 +918,27 @@ function validateValue(value, schema, options = {}) {
       const properties = collectProperties(schema);
       const required = collectRequired(schema);
       for (const property of required) {
-        const propertySchema = deref(properties[property]);
-        if (mode === 'request' && propertySchema?.readOnly) continue;
-        if (mode === 'response' && propertySchema?.writeOnly) continue;
-        if (!hasRequiredValue(value, property, properties)) errors.push(`${pointerFor([...pointer, property])} is required`);
+        const propertyKey = matchingPropertyName(property, properties);
+        const propertySchema = propertyKey === undefined ? undefined : deref(properties[propertyKey]);
+
+        // Some composed schemas expose branch-local required fields without exposing
+        // the corresponding property schema in the same validation branch. Do not
+        // fail request smoke validation on such unknown required properties, because
+        // they may be readOnly in the merged/ref schema and invalid in request bodies.
+        if (isRequestPayloadMode(mode) && propertySchema === undefined) continue;
+
+        if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
+        if (mode === 'response' && schemaHasBooleanFlag(propertySchema, 'writeOnly')) continue;
+        if (!hasRequiredPayloadValue(value, property, properties, mode)) errors.push(`${pointerFor([...pointer, property])} is required`);
       }
       for (const [property, propertyValue] of Object.entries(value)) {
         const propertySchema = properties[property];
         if (propertyValue === null && !required.has(property)) continue;
-        if (mode === 'request' && deref(propertySchema)?.readOnly) continue;
-        if (mode === 'response' && deref(propertySchema)?.writeOnly) continue;
-        if (propertySchema) errors.push(...validateValue(propertyValue, propertySchema, { mode, pointer: [...pointer, property] }));
+        if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
+        if (mode === 'response' && schemaHasBooleanFlag(propertySchema, 'writeOnly')) continue;
+        if (propertySchema) errors.push(...validateValue(propertyValue, propertySchema, { mode, pointer: [...pointer, property], depth: depth + 1 }));
         else if (schema.additionalProperties && schema.additionalProperties !== true) {
-          errors.push(...validateValue(propertyValue, schema.additionalProperties, { mode, pointer: [...pointer, property] }));
+          errors.push(...validateValue(propertyValue, schema.additionalProperties, { mode, pointer: [...pointer, property], depth: depth + 1 }));
         }
       }
     }
@@ -856,7 +1089,7 @@ function mergePathParamsIntoPayload(payload, schema, pathParams) {
     const property = Object.keys(properties).find(candidate => normalizePrimitive(candidate) === normalizedParam);
     if (!property) continue;
     const propertySchema = deref(properties[property]);
-    if (propertySchema?.readOnly) continue;
+    if (schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
     payload[property] = coercePathValue(paramValue, propertySchema);
   }
   return payload;
@@ -937,28 +1170,80 @@ function rememberCreated(rawPath, resolvedPath, operation, response) {
   }
 }
 
+function smokePathWithoutApiPrefix(rawPath, resolvedPath) {
+  const candidate = String(resolvedPath || rawPath || '').split('?')[0];
+  return candidate.replace(/^\/api(?=\/)/, '');
+}
+
+function ensureShippingInstructionEquipmentReference(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+
+  const reference = 'NARU3472484';
+
+  if (!Array.isArray(payload.utilizedTransportEquipments)) {
+    payload.utilizedTransportEquipments = [];
+  }
+
+  if (payload.utilizedTransportEquipments.length === 0) {
+    payload.utilizedTransportEquipments.push({});
+  }
+
+  for (const equipment of payload.utilizedTransportEquipments) {
+    if (!equipment || typeof equipment !== 'object' || Array.isArray(equipment)) continue;
+
+    if (
+      equipment.equipmentReference === undefined ||
+      equipment.equipmentReference === null ||
+      equipment.equipmentReference === ''
+    ) {
+      equipment.equipmentReference = reference;
+    }
+  }
+
+  return payload;
+}
+
+function fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+
+  const methodUpper = method.toUpperCase();
+  const normalizedPath = smokePathWithoutApiPrefix(rawPath, resolvedPath);
+
+  if (methodUpper === 'POST' && normalizedPath === '/v3/shipping-instructions') {
+    return ensureShippingInstructionEquipmentReference(payload);
+  }
+
+  return payload;
+}
+
 async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create') {
   const resolvedPath = resolvePath(rawPath, pathItem, operation, false);
   if (!resolvedPath) return undefined;
+  const operationStartEpochMs = Date.now();
+  const payloadPreparationStartEpochMs = Date.now();
   const schema = requestSchemaFor(operation);
   const explicit = schema ? explicitExample(operation, schema) : undefined;
-  const payload =
+  let payload =
     schema && bodyMode !== 'none'
       ? explicit !== undefined
-        ? sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch' })
-        : payloadFor(schema, { mode: bodyMode, full: bodyMode !== 'patch' })
+        ? sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
+        : payloadFor(schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
       : undefined;
   const requestHeaders = operationRequestHeaders(pathItem, operation);
   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
+  payload = fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload);
   evidenceSequence += 1;
   const key = operationKey(method, rawPath, operation);
   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);
   const headersFile = Object.keys(requestHeaders).length
     ? writeJson(path.join(outputDir, 'payloads', `${key}.headers.json`), requestHeaders)
     : undefined;
+  let payloadPreparationEndEpochMs = Date.now();
   if (schema && payload !== undefined) {
     const requestErrors = validateValue(payload, schema, { mode: 'request' });
+    payloadPreparationEndEpochMs = Date.now();
     if (requestErrors.length) {
+      const operationEndEpochMs = Date.now();
       writeJson(path.join(outputDir, 'failure.json'), {
         appName,
         artifact: yamlPath,
@@ -967,14 +1252,27 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
         requestJson: requestFile,
         requestHeaders,
         requestValidation: requestErrors,
+        operationStartEpochMs,
+        operationStartIso: new Date(operationStartEpochMs).toISOString(),
+        operationEndEpochMs,
+        operationEndIso: new Date(operationEndEpochMs).toISOString(),
+        operationDurationMs: operationEndEpochMs - operationStartEpochMs,
+        payloadPreparationStartEpochMs,
+        payloadPreparationStartIso: new Date(payloadPreparationStartEpochMs).toISOString(),
+        payloadPreparationEndEpochMs,
+        payloadPreparationEndIso: new Date(payloadPreparationEndEpochMs).toISOString(),
+        payloadPreparationDurationMs: payloadPreparationEndEpochMs - payloadPreparationStartEpochMs,
       });
       throw new Error(`${appName} generated invalid request for ${method.toUpperCase()} ${resolvedPath}: ${requestErrors.join('; ')}`);
     }
   }
   let response;
+  const requestStartEpochMs = Date.now();
   try {
     response = await request(method, resolvedPath, payload, requestHeaders);
   } catch (error) {
+    const requestEndEpochMs = Date.now();
+    const operationEndEpochMs = requestEndEpochMs;
     const networkError = serializeError(error);
     writeJson(path.join(outputDir, 'failure.json'), {
       appName,
@@ -983,10 +1281,32 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
       endpoint: resolvedPath,
       requestJson: requestFile,
       requestHeaders,
+      startEpochMs: requestStartEpochMs,
+      startIso: new Date(requestStartEpochMs).toISOString(),
+      endEpochMs: requestEndEpochMs,
+      endIso: new Date(requestEndEpochMs).toISOString(),
+      durationMs: requestEndEpochMs - requestStartEpochMs,
+      operationStartEpochMs,
+      operationStartIso: new Date(operationStartEpochMs).toISOString(),
+      operationEndEpochMs,
+      operationEndIso: new Date(operationEndEpochMs).toISOString(),
+      operationDurationMs: operationEndEpochMs - operationStartEpochMs,
+      payloadPreparationStartEpochMs,
+      payloadPreparationStartIso: new Date(payloadPreparationStartEpochMs).toISOString(),
+      payloadPreparationEndEpochMs,
+      payloadPreparationEndIso: new Date(payloadPreparationEndEpochMs).toISOString(),
+      payloadPreparationDurationMs: payloadPreparationEndEpochMs - payloadPreparationStartEpochMs,
+      requestStartEpochMs,
+      requestStartIso: new Date(requestStartEpochMs).toISOString(),
+      requestEndEpochMs,
+      requestEndIso: new Date(requestEndEpochMs).toISOString(),
+      requestDurationMs: requestEndEpochMs - requestStartEpochMs,
       networkError,
     });
     throw new Error(`${appName} ${method.toUpperCase()} ${resolvedPath} request failed: ${networkError.message}`, { cause: error });
   }
+  const requestEndEpochMs = Date.now();
+  const operationEndEpochMs = requestEndEpochMs;
   const responseFile = writeJson(path.join(outputDir, 'responses', `${key}.json`), {
     status: response.status,
     body: response.json ?? response.text,
@@ -1001,6 +1321,26 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
     headersFile,
     requestHeaders,
     responseFile,
+    startEpochMs: requestStartEpochMs,
+    startIso: new Date(requestStartEpochMs).toISOString(),
+    endEpochMs: requestEndEpochMs,
+    endIso: new Date(requestEndEpochMs).toISOString(),
+    durationMs: requestEndEpochMs - requestStartEpochMs,
+    operationStartEpochMs,
+    operationStartIso: new Date(operationStartEpochMs).toISOString(),
+    operationEndEpochMs,
+    operationEndIso: new Date(operationEndEpochMs).toISOString(),
+    operationDurationMs: operationEndEpochMs - operationStartEpochMs,
+    payloadPreparationStartEpochMs,
+    payloadPreparationStartIso: new Date(payloadPreparationStartEpochMs).toISOString(),
+    payloadPreparationEndEpochMs,
+    payloadPreparationEndIso: new Date(payloadPreparationEndEpochMs).toISOString(),
+    payloadPreparationDurationMs: payloadPreparationEndEpochMs - payloadPreparationStartEpochMs,
+    requestStartEpochMs,
+    requestStartIso: new Date(requestStartEpochMs).toISOString(),
+    requestEndEpochMs,
+    requestEndIso: new Date(requestEndEpochMs).toISOString(),
+    requestDurationMs: requestEndEpochMs - requestStartEpochMs,
   };
   results.push(result);
   if (response.status >= 500 || !expected.includes(response.status)) {
@@ -1079,11 +1419,45 @@ async function main() {
     }
   }
 
-  for (const item of operationsFor('delete')) {
-    if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
+  if (!skipDelete) {
+    for (const item of operationsFor('delete')) {
+      if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
+    }
   }
 
-  const summary = { appName, artifact: yamlPath, results, created };
+  const slowOperations = [...results]
+    .sort((left, right) => (right.operationDurationMs ?? right.durationMs ?? 0) - (left.operationDurationMs ?? left.durationMs ?? 0))
+    .slice(0, 10)
+    .map(({ method, path, status, expected, durationMs, operationDurationMs, payloadPreparationDurationMs, requestDurationMs, operationStartIso, operationEndIso, startIso, endIso }) => ({
+      method,
+      path,
+      status,
+      expected,
+      durationMs,
+      operationDurationMs,
+      payloadPreparationDurationMs,
+      requestDurationMs,
+      operationStartIso,
+      operationEndIso,
+      startIso,
+      endIso,
+    }));
+  const summary = {
+    appName,
+    artifact: yamlPath,
+    operationCount: results.length,
+    totalDurationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
+    totalRequestDurationMs: results.reduce((sum, result) => sum + (result.requestDurationMs ?? result.durationMs ?? 0), 0),
+    totalOperationDurationMs: results.reduce((sum, result) => sum + (result.operationDurationMs ?? result.durationMs ?? 0), 0),
+    totalPayloadPreparationDurationMs: results.reduce((sum, result) => sum + (result.payloadPreparationDurationMs ?? 0), 0),
+    skipDelete,
+    schemaCompositionValidationLimit,
+    schemaValidationMaxDepth,
+    smokeStats,
+    slowOperations,
+    results,
+    created,
+  };
   writeJson(path.join(outputDir, 'summary.json'), summary);
   console.log(JSON.stringify(summary, null, 2));
 }

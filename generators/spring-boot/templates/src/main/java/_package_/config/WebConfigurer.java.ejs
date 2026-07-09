@@ -259,7 +259,7 @@ public class WebConfigurer implements <% if (!reactive) { %>ServletContextInitia
                 converter.setSupportedMediaTypes(filtered);
             });
         IntStream.range(0, converters.size())
-            .forEach(index -> LOG.debug("#{} converter={} mediaTypes={}", index, converters.get(index).getClass().getName(), converters.get(index).getSupportedMediaTypes()));
+            .forEach(index -> LOG.trace("#{} converter={} mediaTypes={}", index, converters.get(index).getClass().getName(), converters.get(index).getSupportedMediaTypes()));
     }
 
     @Bean

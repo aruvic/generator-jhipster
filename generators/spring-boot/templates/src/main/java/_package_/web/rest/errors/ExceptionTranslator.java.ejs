@@ -33,6 +33,7 @@ import org.springframework.dao.ConcurrencyFailureException;
 <%_ if (!databaseTypeNo) { _%>
 import org.springframework.dao.DataAccessException;
 <%_ } _%>
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageConversionException;
 <%_ if (reactive && databaseTypeSql) { _%>
@@ -113,6 +114,7 @@ _%>
     private static final String FIELD_ERRORS_KEY = "fieldErrors";
     private static final String MESSAGE_KEY = "message";
     private static final String PATH_KEY = "path";
+    private static final String REQUEST_ERROR_KEY = "requestError";
     private static final boolean CASUAL_CHAIN_ENABLED = false;
 
     private static final Logger LOG = LoggerFactory.getLogger(ExceptionTranslator.class);
@@ -139,7 +141,8 @@ _%>
     @Override
     protected <%- returnType %> handleExceptionInternal(
             Exception ex, @Nullable Object body, HttpHeaders headers, HttpStatusCode statusCode, <%= requestEntityRequestClass %> request) {
-        body = body == null ? wrapAndCustomizeProblem((Throwable) ex, (<%= requestClass %>) request) : body;
+        body = body == null || body instanceof ProblemDetail ? wrapAndCustomizeProblem((Throwable) ex, (<%= requestClass %>) request) : body;
+        alignProblemStatus(body, ex, statusCode);
     <%_ if (reactive) { _%>
         if (request.getResponse().isCommitted()) {
             return Mono.error(ex);
@@ -148,6 +151,26 @@ _%>
     <%_ } else { _%>
         return super.handleExceptionInternal(ex, body, headers, statusCode, request);
     <%_ } _%>
+    }
+
+    private void alignProblemStatus(@Nullable Object body, Throwable err, @Nullable HttpStatusCode statusCode) {
+        if (!(body instanceof ProblemDetail problem) || statusCode == null) {
+            return;
+        }
+        int responseStatus = statusCode.value();
+        int previousStatus = problem.getStatus();
+        if (previousStatus != responseStatus) {
+            problem.setStatus(responseStatus);
+        }
+        String expectedTitle = extractTitle(err, responseStatus);
+        if (StringUtils.isBlank(problem.getTitle()) || previousStatus != responseStatus) {
+            problem.setTitle(expectedTitle);
+        }
+        Map<String, Object> properties = problem.getProperties();
+        Object message = properties != null ? properties.get(MESSAGE_KEY) : null;
+        if (message == null || StringUtils.equals(String.valueOf(message), "error.http." + previousStatus)) {
+            problem.setProperty(MESSAGE_KEY, "error.http." + responseStatus);
+        }
     }
 
     protected ProblemDetailWithCause wrapAndCustomizeProblem(Throwable ex, <%= requestClass %> request) {
@@ -190,7 +213,7 @@ _%>
             problem.setTitle(title);
         }
 
-        if (problem.getDetail() == null) {
+        if (problem.getDetail() == null || shouldReplaceProblemDetail(problem.getDetail(), err)) {
             // higher precedence to cause
             problem.setDetail(getCustomizedErrorDetails(err));
         }
@@ -204,6 +227,9 @@ _%>
 
         if (problemProperties == null || !problemProperties.containsKey(PATH_KEY))
             problem.setProperty(PATH_KEY, getPathValue(request));
+
+        if (isHttpMessageConversionException(err) && (problemProperties == null || !problemProperties.containsKey(REQUEST_ERROR_KEY)))
+            problem.setProperty(REQUEST_ERROR_KEY, getCustomizedErrorDetails(err));
 
         if((err instanceof <% if (reactive) { %> WebExchangeBindException <% } else { %> MethodArgumentNotValidException <% } %> fieldException) &&
                 (problemProperties == null || !problemProperties.containsKey(FIELD_ERRORS_KEY)))
@@ -309,13 +335,43 @@ _%>
     private String getCustomizedErrorDetails(Throwable err) {
     	Collection<String> activeProfiles = Arrays.asList(env.getActiveProfiles());
     	if (activeProfiles.contains(JHipsterConstants.SPRING_PROFILE_PRODUCTION)) {
-	        if (err instanceof HttpMessageConversionException) return "Unable to convert http message";
+	        if (isHttpMessageConversionException(err)) return "Unable to convert http message";
     <%_ if (!databaseTypeNo) { _%>
-	        if (err instanceof DataAccessException) return "Failure during data access";
+		        if (err instanceof DataAccessException) return "Failure during data access";
     <%_ } _%>
-	        if (containsPackageName(err.getMessage())) return "Unexpected runtime exception";
+		        if (containsPackageName(err.getMessage())) return "Unexpected runtime exception";
         }
-    	return err.getCause() != null ? err.getCause().getMessage() : err.getMessage();
+    	return sanitizeErrorDetail(mostSpecificMessage(err));
+    }
+
+    private boolean shouldReplaceProblemDetail(String detail, Throwable err) {
+        if (!isHttpMessageConversionException(err)) return false;
+        String normalized = StringUtils.lowerCase(StringUtils.trimToEmpty(detail));
+        return normalized.equals("failed to read request") || normalized.equals("failed to parse request body") || normalized.equals("required request body is missing");
+    }
+
+    private boolean isHttpMessageConversionException(Throwable err) {
+        Throwable current = err;
+        while (current != null) {
+            if (current instanceof HttpMessageConversionException) return true;
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private String mostSpecificMessage(Throwable err) {
+        String message = err != null ? err.getMessage() : null;
+        Throwable current = err;
+        while (current != null) {
+            if (StringUtils.isNotBlank(current.getMessage())) message = current.getMessage();
+            current = current.getCause();
+        }
+        return StringUtils.defaultIfBlank(message, "Unexpected request error");
+    }
+
+    private String sanitizeErrorDetail(String detail) {
+        String singleLine = StringUtils.trimToEmpty(detail).replaceAll("[\\r\\n\\t]+", " ");
+        return StringUtils.abbreviate(StringUtils.defaultIfBlank(singleLine, "Unexpected request error"), 2000);
     }
 
     private HttpStatus getMappedStatus(Throwable err) {

@@ -1,0 +1,102 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+export type OpenApiOperationParameter = {
+  name: string;
+  location: 'path' | 'query' | 'header' | 'cookie';
+  required: boolean;
+  type: string;
+  format?: string;
+  enumValues?: readonly string[];
+  discriminatorValues?: readonly string[];
+  description?: string;
+  defaultValue?: unknown;
+  example?: unknown;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+};
+
+export type OpenApiSchemaField = {
+  name: string;
+  pointer: string;
+  path: string[];
+  required: boolean;
+  nullable: boolean;
+  type: string;
+  format?: string;
+  enumValues?: readonly string[];
+  discriminatorValues?: readonly string[];
+  description?: string;
+  defaultValue?: unknown;
+  example?: unknown;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+  minItems?: number;
+  maxItems?: number;
+  readOnly?: boolean;
+  writeOnly?: boolean;
+  fields?: readonly OpenApiSchemaField[];
+  items?: OpenApiSchemaField;
+  additionalProperties?: OpenApiSchemaField;
+};
+
+export type OpenApiOperationDefinition = {
+  id: string;
+  operationId: string;
+  method: string;
+  path: string;
+  tag: string;
+  summary: string;
+  parameters: readonly OpenApiOperationParameter[];
+  requestBodyRequired: boolean;
+  requestContentType?: string;
+  requestBodyExample?: unknown;
+  requestBodyFields?: readonly OpenApiSchemaField[];
+  responseContentType?: string;
+  responseBodyFields?: readonly OpenApiSchemaField[];
+};
+
+export type FormCrudReferencePickerCopyField = {
+  source: string;
+  target: string;
+};
+
+export type FormCrudReferencePickerConfig = {
+  id: string;
+  label?: string;
+  formId?: string;
+  targetApiId?: string;
+  sourcePath: string;
+  targetBaseUrl?: string;
+  collectionPath: string;
+  displayFields?: readonly string[];
+  searchParam?: string;
+  copyFields?: readonly FormCrudReferencePickerCopyField[];
+  mode?: 'embed' | 'reference';
+  multiple?: boolean;
+};
+
+export const FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY = 'formCrudReferencePickers';
+
+export const OPENAPI_OPERATIONS: readonly OpenApiOperationDefinition[] = <%- JSON.stringify(openApiOperations ?? [], null, 2) %>;

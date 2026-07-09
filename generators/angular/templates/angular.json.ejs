@@ -52,6 +52,11 @@
             ],
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
+            "stylePreprocessorOptions": {
+              "sass": {
+                "silenceDeprecations": ["import", "global-builtin"]
+              }
+            },
             "assets": [
               "<%= this.relativeDir(clientRootDir, clientSrcDir) %>content",
               "<%= this.relativeDir(clientRootDir, clientSrcDir) %>favicon.ico",
@@ -66,7 +71,14 @@
           },
           "configurations": {
             "production": {
-              "optimization": true,
+              "optimization": {
+                "scripts": true,
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                },
+                "fonts": true
+              },
               "outputHashing": "all",
               "sourceMap": false,
               "namedChunks": <%= Boolean(microfrontend) %>,

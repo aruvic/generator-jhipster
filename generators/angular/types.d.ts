@@ -46,7 +46,70 @@ export type Application<E extends Entity> = {
   /** @experimental to be replaced with needles */
   angularEntities?: E[];
   angularLocaleId: string;
+  oas3Input?: string;
+  openApiOperations?: OpenApiOperationDefinition[];
 
   // Common properties
   communicationSpringWebsocket?: boolean;
 } & ClientApplication<E>;
+
+export type OpenApiOperationParameter = {
+  name: string;
+  location: 'path' | 'query' | 'header' | 'cookie';
+  required: boolean;
+  type: string;
+  format?: string;
+  enumValues?: string[];
+  discriminatorValues?: string[];
+  description?: string;
+  defaultValue?: unknown;
+  example?: unknown;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+};
+
+export type OpenApiSchemaField = {
+  name: string;
+  pointer: string;
+  path: string[];
+  required: boolean;
+  nullable: boolean;
+  type: string;
+  format?: string;
+  enumValues?: string[];
+  discriminatorValues?: string[];
+  description?: string;
+  defaultValue?: unknown;
+  example?: unknown;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  pattern?: string;
+  minItems?: number;
+  maxItems?: number;
+  readOnly?: boolean;
+  writeOnly?: boolean;
+  fields?: OpenApiSchemaField[];
+  items?: OpenApiSchemaField;
+  additionalProperties?: OpenApiSchemaField;
+};
+
+export type OpenApiOperationDefinition = {
+  id: string;
+  operationId: string;
+  method: string;
+  path: string;
+  tag: string;
+  summary: string;
+  parameters: OpenApiOperationParameter[];
+  requestBodyRequired: boolean;
+  requestContentType?: string;
+  requestBodyExample?: unknown;
+  requestBodyFields?: OpenApiSchemaField[];
+  responseContentType?: string;
+  responseBodyFields?: OpenApiSchemaField[];
+};

@@ -106,6 +106,7 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                             <modelPackage>${application.packageName}.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <skipValidateSpec>false</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
                             <configOptions>${
                               application.reactive
                                 ? `
@@ -118,6 +119,7 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
@@ -222,7 +224,10 @@ function sanitizeOpenApiSpec(rawContents: string): string {
     const specObject = parseYaml(rawContents);
     normalizeComponentSchemaNames(specObject);
     reconcileDiscriminatorProperties(specObject);
+    normalizeDiscriminatorOneOfBases(specObject);
     normalizeAllOfInheritedPropertyOverrides(specObject);
+    normalizeConcreteEventPayloadProperties(specObject);
+    normalizeJsonPatchResponseSchemas(specObject);
     normalizeInlineComposedRequiredProperties(specObject);
     const stripExamples = (node: any) => {
       if (!node || typeof node !== 'object') return;
@@ -245,6 +250,32 @@ function sanitizeOpenApiSpec(rawContents: string): string {
   } catch (error) {
     // If parsing fails, fall back to original content but keep newline termination
     return rawContents.endsWith('\n') ? rawContents : `${rawContents}\n`;
+  }
+}
+
+function normalizeDiscriminatorOneOfBases(specObject: any): void {
+  const schemas = specObject?.components?.schemas;
+  if (!schemas || typeof schemas !== 'object' || Array.isArray(schemas)) {
+    return;
+  }
+
+  for (const schema of Object.values(schemas)) {
+    if (!isObjectRecord(schema) || !isObjectRecord(schema.discriminator?.mapping) || !Array.isArray(schema.oneOf)) {
+      continue;
+    }
+    const discriminatorProperty = schema.discriminator.propertyName;
+    if (typeof discriminatorProperty !== 'string' || !isObjectRecord(schema.properties)) {
+      continue;
+    }
+    if (Object.keys(schema.properties).every(propertyName => propertyName === discriminatorProperty)) {
+      delete schema.properties;
+      const required = asArray(schema.required).filter(propertyName => propertyName !== discriminatorProperty);
+      if (required.length > 0) {
+        schema.required = required;
+      } else {
+        delete schema.required;
+      }
+    }
   }
 }
 
@@ -814,6 +845,117 @@ function normalizeInlineComposedRequiredProperties(node: any): void {
     }
     normalizeInlineComposedRequiredProperties(value);
   }
+}
+
+function normalizeConcreteEventPayloadProperties(specObject: any): void {
+  const schemas = specObject?.components?.schemas;
+  if (!schemas || typeof schemas !== 'object' || Array.isArray(schemas)) {
+    return;
+  }
+
+  for (const [schemaName, schema] of Object.entries(schemas)) {
+    if (!isObjectRecord(schema) || !schemaName.endsWith('Event') || schemaName === 'Event' || schemaName === 'BaseEvent') {
+      continue;
+    }
+    const payloadName = `${schemaName}Payload`;
+    if (!isObjectRecord(schemas[payloadName]) || !schemaExtendsEventSchema(schema, schemas)) {
+      continue;
+    }
+    const eventProperty = findOrCreateInlineObjectProperty(schema, 'event');
+    eventProperty.$ref = `#/components/schemas/${payloadName}`;
+    delete eventProperty.type;
+    delete eventProperty.properties;
+    delete eventProperty.additionalProperties;
+    if (!eventProperty.description) {
+      eventProperty.description = `Payload for ${schemaName}`;
+    }
+  }
+}
+
+function schemaExtendsEventSchema(schema: Record<string, any>, schemas: Record<string, any>, visiting = new Set<string>()): boolean {
+  for (const composedSchema of asArray(schema.allOf)) {
+    const ref = extractLocalComponentSchemaRef(composedSchema);
+    if (!ref || visiting.has(ref)) {
+      continue;
+    }
+    if (ref === 'Event' || ref === 'BaseEvent') {
+      return true;
+    }
+    visiting.add(ref);
+    const referenced = schemas[ref];
+    if (isObjectRecord(referenced) && schemaExtendsEventSchema(referenced, schemas, visiting)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findOrCreateInlineObjectProperty(schema: Record<string, any>, propertyName: string): Record<string, any> {
+  const inlineObject = asArray(schema.allOf).find(isInlineObjectSchema);
+  if (inlineObject) {
+    inlineObject.properties = isObjectRecord(inlineObject.properties) ? inlineObject.properties : {};
+    inlineObject.properties[propertyName] = isObjectRecord(inlineObject.properties[propertyName])
+      ? inlineObject.properties[propertyName]
+      : {};
+    return inlineObject.properties[propertyName];
+  }
+
+  schema.allOf = asArray(schema.allOf);
+  const created = { type: 'object', properties: { [propertyName]: {} } };
+  schema.allOf.push(created);
+  return created.properties[propertyName];
+}
+
+function normalizeJsonPatchResponseSchemas(specObject: any): void {
+  const normalizeResponse = (response: any): void => {
+    if (!isObjectRecord(response?.content)) {
+      return;
+    }
+    normalizeJsonPatchContentSchemas(response.content);
+  };
+
+  for (const response of Object.values(specObject?.components?.responses ?? {})) {
+    normalizeResponse(response);
+  }
+
+  for (const pathItem of Object.values(specObject?.paths ?? {})) {
+    if (!isObjectRecord(pathItem)) {
+      continue;
+    }
+    for (const operation of Object.values(pathItem)) {
+      if (!isObjectRecord(operation?.responses)) {
+        continue;
+      }
+      for (const response of Object.values(operation.responses)) {
+        normalizeResponse(response);
+      }
+    }
+  }
+}
+
+function normalizeJsonPatchContentSchemas(content: Record<string, any>): void {
+  const fallbackSchema = content['application/json']?.schema ?? content['application/merge-patch+json']?.schema;
+  if (!isObjectRecord(fallbackSchema)) {
+    return;
+  }
+
+  for (const contentType of ['application/json-patch+json', 'application/json-patch-query+json']) {
+    const jsonPatchContent = content[contentType];
+    if (!isObjectRecord(jsonPatchContent?.schema) || !Array.isArray(jsonPatchContent.schema.oneOf)) {
+      continue;
+    }
+    jsonPatchContent.schema = deepCopy(fallbackSchema);
+  }
+}
+
+function deepCopy<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => deepCopy(item)) as T;
+  }
+  if (isObjectRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, deepCopy(item)])) as T;
+  }
+  return value;
 }
 
 function isInlineObjectSchema(schema: any): schema is Record<string, any> {

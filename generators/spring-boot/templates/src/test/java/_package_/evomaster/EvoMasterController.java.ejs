@@ -81,6 +81,18 @@ public class EvoMasterController extends EmbeddedSutController {
     private static final Pattern SQL_INSERT_VALUES = Pattern.compile(
         "(?is)^\\s*INSERT\\s+INTO\\s+([^\\s(]+)\\s*\\((.*?)\\)\\s*VALUES\\s*\\((.*)\\)\\s*;?\\s*$"
     );
+    private static final String DEFAULT_PACKAGES_TO_SKIP_INSTRUMENTATION = String.join(
+        ",",
+        "<%= packageName %>.evomaster",
+        "io.micrometer.core.instrument.binder.kafka.KafkaMetrics",
+        "org.springframework.cache.interceptor.CacheAspectSupport$ReactiveCachingHandler",
+        "org.springframework.security.config.annotation.authentication.configurers.ldap.",
+        "org.springframework.security.config.annotation.web.configurers.saml2.",
+        "org.springframework.security.config.annotation.web.configurers.oauth2.client.",
+        "org.springframework.web.method.support.InvocableHandlerMethod",
+        "org.springframework.core.ReactiveAdapterRegistry$ReactorAdapter",
+        "org.springdoc.core.utils.SpringDocKotlinUtils"
+    );
 
     private ConfigurableApplicationContext context;
     private Connection connection;
@@ -118,6 +130,7 @@ public class EvoMasterController extends EmbeddedSutController {
         addIfPresent(args, "spring.datasource.username", "EVOMASTER_DB_USERNAME");
         addIfPresent(args, "spring.datasource.password", "EVOMASTER_DB_PASSWORD");
 
+        waitForConfiguredDatabase();
         context = SpringApplication.run(<%= mainClass %>.class, args.toArray(String[]::new));
         DataSource dataSource = context.getBeanProvider(DataSource.class).getIfAvailable();
         try {
@@ -278,6 +291,11 @@ public class EvoMasterController extends EmbeddedSutController {
     @Override
     public String getPackagePrefixesToCover() {
         return "<%= packageName %>";
+    }
+
+    @Override
+    public String packagesToSkipInstrumentation() {
+        return envOrDefault("EVOMASTER_PACKAGES_TO_SKIP_INSTRUMENTATION", DEFAULT_PACKAGES_TO_SKIP_INSTRUMENTATION);
     }
 
     @Override
@@ -702,7 +720,7 @@ public class EvoMasterController extends EmbeddedSutController {
             @SuppressWarnings("unchecked")
             Map<String, Object> map = (Map<String, Object>) rawMap;
             Object format = map.get("format");
-            if ("uuid".equals(format)) {
+            if (isUnsupportedEvoMasterStringFormat(format)) {
                 map.remove("format");
             }
             new ArrayList<>(map.values()).forEach(EvoMasterController::stripUnsupportedFormats);
@@ -713,20 +731,55 @@ public class EvoMasterController extends EmbeddedSutController {
         }
     }
 
+    private static boolean isUnsupportedEvoMasterStringFormat(Object format) {
+        return switch (String.valueOf(format)) {
+            case "uuid",
+                "email",
+                "idn-email",
+                "uri",
+                "url",
+                "uri-reference",
+                "iri",
+                "iri-reference",
+                "hostname",
+                "idn-hostname",
+                "byte",
+                "base64",
+                "binary",
+                "password" -> true;
+            default -> false;
+        };
+    }
+
     private static void stripSchemaPatterns(Object node) {
+        stripSchemaPatterns(node, false);
+    }
+
+    private static void stripSchemaPatterns(Object node, boolean preservePatterns) {
         if (node instanceof Map<?, ?> rawMap) {
             @SuppressWarnings("unchecked")
             Map<String, Object> map = (Map<String, Object>) rawMap;
             // EvoMaster 6.0.0 can fail Postman seeding when a seeded value targets RegexGene.
-            if (map.containsKey("pattern")) {
+            if (!preservePatterns && map.containsKey("pattern")) {
                 map.remove("pattern");
             }
-            new ArrayList<>(map.values()).forEach(EvoMasterController::stripSchemaPatterns);
+            boolean operationParameter = isOpenApiParameter(map);
+            for (Map.Entry<String, Object> entry : new ArrayList<>(map.entrySet())) {
+                boolean preserveNestedPatterns = preservePatterns || (operationParameter && "schema".equals(entry.getKey()));
+                stripSchemaPatterns(entry.getValue(), preserveNestedPatterns);
+            }
             return;
         }
         if (node instanceof List<?> list) {
-            list.forEach(EvoMasterController::stripSchemaPatterns);
+            list.forEach(item -> stripSchemaPatterns(item, preservePatterns));
         }
+    }
+
+    private static boolean isOpenApiParameter(Map<String, Object> map) {
+        Object location = map.get("in");
+        return map.containsKey("name") && map.containsKey("schema") && (
+            "path".equals(location) || "query".equals(location) || "header".equals(location) || "cookie".equals(location)
+        );
     }
 
     private static void boundFreeFormObjectSchemas(Object node) {
@@ -1281,6 +1334,31 @@ public class EvoMasterController extends EmbeddedSutController {
             return DriverManager.getConnection(dbUrl);
         }
         return dataSource == null ? null : dataSource.getConnection();
+    }
+
+    private static void waitForConfiguredDatabase() {
+        String dbUrl = env("EVOMASTER_DB_URL");
+        if (dbUrl == null || dbUrl.isBlank()) {
+            return;
+        }
+        long timeoutMs = Long.parseLong(envOrDefault("EVOMASTER_DB_READY_TIMEOUT_MS", "120000"));
+        long sleepMs = Long.parseLong(envOrDefault("EVOMASTER_DB_READY_POLL_MS", "1000"));
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        SQLException lastFailure = null;
+        do {
+            try (Connection ignored = openEvoMasterConnection(null)) {
+                return;
+            } catch (SQLException e) {
+                lastFailure = e;
+                try {
+                    Thread.sleep(sleepMs);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while waiting for EvoMaster database readiness", interrupted);
+                }
+            }
+        } while (System.currentTimeMillis() < deadline);
+        throw new IllegalStateException("Database was not reachable for EvoMaster within " + timeoutMs + "ms at " + dbUrl, lastFailure);
     }
 
     private void registerLiquibaseCheckEnumConstraintsForEvoMaster() {

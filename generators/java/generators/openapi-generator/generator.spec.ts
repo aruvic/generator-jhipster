@@ -365,6 +365,78 @@ components:
     });
   });
 
+  describe('with custom oas3 input containing discriminator oneOf references', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Discriminator OneOf Base
+  version: 1.0.0
+paths:
+  /references:
+    get:
+      operationId: listReferences
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReferenceOrValue'
+components:
+  schemas:
+    ReferenceOrValue:
+      type: object
+      discriminator:
+        propertyName: '@type'
+        mapping:
+          Reference: '#/components/schemas/Reference'
+          Value: '#/components/schemas/Value'
+      properties:
+        '@type':
+          type: string
+      required:
+        - '@type'
+      oneOf:
+        - $ref: '#/components/schemas/Reference'
+        - $ref: '#/components/schemas/Value'
+    Reference:
+      type: object
+      properties:
+        '@type':
+          type: string
+          enum:
+            - Reference
+        href:
+          type: string
+    Value:
+      type: object
+      properties:
+        '@type':
+          type: string
+          enum:
+            - Value
+        name:
+          type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'discriminator-oneof.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'discriminator-oneof.yaml' });
+    });
+
+    it('should keep oneOf for Java subtype generation and remove redundant discriminator-only base properties', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'discriminator:\n        propertyName: "@type"');
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'oneOf:\n        - $ref: "#/components/schemas/Reference"');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'ReferenceOrValue:\n      type: object\n      discriminator:\n        propertyName: "@type"\n        mapping:\n          Reference: "#/components/schemas/Reference"\n          Value: "#/components/schemas/Value"\n      properties:');
+    });
+  });
+
   describe('with custom oas3 input whose allOf child repeats compatible inherited properties', () => {
     const customSpec = `openapi: 3.0.3
 info:
@@ -497,6 +569,131 @@ components:
       result.assertFileContent('src/main/resources/swagger/api.yml', 'required:\n        - name');
       result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - phone');
       result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - email');
+    });
+  });
+
+  describe('with custom oas3 input containing ambiguous JSON Patch response schemas', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: JSON Patch Response
+  version: 1.0.0
+paths:
+  /items/{id}:
+    patch:
+      operationId: patchItem
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+            application/json-patch+json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Item'
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/Item'
+                  - type: string
+                    nullable: true
+components:
+  schemas:
+    Item:
+      type: object
+      properties:
+        name:
+          type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'json-patch-response.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'json-patch-response.yaml' });
+    });
+
+    it('should use the normal response schema for JSON Patch response content instead of discriminatorless oneOf alternatives', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'application/json-patch+json:\n              schema:\n                $ref: "#/components/schemas/Item"');
+      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'oneOf:\n                  - $ref: "#/components/schemas/Item"');
+    });
+  });
+
+  describe('with custom oas3 input containing concrete event payload schemas', () => {
+    const customSpec = `openapi: 3.0.3
+info:
+  title: Concrete Events
+  version: 1.0.0
+paths:
+  /listener/itemCreateEvent:
+    post:
+      operationId: listenItemCreateEvent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ItemCreateEvent'
+      responses:
+        '204':
+          description: accepted
+components:
+  schemas:
+    Extensible:
+      type: object
+      properties:
+        '@type':
+          type: string
+    Event:
+      allOf:
+        - $ref: '#/components/schemas/Extensible'
+        - type: object
+          properties:
+            event:
+              type: object
+            eventId:
+              type: string
+    ItemCreateEvent:
+      allOf:
+        - $ref: '#/components/schemas/Event'
+        - type: object
+          description: Item create event
+    ItemCreateEventPayload:
+      type: object
+      properties:
+        item:
+          $ref: '#/components/schemas/Item'
+    Item:
+      type: object
+      properties:
+        name:
+          type: string
+`;
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({})
+        .inTmpDir(async dir => {
+          await writeFile(join(dir, 'concrete-events.yaml'), customSpec);
+        })
+        .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'concrete-events.yaml' });
+    });
+
+    it('should type the concrete event event property with the matching payload schema', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', 'event:\n              $ref: "#/components/schemas/ItemCreateEventPayload"');
     });
   });
 });

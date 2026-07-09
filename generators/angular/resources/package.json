@@ -5,6 +5,8 @@
     "@fortawesome/fontawesome-svg-core": "7.1.0",
     "@fortawesome/free-solid-svg-icons": "7.1.0",
     "@ng-bootstrap/ng-bootstrap": "19.0.1",
+    "@ngx-formly/bootstrap": "7.1.0",
+    "@ngx-formly/core": "7.1.0",
     "@ngx-translate/core": "17.0.0",
     "@ngx-translate/http-loader": "17.0.0",
     "@stomp/rx-stomp": "2.2.0",

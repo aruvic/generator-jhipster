@@ -31,6 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
   <%_ if (authenticationUsesCsrf) { _%>
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
   <%_ } _%>
+import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -67,6 +68,18 @@ class ExceptionTranslatorIT {
              .andExpect(jsonPath("$.fieldErrors.[0].objectName").value("test"))
              .andExpect(jsonPath("$.fieldErrors.[0].field").value("test"))
              .andExpect(jsonPath("$.fieldErrors.[0].message").value("must not be null"));
+    }
+
+    @Test
+    void testHttpMessageConversionDetails() throws Exception {
+         mockMvc.perform(post("/api/exception-translator-test/method-argument").content("{").contentType(MediaType.APPLICATION_JSON)<% if (authenticationUsesCsrf) { %>.with(csrf())<% } %>)
+             .andExpect(status().isBadRequest())
+             .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+             .andExpect(jsonPath("$.status").value(400))
+             .andExpect(jsonPath("$.title").value("Bad Request"))
+             .andExpect(jsonPath("$.message").value("error.http.400"))
+             .andExpect(jsonPath("$.requestError").exists())
+             .andExpect(jsonPath("$.detail").value(not("Failed to read request")));
     }
 
     @Test

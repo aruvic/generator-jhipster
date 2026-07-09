@@ -153,13 +153,21 @@ public abstract class <%- mapperName %> {
 _%>
   <%_ for (const field of responseCollectionFields) { _%>
     @Named("<%- mapperName %>.<%- field.responseListMapMethod %>")
-    protected List<<%- field.elementDtoType %>> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
+    protected <%- field.responseCollectionDtoType || `List<${field.elementDtoType}>` %> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
         if (source == null) {
             return null;
         }
+    <%_ if (field.responseCollectionDtoType) { _%>
+        <%- field.responseCollectionDtoType %> target = new <%- field.responseCollectionDtoType %>();
+        target.addAll(source.stream()
+            .map(<%- mapperReceiver(field) %>::<%- field.responseMapMethod %>)
+            .toList());
+        return target;
+    <%_ } else { _%>
         return source.stream()
             .map(<%- mapperReceiver(field) %>::<%- field.responseMapMethod %>)
             .toList();
+    <%_ } _%>
     }
 
   <%_ } _%>
@@ -327,9 +335,6 @@ _%>
                 }
                 index++;
             }
-            if (index < existingItems.size()) {
-                merged.addAll(existingItems.subList(index, existingItems.size()));
-            }
             return merged;
         }
         Map<Object, D> currentByKey = new LinkedHashMap<>();
@@ -372,26 +377,6 @@ _%>
                     newItemInitializer.accept(mappedItem);
                 }
                 merged.add(mappedItem);
-            }
-        }
-        if (existingKeyResolver != null) {
-            for (D existingItem : existingItems) {
-                Object key = existingKeyResolver.apply(existingItem);
-                if (key != null) {
-                    if (seenKeys.contains(key)) {
-                        continue;
-                    }
-                    seenKeys.add(key);
-                }
-                if (!merged.contains(existingItem)) {
-                    merged.add(existingItem);
-                }
-            }
-        } else {
-            for (D existingItem : existingItems) {
-                if (!merged.contains(existingItem)) {
-                    merged.add(existingItem);
-                }
             }
         }
         return merged;

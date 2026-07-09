@@ -1,0 +1,238 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+<div data-cy="formCrudReferencePickers">
+  <h2 id="form-crud-reference-pickers-heading" data-cy="formCrudReferencePickersHeading">Form CRUD reference pickers</h2>
+
+  @if (error()) {
+    <div class="alert alert-danger" role="alert" data-cy="formCrudReferencePickersError">{{ error() }}</div>
+  }
+  @if (success()) {
+    <div class="alert alert-success" role="status" data-cy="formCrudReferencePickersSuccess">{{ success() }}</div>
+  }
+
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <button class="btn btn-primary" type="button" (click)="addConfig()" data-cy="formCrudReferencePickersAdd">
+      <fa-icon icon="plus" />
+      <span>Add picker</span>
+    </button>
+    <button class="btn btn-info" type="button" (click)="save()" data-cy="formCrudReferencePickersSave">
+      <fa-icon icon="save" />
+      <span>Save</span>
+    </button>
+  </div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-6">
+      <div class="card h-100" data-cy="formCrudRegisteredForms">
+        <div class="card-header fw-semibold">Form registrations</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Operation</th>
+                  <th scope="col">Request fields</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (form of registeredForms; track form.id) {
+                  <tr>
+                    <td>{{ form.label }}</td>
+                    <td>{{ form.operation.requestBodyFields?.length ?? 0 }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="card h-100" data-cy="formCrudRegisteredRestApis">
+        <div class="card-header fw-semibold">REST API registrations</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-striped mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Collection API</th>
+                  <th scope="col">Search parameters</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (api of registeredRestApis; track api.id) {
+                  <tr>
+                    <td>{{ api.label }}</td>
+                    <td>{{ api.searchParams.join(', ') }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  @for (config of configs(); track config.id; let i = $index) {
+    <div class="card mb-3" data-cy="formCrudReferencePickerConfig">
+      <div class="card-header d-flex align-items-center justify-content-between gap-2">
+        <span class="fw-semibold">Picker {{ i + 1 }}</span>
+        <button class="btn btn-outline-danger btn-sm" type="button" (click)="deleteConfig(i)" data-cy="formCrudReferencePickersRemove">
+          <fa-icon icon="trash-alt" />
+          <span>Delete</span>
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'label-' + i">Mapping label</label>
+            <input
+              class="form-control"
+              [id]="'label-' + i"
+              [ngModel]="config.label ?? ''"
+              (ngModelChange)="setConfigField(i, 'label', $event)"
+              placeholder="Reusable picker label"
+              data-cy="formCrudReferencePickerLabel"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'formId-' + i">Source form registration</label>
+            <select
+              class="form-select"
+              [id]="'formId-' + i"
+              [ngModel]="config.formId ?? ''"
+              (ngModelChange)="setConfigField(i, 'formId', $event)"
+              data-cy="formCrudReferencePickerFormId"
+            >
+              <option value="">Manual source path only</option>
+              @for (form of registeredForms; track form.id) {
+                <option [value]="form.id">{{ form.label }}</option>
+              }
+            </select>
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'sourcePath-' + i">Source form/schema path</label>
+            <input
+              class="form-control"
+              [id]="'sourcePath-' + i"
+              [ngModel]="config.sourcePath"
+              (ngModelChange)="setConfigField(i, 'sourcePath', $event)"
+              placeholder="relatedItems"
+              data-cy="formCrudReferencePickerSourcePath"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'targetApiId-' + i">Target REST API registration</label>
+            <select
+              class="form-select"
+              [id]="'targetApiId-' + i"
+              [ngModel]="config.targetApiId ?? ''"
+              (ngModelChange)="setConfigField(i, 'targetApiId', $event)"
+              data-cy="formCrudReferencePickerTargetApiId"
+            >
+              <option value="">Manual endpoint</option>
+              @for (api of registeredRestApis; track api.id) {
+                <option [value]="api.id">{{ api.label }}</option>
+              }
+            </select>
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'collectionPath-' + i">Target collection endpoint</label>
+            <input
+              class="form-control"
+              [id]="'collectionPath-' + i"
+              [ngModel]="config.collectionPath"
+              (ngModelChange)="setConfigField(i, 'collectionPath', $event)"
+              placeholder="/target-resource"
+              data-cy="formCrudReferencePickerCollectionPath"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'baseUrl-' + i">Target base URL</label>
+            <input
+              class="form-control"
+              [id]="'baseUrl-' + i"
+              [ngModel]="config.targetBaseUrl ?? ''"
+              (ngModelChange)="setConfigField(i, 'targetBaseUrl', $event)"
+              placeholder=""
+              data-cy="formCrudReferencePickerBaseUrl"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'searchParam-' + i">Search parameter</label>
+            <input
+              class="form-control"
+              [id]="'searchParam-' + i"
+              [ngModel]="config.searchParam ?? ''"
+              (ngModelChange)="setConfigField(i, 'searchParam', $event)"
+              placeholder="query"
+              data-cy="formCrudReferencePickerSearchParam"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'displayFields-' + i">Display fields</label>
+            <input
+              class="form-control"
+              [id]="'displayFields-' + i"
+              [ngModel]="displayFieldsText(config)"
+              (ngModelChange)="setDisplayFields(i, $event)"
+              placeholder="id, name, href"
+              data-cy="formCrudReferencePickerDisplayFields"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'copyFields-' + i">Copy fields</label>
+            <input
+              class="form-control"
+              [id]="'copyFields-' + i"
+              [ngModel]="copyFieldsText(config)"
+              (ngModelChange)="setCopyFields(i, $event)"
+              placeholder="id:id, href:href, name:name"
+              data-cy="formCrudReferencePickerCopyFields"
+            />
+          </div>
+          <div class="col-12 col-lg-6">
+            <label class="form-label" [for]="'mode-' + i">Selection mode</label>
+            <select class="form-select" [id]="'mode-' + i" [ngModel]="config.mode ?? 'embed'" (ngModelChange)="setConfigField(i, 'mode', $event)">
+              <option value="embed">Embed selected object</option>
+              <option value="reference">Copy configured reference fields</option>
+            </select>
+          </div>
+          <div class="col-12 col-lg-6 d-flex align-items-end">
+            <div class="form-check">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                [id]="'multiple-' + i"
+                [ngModel]="config.multiple !== false"
+                (ngModelChange)="setConfigField(i, 'multiple', $event)"
+              />
+              <label class="form-check-label" [for]="'multiple-' + i">Allow multiple selections</label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+
+  @if (configs().length === 0) {
+    <div class="alert alert-secondary" data-cy="formCrudReferencePickersEmpty">No reference pickers configured.</div>
+  }
+</div>

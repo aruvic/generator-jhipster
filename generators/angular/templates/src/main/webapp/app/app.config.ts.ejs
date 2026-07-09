@@ -23,6 +23,10 @@ import { ServiceWorkerModule } from '@angular/service-worker';
 import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';
 
 import { NgbDateAdapter } from '@ng-bootstrap/ng-bootstrap';
+<%_ if (openApiOperations?.length) { _%>
+import { withFormlyBootstrap } from '@ngx-formly/bootstrap';
+import { provideFormlyCore } from '@ngx-formly/core';
+<%_ } _%>
 
 import './config/dayjs';
 <%_ if (enableTranslation) { _%>
@@ -30,7 +34,9 @@ import { TranslationModule } from 'app/shared/language/translation.module';
 <%_ } _%>
 import { environment } from 'environments/environment';
 import { httpInterceptorProviders } from './core/interceptor';
+<%_ if (enableTranslation && enableI18nRTL) { _%>
 import FindLanguageFromKeyPipe from 'app/shared/language/find-language-from-key.pipe';
+<%_ } _%>
 import routes from './app.routes';
 import { NgbDateDayjsAdapter } from './config/datepicker-adapter';
 import { AppPageTitleStrategy } from './app-page-title-strategy';
@@ -65,10 +71,13 @@ export const appConfig: ApplicationConfig = {
     importProvidersFrom(TranslationModule),
 <%_ } _%>
     provideHttpClient(withInterceptorsFromDi()),
+<%_ if (openApiOperations?.length) { _%>
+    provideFormlyCore(withFormlyBootstrap()),
+<%_ } _%>
     Title,
     { provide: LOCALE_ID, useValue: '<%= angularLocaleId %>' },
     { provide: NgbDateAdapter, useClass: NgbDateDayjsAdapter },
-<%_ if (enableI18nRTL) { _%>
+<%_ if (enableTranslation && enableI18nRTL) { _%>
     FindLanguageFromKeyPipe,
 <%_ } _%>
     httpInterceptorProviders,

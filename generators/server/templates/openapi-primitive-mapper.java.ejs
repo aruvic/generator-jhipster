@@ -43,6 +43,14 @@ public interface OpenApiPrimitiveMapper {
         return java.net.URI.create(value);
     }
 
+    default String map(java.net.URI value) {
+        return uriToString(value);
+    }
+
+    default java.net.URI mapStringToUri(String value) {
+        return stringToUri(value);
+    }
+
     default String map(Object value) {
         if (value == null) {
             return null;
@@ -244,11 +252,11 @@ public interface OpenApiPrimitiveMapper {
     }
 
     @Named("jsonStringToObject")
-    default Object jsonStringToObject(String value) {
+    default <T> T jsonStringToObject(String value, @TargetType Class<T> targetType) {
         if (value == null || value.isBlank()) {
             return null;
         }
-        return JsonMappingSupport.readObject(value);
+        return JsonMappingSupport.readObject(value, targetType);
     }
 
     @Named("mapToJsonString")
@@ -289,8 +297,11 @@ public interface OpenApiPrimitiveMapper {
     }
 
     @Named("listToJsonString")
-    default String listToJsonString(List<?> value) {
-        if (value == null || value.isEmpty()) {
+    default String listToJsonString(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof java.util.Collection<?> collection && collection.isEmpty()) {
             return null;
         }
         return JsonMappingSupport.writeValueAsString(value);
@@ -362,6 +373,14 @@ public interface OpenApiPrimitiveMapper {
                 return OBJECT_MAPPER.readValue(value, Object.class);
             } catch (JsonProcessingException ex) {
                 throw badRequest("Unable to deserialize JSON", ex);
+            }
+        }
+
+        static <T> T readObject(String value, Class<T> targetType) {
+            try {
+                return OBJECT_MAPPER.readValue(value, targetType);
+            } catch (JsonProcessingException ex) {
+                throw badRequest("Unable to deserialize JSON to " + targetType.getSimpleName(), ex);
             }
         }
 
