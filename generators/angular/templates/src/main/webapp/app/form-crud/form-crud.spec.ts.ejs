@@ -1,0 +1,2424 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+<%_ if (clientTestFrameworkVitest) { _%>
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+<%_ } _%>
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { convertToParamMap, ActivatedRoute } from '@angular/router';
+import { FaIconLibrary } from '@fortawesome/angular-fontawesome';
+import { faEye, faList, faSave, faSync, faTimes, faTrashAlt } from '@fortawesome/free-solid-svg-icons';
+import { withFormlyBootstrap } from '@ngx-formly/bootstrap';
+import { FormlyFieldConfig, provideFormlyCore } from '@ngx-formly/core';
+import { BehaviorSubject } from 'rxjs';
+
+import {
+  FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+  OPENAPI_OPERATIONS,
+  OpenApiOperationDefinition,
+  OpenApiSchemaField,
+} from 'app/openapi-operations/openapi-operations.model';
+import FormCrud from './form-crud';
+
+declare global {
+  interface Window {
+    __formsDebug?: Record<string, unknown>;
+  }
+}
+
+type MutableFormControl = {
+  setValue(value: unknown): void;
+  markAsTouched(): void;
+  errors: Record<string, unknown> | null;
+};
+
+describe('FormCrud', () => {
+  let fixture: ComponentFixture<FormCrud>;
+  let comp: FormCrud;
+  let httpMock: HttpTestingController;
+  let routeParams: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
+
+  function operationWithBody(): OpenApiOperationDefinition {
+    const bodyOperations = OPENAPI_OPERATIONS.filter(operation => operation.requestContentType?.includes('json') && operation.requestBodyFields?.length);
+    return (
+      bodyOperations.find(operation => !operation.path.includes('{')) ??
+      bodyOperations.find(operation => operation.parameters.every(parameter => !parameter.required)) ??
+      bodyOperations[0] ??
+      OPENAPI_OPERATIONS[0]
+    );
+  }
+
+  function collectionReadOperation(): OpenApiOperationDefinition | undefined {
+    return OPENAPI_OPERATIONS.find(operation => operation.method === 'GET' && !operation.path.includes('{'));
+  }
+
+  function flattenFieldKeys(fields: readonly FormlyFieldConfig[]): string[] {
+    const keys: string[] = [];
+    for (const field of fields) {
+      if (typeof field.key === 'string') keys.push(field.key);
+      if (field.fieldGroup) keys.push(...flattenFieldKeys(field.fieldGroup));
+      const arrayField = field.fieldArray;
+      if (arrayField && !Array.isArray(arrayField) && typeof arrayField !== 'function' && arrayField.fieldGroup) {
+        keys.push(...flattenFieldKeys(arrayField.fieldGroup));
+      }
+    }
+    return keys;
+  }
+
+  function requiredRequestFieldNames(operation: OpenApiOperationDefinition): string[] {
+    return (operation.requestBodyFields ?? []).filter(field => field.required).map(field => field.name);
+  }
+
+  function scalarRequiredRequestFields(operation: OpenApiOperationDefinition): OpenApiSchemaField[] {
+    return (operation.requestBodyFields ?? []).filter(field => field.required && !['array', 'object', 'boolean'].includes(field.type));
+  }
+
+  function formControlForBodyField(field: OpenApiSchemaField): MutableFormControl | null {
+    return comp.form.get(`body.${field.name}`) as MutableFormControl | null;
+  }
+
+  function clientValidValueForField(field: OpenApiSchemaField): unknown {
+    if (field.example !== undefined) return field.example;
+    if (field.defaultValue !== undefined) return field.defaultValue;
+    if (field.enumValues?.length) return field.enumValues[0];
+    if (field.type === 'integer' || field.type === 'number') return field.minimum ?? 0;
+    if (field.format === 'date') return '2026-01-01';
+    if (field.format === 'date-time') return '2026-01-01T00:00:00';
+    if (field.format === 'email') return 'user@example.com';
+    return 'value';
+  }
+
+  function schemaRenderer(component: FormCrud): {
+    schemaField(
+      field: OpenApiSchemaField,
+      readonly?: boolean,
+      depth?: number,
+      targetModel?: Record<string, unknown>,
+      targetForm?: unknown,
+      formValue?: Record<string, unknown>,
+      operation?: OpenApiOperationDefinition,
+    ): FormlyFieldConfig;
+    schemaFieldGroup(
+      fields: readonly OpenApiSchemaField[],
+      readonly?: boolean,
+      depth?: number,
+      targetModel?: Record<string, unknown>,
+      targetForm?: unknown,
+      formValue?: Record<string, unknown>,
+      operation?: OpenApiOperationDefinition,
+    ): FormlyFieldConfig[];
+    initialFieldValue(field: OpenApiSchemaField): unknown;
+    valueForField(field: OpenApiSchemaField, rawValue: unknown): unknown;
+    validationViolations(value: unknown): { path: string; message: string }[];
+    detailValueForField(field: OpenApiSchemaField, value: unknown): unknown;
+    bodyForOperation(
+      operation: OpenApiOperationDefinition,
+      bodySource?: unknown,
+      bodyFields?: readonly OpenApiSchemaField[],
+      options?: boolean | { includeEmptyStructures?: boolean; omitAbsentEmptyStructures?: boolean; originalSource?: unknown },
+    ): unknown;
+    initialModel(operation: OpenApiOperationDefinition): { parameters: Record<string, unknown>; body: unknown };
+    detailSchemaFields(resource: unknown): readonly OpenApiSchemaField[];
+    mergeSubmittedDetailWithResponse(submitted: unknown, response: unknown): unknown;
+    referencePickerUrl(config: { targetBaseUrl?: string; collectionPath: string }): string;
+    invalidControlSummaries(control: unknown): { path: string; errors: Record<string, unknown> }[];
+  } {
+    return component as unknown as {
+      schemaField(
+        field: OpenApiSchemaField,
+        readonly?: boolean,
+        depth?: number,
+        targetModel?: Record<string, unknown>,
+        targetForm?: unknown,
+        formValue?: Record<string, unknown>,
+        operation?: OpenApiOperationDefinition,
+      ): FormlyFieldConfig;
+      schemaFieldGroup(
+        fields: readonly OpenApiSchemaField[],
+        readonly?: boolean,
+        depth?: number,
+        targetModel?: Record<string, unknown>,
+        targetForm?: unknown,
+        formValue?: Record<string, unknown>,
+        operation?: OpenApiOperationDefinition,
+      ): FormlyFieldConfig[];
+      initialFieldValue(field: OpenApiSchemaField): unknown;
+      valueForField(field: OpenApiSchemaField, rawValue: unknown): unknown;
+      validationViolations(value: unknown): { path: string; message: string }[];
+      detailValueForField(field: OpenApiSchemaField, value: unknown): unknown;
+      bodyForOperation(
+        operation: OpenApiOperationDefinition,
+        bodySource?: unknown,
+        bodyFields?: readonly OpenApiSchemaField[],
+        options?: boolean | { includeEmptyStructures?: boolean; omitAbsentEmptyStructures?: boolean; originalSource?: unknown },
+      ): unknown;
+      initialModel(operation: OpenApiOperationDefinition): { parameters: Record<string, unknown>; body: unknown };
+      detailSchemaFields(resource: unknown): readonly OpenApiSchemaField[];
+      mergeSubmittedDetailWithResponse(submitted: unknown, response: unknown): unknown;
+      referencePickerUrl(config: { targetBaseUrl?: string; collectionPath: string }): string;
+      invalidControlSummaries(control: unknown): { path: string; errors: Record<string, unknown> }[];
+    };
+  }
+
+  beforeEach(() => {
+    localStorage.removeItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY);
+    routeParams = new BehaviorSubject(convertToParamMap({ operationId: operationWithBody().id }));
+    TestBed.configureTestingModule({
+      imports: [FormCrud],
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        provideFormlyCore(withFormlyBootstrap()),
+        { provide: ActivatedRoute, useValue: { paramMap: routeParams.asObservable() } },
+      ],
+    });
+
+    TestBed.inject(FaIconLibrary).addIcons(faEye, faList, faSave, faSync, faTimes, faTrashAlt);
+    fixture = TestBed.createComponent(FormCrud);
+    comp = fixture.componentInstance;
+    httpMock = TestBed.inject(HttpTestingController);
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+    localStorage.removeItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY);
+  });
+
+  it('should create Formly fields for the selected OpenAPI operation', () => {
+    const operation = operationWithBody();
+
+    expect(comp.selectedOperation().id).toBe(operation.id);
+    expect(comp.fields.length).toBeGreaterThan(0);
+    expect(comp.model).toBeDefined();
+  });
+
+  it('should submit generated JSON from the Formly model', () => {
+    const operation = operationWithBody();
+    const renderer = schemaRenderer(comp);
+
+    expect(renderer.invalidControlSummaries(comp.form)).toEqual([]);
+    comp.submit();
+
+    const request = httpMock.expectOne(req => req.method === operation.method && req.url.startsWith('/api'));
+    if (operation.requestContentType) {
+      expect(request.request.headers.get('Content-Type')).toBe(operation.requestContentType);
+      expect(request.request.body).toBeDefined();
+    }
+    request.flush({ status: 'ok' });
+    for (const refreshRequest of httpMock.match(req => req.method === 'GET' && req.url.startsWith('/api'))) {
+      refreshRequest.flush([{ id: 1, status: 'ok' }]);
+    }
+
+    expect(comp.responseStatus()).toBe(200);
+  });
+
+  it('should initialize required string parameters with submit-safe values', () => {
+    const operation = OPENAPI_OPERATIONS.find(candidate =>
+      candidate.parameters.some(parameter => parameter.required && parameter.type === 'string' && parameter.example === undefined && parameter.defaultValue === undefined),
+    );
+    if (!operation) {
+      expect(
+        OPENAPI_OPERATIONS.some(candidate =>
+          candidate.parameters.some(parameter => parameter.required && parameter.type === 'string' && parameter.example === undefined && parameter.defaultValue === undefined),
+        ),
+      ).toBe(false);
+      return;
+    }
+
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+
+    const renderer = schemaRenderer(comp);
+    expect(renderer.invalidControlSummaries(comp.form)).toEqual([]);
+    for (const parameter of operation.parameters.filter(candidate => candidate.required && candidate.type === 'string')) {
+      expect(comp.model.parameters[encodeURIComponent(`${parameter.location}:${parameter.name}`)]).toBeTruthy();
+    }
+  });
+
+  it('should preserve OpenAPI parameter examples and constraints in initial parameter values', () => {
+    const operation = OPENAPI_OPERATIONS.find(candidate =>
+      candidate.parameters.some(
+        parameter =>
+          parameter.required &&
+          parameter.type === 'string' &&
+          (parameter.example !== undefined || parameter.pattern !== undefined || parameter.minLength !== undefined || parameter.maxLength !== undefined),
+      ),
+    );
+    if (!operation) {
+      expect(
+        OPENAPI_OPERATIONS.some(candidate =>
+          candidate.parameters.some(
+            parameter =>
+              parameter.required &&
+              parameter.type === 'string' &&
+              (parameter.example !== undefined || parameter.pattern !== undefined || parameter.minLength !== undefined || parameter.maxLength !== undefined),
+          ),
+        ),
+      ).toBe(false);
+      return;
+    }
+
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+
+    const renderer = schemaRenderer(comp);
+    expect(renderer.invalidControlSummaries(comp.form)).toEqual([]);
+    for (const parameter of operation.parameters.filter(candidate => candidate.required && candidate.type === 'string')) {
+      const value = comp.model.parameters[encodeURIComponent(`${parameter.location}:${parameter.name}`)];
+      if (parameter.example !== undefined) expect(value).toBe(parameter.example);
+      if (parameter.minLength !== undefined) expect(String(value).length).toBeGreaterThanOrEqual(parameter.minLength);
+      if (parameter.maxLength !== undefined) expect(String(value).length).toBeLessThanOrEqual(parameter.maxLength);
+      if (parameter.pattern !== undefined) expect(new RegExp(parameter.pattern).test(String(value))).toBe(true);
+    }
+  });
+
+  it('should expose a forms debug hook for browser fuzzing', () => {
+    const debugProvider = window.__formsDebug?.formCrud as (() => unknown) | undefined;
+    const debug = debugProvider ? (debugProvider() as { operationId?: string; valid?: boolean; resourceGroups?: unknown[] }) : undefined;
+
+    expect(debug?.operationId).toBe(comp.selectedOperation().id);
+    expect(typeof debug?.valid).toBe('boolean');
+    expect(Array.isArray(debug?.resourceGroups)).toBe(true);
+  });
+
+  it('should present read responses as a table and load selected rows into Formly detail fields', () => {
+    const operation = collectionReadOperation();
+    if (!operation) {
+      expect(OPENAPI_OPERATIONS.some(candidate => candidate.method === 'GET' && !candidate.path.includes('{'))).toBe(false);
+      return;
+    }
+
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+
+    comp.submit();
+
+    const request = httpMock.expectOne(req => req.method === operation.method && req.url.startsWith('/api'));
+    request.flush([{ id: 1, name: 'Alpha', nested: { status: 'active' } }]);
+    fixture.detectChanges();
+
+    expect(comp.responseRows().length).toBe(1);
+    expect(comp.responseColumns()).toContain('id');
+
+    comp.selectResponseItem(comp.responseRows()[0]);
+    if (comp.currentResource()?.detailOperation) {
+      const detailRequest = httpMock.expectOne(req => req.method === 'GET' && req.url.startsWith('/api') && req.url !== request.request.url);
+      detailRequest.flush({ id: 1, name: 'Alpha', nested: { status: 'active' } });
+    }
+    fixture.detectChanges();
+
+    expect(comp.selectedResponseItem()).toBeDefined();
+    expect(comp.responseDetailFields.length).toBeGreaterThan(0);
+    expect(comp.responseDetailModel).toBeDefined();
+  });
+
+  it('should group Form CRUD resources by collection path and keep item operations inside the resource workflow', () => {
+    const collectionOperations = OPENAPI_OPERATIONS.filter(operation => !operation.path.includes('{') && ['GET', 'POST'].includes(operation.method));
+    const itemOperations = OPENAPI_OPERATIONS.filter(operation => operation.path.includes('{') && ['GET', 'PATCH', 'PUT', 'DELETE'].includes(operation.method));
+
+    expect(comp.resources.length).toBeGreaterThan(0);
+    for (const operation of collectionOperations) {
+      expect(comp.resources.some(resource => resource.operations.includes(operation))).toBe(true);
+    }
+    for (const operation of itemOperations) {
+      const resource = comp.resources.find(candidate => candidate.operations.includes(operation));
+      const hasCollectionWorkflow = collectionOperations.some(candidate => candidate.path === operation.path.replace(/\/\{[^}]+}.*$/, ''));
+      if (hasCollectionWorkflow) {
+        expect(resource).toBeDefined();
+      }
+      expect(resource?.listOperation === operation || resource?.createOperation === operation).toBe(false);
+    }
+  });
+
+  it('should expose a collapsible resource panel state', () => {
+    expect(comp.isResourcePanelCollapsed()).toBe(false);
+
+    comp.toggleResourcePanel();
+    fixture.detectChanges();
+
+    const debugProvider = window.__formsDebug?.formCrud as (() => unknown) | undefined;
+    const debug = debugProvider ? (debugProvider() as { resourcePanelCollapsed?: boolean }) : undefined;
+
+    expect(comp.isResourcePanelCollapsed()).toBe(true);
+    expect(debug?.resourcePanelCollapsed).toBe(true);
+  });
+
+  it('should group integration and event resources only for APIs with TMF-style integration metadata', () => {
+    const hasHubOrListener = OPENAPI_OPERATIONS.some(operation => /(^|\/)(hub|listener)(\/|$)/i.test(operation.path) || /^(hub|listener)$/i.test(operation.tag));
+    const hasEvent = OPENAPI_OPERATIONS.some(operation => `${operation.path} ${operation.tag} ${operation.operationId}`.replace(/[^A-Za-z0-9]/g, '').toLowerCase().includes('event'));
+    const integrationGroup = comp.resourceGroups.find(group => group.key === 'integration');
+    const hasIntegrationResource = comp.resources.some(resource =>
+      /hub|listener|importjob|exportjob|event/.test(
+        `${resource.basePath} ${resource.label} ${resource.operations.map(operation => `${operation.tag} ${operation.operationId}`).join(' ')}`
+          .replace(/[^A-Za-z0-9]/g, '')
+          .toLowerCase(),
+      ),
+    );
+
+    if (hasHubOrListener && hasEvent && hasIntegrationResource) {
+      expect(integrationGroup).toBeDefined();
+    } else {
+      expect(integrationGroup).toBeUndefined();
+    }
+  });
+
+  it('should save selected list items with the resource update operation and delete with confirmation', () => {
+    const operation = collectionReadOperation();
+    if (!operation) {
+      expect(OPENAPI_OPERATIONS.some(candidate => candidate.method === 'GET' && !candidate.path.includes('{'))).toBe(false);
+      return;
+    }
+
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+    comp.submit();
+
+    const request = httpMock.expectOne(req => req.method === operation.method && req.url.startsWith('/api'));
+    request.flush([{ id: 1, name: 'Alpha' }]);
+
+    comp.selectResponseItem(comp.responseRows()[0]);
+    if (comp.currentResource()?.detailOperation) {
+      const detailRequest = httpMock.expectOne(req => req.method === 'GET' && req.url.startsWith('/api') && req.url !== request.request.url);
+      detailRequest.flush({ id: 1, name: 'Alpha' });
+    }
+
+    comp.saveSelectedItem();
+    const updateOperation = comp.currentResource()?.updateOperation;
+    if (updateOperation) {
+      const updateRequest = httpMock.expectOne(req => req.method === updateOperation.method && req.url.startsWith('/api') && !req.url.includes('{'));
+      updateRequest.flush({ id: 1, name: 'Alpha' });
+
+      expect(comp.detailStatus()).toBe(200);
+    } else {
+      expect(comp.detailError()).toBe('');
+    }
+
+    const originalConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      comp.deleteResponseItem(comp.responseRows()[0]);
+      const deleteOperation = comp.currentResource()?.deleteOperation;
+      if (deleteOperation) {
+        const deleteRequest = httpMock.expectOne(req => req.method === 'DELETE' && req.url.startsWith('/api') && !req.url.includes('{'));
+        deleteRequest.flush('', { status: 204, statusText: 'No Content' });
+
+        expect(comp.deleteStatus()).toBe(204);
+        expect(comp.responseRows().length).toBe(0);
+      } else {
+        expect(comp.deleteStatus()).toBeNull();
+      }
+    } finally {
+      window.confirm = originalConfirm;
+    }
+  });
+
+  it('should render nested objects and arrays as structured Bootstrap/Formly sections', () => {
+    const renderer = schemaRenderer(comp);
+    const nestedObject = renderer.schemaField({
+      name: 'profile',
+      pointer: '/profile',
+      path: ['profile'],
+      required: true,
+      nullable: false,
+      type: 'object',
+      fields: [
+        { name: 'displayName', pointer: '/profile/displayName', path: ['profile', 'displayName'], required: true, nullable: false, type: 'string' },
+        { name: 'age', pointer: '/profile/age', path: ['profile', 'age'], required: false, nullable: false, type: 'integer' },
+      ],
+    });
+    const objectArraySchema: OpenApiSchemaField = {
+      name: 'items',
+      pointer: '/items',
+      path: ['items'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'item',
+        pointer: '/items/0',
+        path: ['items', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [{ name: 'code', pointer: '/items/0/code', path: ['items', '0', 'code'], required: true, nullable: false, type: 'string' }],
+      },
+    };
+    const objectArray = renderer.schemaField(objectArraySchema);
+    const objectArrayFromExampleSchema: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      example: [{ href: '/api/resources/1', name: 'Reference 1' }],
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'string',
+        example: 'string',
+      },
+    };
+    const freeObjectSchema: OpenApiSchemaField = {
+      name: 'metadata',
+      pointer: '/metadata',
+      path: ['metadata'],
+      required: false,
+      nullable: false,
+      type: 'object',
+      example: { source: 'openapi' },
+    };
+    const objectArrayFromExample = renderer.schemaField(objectArrayFromExampleSchema);
+    const freeObject = renderer.schemaField(freeObjectSchema);
+
+    expect(nestedObject.wrappers).toContain('form-crud-accordion');
+    expect(nestedObject.type).toBeUndefined();
+    expect(objectArray.type).toBe('form-crud-repeat');
+    expect(objectArray.fieldArray).toBeDefined();
+    const arrayField = objectArray.fieldArray;
+    if (arrayField && !Array.isArray(arrayField) && typeof arrayField !== 'function') {
+      expect(flattenFieldKeys([arrayField])).toContain('code');
+    }
+    const inferredArrayField = objectArrayFromExample.fieldArray;
+    expect(objectArrayFromExample.type).toBe('form-crud-repeat');
+    if (inferredArrayField && !Array.isArray(inferredArrayField) && typeof inferredArrayField !== 'function') {
+      expect(flattenFieldKeys([inferredArrayField])).toContain('href');
+      expect(flattenFieldKeys([inferredArrayField])).toContain('name');
+      expect(inferredArrayField.type).not.toBe('input');
+    }
+    expect(freeObject.type).toBe('textarea');
+    expect(renderer.valueForField(objectArraySchema, [{ code: 'A1' }])).toEqual([{ code: 'A1' }]);
+    expect(renderer.valueForField(freeObjectSchema, '{"source":"openapi"}')).toEqual({ source: 'openapi' });
+  });
+
+  it('should preserve nested object fields inside array item forms without stringifying them as objects', () => {
+    const renderer = schemaRenderer(comp);
+    const objectArraySchema: OpenApiSchemaField = {
+      name: 'items',
+      pointer: '/items',
+      path: ['items'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      example: [{ code: 'A1', validity: { startDateTime: '2026-01-01T00:00:00Z' } }],
+      items: {
+        name: 'item',
+        pointer: '/items/0',
+        path: ['items', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'code', pointer: '/items/0/code', path: ['items', '0', 'code'], required: true, nullable: false, type: 'string' },
+          {
+            name: 'validity',
+            pointer: '/items/0/validity',
+            path: ['items', '0', 'validity'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            example: { startDateTime: '2026-01-01T00:00:00Z' },
+            fields: [
+              {
+                name: 'startDateTime',
+                pointer: '/items/0/validity/startDateTime',
+                path: ['items', '0', 'validity', 'startDateTime'],
+                required: false,
+                nullable: false,
+                type: 'string',
+                format: 'date-time',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const field = renderer.schemaField(objectArraySchema);
+    const initialValue = renderer.initialFieldValue(objectArraySchema) as Record<string, unknown>[];
+    const arrayField = field.fieldArray;
+
+    expect(field.type).toBe('form-crud-repeat');
+    expect(initialValue[0]?.validity).toEqual({ startDateTime: '2026-01-01T00:00:00' });
+    expect(typeof initialValue[0]?.validity).toBe('object');
+    expect(initialValue[0]?.validity).not.toBe('[object Object]');
+    if (arrayField && !Array.isArray(arrayField) && typeof arrayField !== 'function') {
+      expect(flattenFieldKeys([arrayField])).toContain('validity');
+      expect(flattenFieldKeys([arrayField])).toContain('startDateTime');
+    }
+    expect(renderer.valueForField(objectArraySchema, initialValue)).toEqual([
+      { code: 'A1', validity: { startDateTime: '2026-01-01T00:00:00Z' } },
+    ]);
+  });
+
+  it('should serialize inferred object array items as JSON objects instead of scalar strings', () => {
+    const renderer = schemaRenderer(comp);
+    const arraySchema: OpenApiSchemaField = {
+      name: 'containers',
+      pointer: '/containers',
+      path: ['containers'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      example: [{ cargoGrossWeight: { value: 36000, unit: 'KGM' } }],
+      items: {
+        name: 'container',
+        pointer: '/containers/0',
+        path: ['containers', '0'],
+        required: false,
+        nullable: false,
+        type: 'string',
+        example: 'string',
+      },
+    };
+
+    const field = renderer.schemaField(arraySchema);
+    const fieldArray = field.fieldArray;
+
+    expect(field.type).toBe('form-crud-repeat');
+    if (fieldArray && !Array.isArray(fieldArray) && typeof fieldArray !== 'function') {
+      expect(flattenFieldKeys([fieldArray])).toContain('cargoGrossWeight');
+      expect(fieldArray.type).not.toBe('input');
+    }
+    expect(renderer.valueForField(arraySchema, [{ cargoGrossWeight: { value: 36000, unit: 'KGM' } }])).toEqual([
+      { cargoGrossWeight: { value: 36000, unit: 'KGM' } },
+    ]);
+    expect(renderer.valueForField(arraySchema, [{ cargoGrossWeight: '{"value":36000,"unit":"KGM"}' }])).toEqual([
+      { cargoGrossWeight: { value: 36000, unit: 'KGM' } },
+    ]);
+  });
+
+  it('should infer operation-example array object items and ignore empty optional placeholders', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      requestBodyExample: {
+        references: [{ href: '/targets/1', name: 'Target' }],
+        optionalUnknownItems: [{}],
+      },
+      requestBodyFields: [
+        {
+          name: 'references',
+          pointer: '/references',
+          path: ['references'],
+          required: false,
+          nullable: false,
+          type: 'array',
+        },
+        {
+          name: 'optionalUnknownItems',
+          pointer: '/optionalUnknownItems',
+          path: ['optionalUnknownItems'],
+          required: false,
+          nullable: false,
+          type: 'array',
+        },
+      ],
+    };
+
+    const model = renderer.initialModel(operation);
+
+    expect(model.body).toEqual({
+      references: [{ href: '/targets/1', name: 'Target' }],
+      optionalUnknownItems: [],
+    });
+    expect(renderer.bodyForOperation(operation, model.body, operation.requestBodyFields)).toEqual({
+      references: [{ href: '/targets/1', name: 'Target' }],
+    });
+  });
+
+  it('should replace invalid example discriminator values with schema-allowed values in nested payloads', () => {
+    const renderer = schemaRenderer(comp);
+    const objectSchema: OpenApiSchemaField = {
+      name: 'body',
+      pointer: '',
+      path: [],
+      required: true,
+      nullable: false,
+      type: 'object',
+      example: {
+        '@type': 'string',
+        references: [{ '@type': 'string', name: 'Example' }],
+      },
+      fields: [
+        {
+          name: '@type',
+          pointer: '/@type',
+          path: ['@type'],
+          required: true,
+          nullable: false,
+          type: 'string',
+          discriminatorValues: ['RootType'],
+        },
+        {
+          name: 'references',
+          pointer: '/references',
+          path: ['references'],
+          required: false,
+          nullable: false,
+          type: 'array',
+          items: {
+            name: 'reference',
+            pointer: '/references/0',
+            path: ['references', '0'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: '@type',
+                pointer: '/references/0/@type',
+                path: ['references', '0', '@type'],
+                required: true,
+                nullable: false,
+                type: 'string',
+                discriminatorValues: ['AllowedReference', 'AlternativeReference'],
+              },
+              { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+            ],
+          },
+        },
+      ],
+    };
+
+    const initialValue = renderer.initialFieldValue(objectSchema) as Record<string, unknown>;
+
+    expect(initialValue['@type']).toBe('RootType');
+    expect((initialValue.references as Record<string, unknown>[])[0]?.['@type']).toBe('AllowedReference');
+    expect(renderer.valueForField(objectSchema, initialValue)).toEqual({
+      '@type': 'RootType',
+      references: [{ '@type': 'AllowedReference', name: 'Example' }],
+    });
+  });
+
+  it('should normalize response discriminator values to request schema values when serializing update payloads', () => {
+    const renderer = schemaRenderer(comp);
+    const updateOperation: OpenApiOperationDefinition = {
+      id: 'patch-update-resource',
+      operationId: 'patchResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      tag: 'Resources',
+      summary: 'Update resource',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestBodyRequired: true,
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: '@type',
+          pointer: '/@type',
+          path: ['@type'],
+          required: true,
+          nullable: false,
+          type: 'string',
+          discriminatorValues: ['Resource', 'ResourceRef'],
+        },
+        { name: 'name', pointer: '/name', path: ['name'], required: false, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(updateOperation, { '@type': 'Resource_RES', name: 'Router' }, updateOperation.requestBodyFields, {
+        includeEmptyStructures: true,
+      }),
+    ).toEqual({ '@type': 'Resource', name: 'Router' });
+  });
+
+  it('should not submit generic placeholder examples for optional polymorphic metadata', () => {
+    const renderer = schemaRenderer(comp);
+    const objectSchema: OpenApiSchemaField = {
+      name: 'source',
+      pointer: '/source',
+      path: ['source'],
+      required: false,
+      nullable: false,
+      type: 'object',
+      example: { '@type': 'string', href: 'string' },
+      fields: [
+        {
+          name: '@type',
+          pointer: '/source/@type',
+          path: ['source', '@type'],
+          required: false,
+          nullable: false,
+          type: 'string',
+          example: 'string',
+        },
+        {
+          name: 'href',
+          pointer: '/source/href',
+          path: ['source', 'href'],
+          required: false,
+          nullable: false,
+          type: 'string',
+          example: 'string',
+        },
+      ],
+    };
+
+    const initialValue = renderer.initialFieldValue(objectSchema) as Record<string, unknown>;
+
+    expect(initialValue['@type']).toBe('');
+    expect(renderer.valueForField(objectSchema, initialValue)).toEqual({ href: 'string' });
+  });
+
+  it('should normalize date-time form values to RFC3339 strings before submit', () => {
+    const renderer = schemaRenderer(comp);
+    const dateTimeField: OpenApiSchemaField = {
+      name: 'startDateTime',
+      pointer: '/startDateTime',
+      path: ['startDateTime'],
+      required: true,
+      nullable: false,
+      type: 'string',
+      format: 'date-time',
+    };
+    const formlyField = renderer.schemaField(dateTimeField);
+
+    expect(formlyField.type).toBe('input');
+    expect(formlyField.props?.type).toBe('datetime-local');
+    expect(formlyField.props?.step).toBe(1);
+    expect(renderer.initialFieldValue({ ...dateTimeField, example: '2026-06-01T10:30:45Z' })).toBe('2026-06-01T10:30:45');
+    expect(renderer.detailValueForField(dateTimeField, '2026-06-01T10:30:45Z')).toBe('2026-06-01T10:30:45');
+    expect(renderer.valueForField(dateTimeField, '2026-06-01T10:30')).toBe('2026-06-01T10:30:00Z');
+    expect(renderer.valueForField(dateTimeField, '2026-06-01T10:30:45')).toBe('2026-06-01T10:30:45Z');
+    expect(renderer.valueForField(dateTimeField, '2026-06-01T10:30:45+02:00')).toBe('2026-06-01T10:30:45+02:00');
+  });
+
+  it('should render JSON byte strings as text and reserve file inputs for upload content', () => {
+    const renderer = schemaRenderer(comp);
+    const base64Field: OpenApiSchemaField = {
+      name: 'content',
+      pointer: '/content',
+      path: ['content'],
+      required: true,
+      nullable: false,
+      type: 'string',
+      format: 'byte',
+      example: 'Y29udGVudA==',
+    };
+    const jsonOperation = { ...operationWithBody(), requestContentType: 'application/json' };
+    const byteFormField = renderer.schemaField(base64Field, false, 0, {}, undefined, {}, jsonOperation);
+
+    expect(byteFormField.type).toBe('input');
+    expect(byteFormField.props?.type).toBe('text');
+    expect(byteFormField.defaultValue).toBe('Y29udGVudA==');
+
+    const binaryUploadField = renderer.schemaField(
+      { ...base64Field, format: 'binary', example: 'ignored-default-file-name' },
+      false,
+      0,
+      {},
+      undefined,
+      {},
+      { ...jsonOperation, requestContentType: 'multipart/form-data' },
+    );
+
+    expect(binaryUploadField.type).toBe('input');
+    expect(binaryUploadField.props?.type).toBe('file');
+    expect(binaryUploadField.defaultValue).toBe('');
+  });
+
+  it('should synthesize required string defaults that satisfy simple OpenAPI patterns', () => {
+    const renderer = schemaRenderer(comp);
+    const countryCodeField: OpenApiSchemaField = {
+      name: 'countryCode',
+      pointer: '/countryCode',
+      path: ['countryCode'],
+      required: true,
+      nullable: false,
+      type: 'string',
+      minLength: 2,
+      maxLength: 2,
+      pattern: '^[A-Z]{2}$',
+    };
+    const locationCodeField: OpenApiSchemaField = {
+      ...countryCodeField,
+      name: 'locationCode',
+      pointer: '/locationCode',
+      path: ['locationCode'],
+      minLength: 5,
+      maxLength: 5,
+      pattern: '^[A-Z]{2}[A-Z2-9]{3}$',
+    };
+    const nonBlankField: OpenApiSchemaField = {
+      ...countryCodeField,
+      name: 'nonBlank',
+      pointer: '/nonBlank',
+      path: ['nonBlank'],
+      minLength: 1,
+      maxLength: 20,
+      pattern: '^\\S(?:.*\\S)?$',
+      example: ' ',
+    };
+
+    expect(renderer.initialFieldValue(countryCodeField)).toBe('AA');
+    expect(renderer.initialFieldValue(locationCodeField)).toBe('AAAAA');
+    expect(renderer.initialFieldValue(nonBlankField)).toBe('xx');
+  });
+
+  it('should treat required booleans as present even when their value is false', () => {
+    const renderer = schemaRenderer(comp);
+    const requiredBooleanField: OpenApiSchemaField = {
+      name: 'isElectronic',
+      pointer: '/isElectronic',
+      path: ['isElectronic'],
+      required: true,
+      nullable: false,
+      type: 'boolean',
+    };
+    const formlyField = renderer.schemaField(requiredBooleanField);
+
+    expect(formlyField.type).toBe('checkbox');
+    expect(formlyField.defaultValue).toBe(false);
+    expect(formlyField.props?.required).toBe(false);
+    expect(formlyField.props?.['requiredIndicator']).toBe(true);
+    expect(renderer.valueForField(requiredBooleanField, false)).toBe(false);
+  });
+
+  it('should sanitize empty examples for required arrays by adding a valid generated item', () => {
+    const renderer = schemaRenderer(comp);
+    const requiredArrayField: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: true,
+      nullable: false,
+      type: 'array',
+      example: [],
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: 'value',
+            pointer: '/references/0/value',
+            path: ['references', '0', 'value'],
+            required: true,
+            nullable: false,
+            type: 'string',
+            minLength: 3,
+            pattern: '^[A-Z]{3}$',
+          },
+        ],
+      },
+    };
+
+    expect(renderer.initialFieldValue(requiredArrayField)).toEqual([{ value: 'AAA' }]);
+  });
+
+  it('should use readable labels for irregular plural OpenAPI field names while preserving payload names', () => {
+    const renderer = schemaRenderer(comp);
+    const categoryArray: OpenApiSchemaField = {
+      name: 'categorys',
+      pointer: '/categorys',
+      path: ['categorys'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'category',
+        pointer: '/categorys/0',
+        path: ['categorys', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [{ name: 'href', pointer: '/categorys/0/href', path: ['categorys', '0', 'href'], required: false, nullable: false, type: 'string' }],
+      },
+    };
+    const relatedPartyArray = { ...categoryArray, name: 'relatedPartys', pointer: '/relatedPartys', path: ['relatedPartys'] };
+
+    const categoryField = renderer.schemaField(categoryArray);
+    const relatedPartyField = renderer.schemaField(relatedPartyArray);
+
+    expect(categoryField.key).toBe('categorys');
+    expect(categoryField.props?.label).toBe('Categories');
+    expect(relatedPartyField.key).toBe('relatedPartys');
+    expect(relatedPartyField.props?.label).toBe('Related Parties');
+  });
+
+  it('should include explicit empty arrays and objects for detail PATCH bodies', () => {
+    const renderer = schemaRenderer(comp);
+    const fields: OpenApiSchemaField[] = [
+      {
+        name: 'categorys',
+        pointer: '/categorys',
+        path: ['categorys'],
+        required: false,
+        nullable: false,
+        type: 'array',
+        items: {
+          name: 'category',
+          pointer: '/categorys/0',
+          path: ['categorys', '0'],
+          required: false,
+          nullable: false,
+          type: 'object',
+          fields: [{ name: 'href', pointer: '/categorys/0/href', path: ['categorys', '0', 'href'], required: false, nullable: false, type: 'string' }],
+        },
+      },
+      {
+        name: 'relatedPartys',
+        pointer: '/relatedPartys',
+        path: ['relatedPartys'],
+        required: false,
+        nullable: false,
+        type: 'array',
+        items: {
+          name: 'relatedParty',
+          pointer: '/relatedPartys/0',
+          path: ['relatedPartys', '0'],
+          required: false,
+          nullable: false,
+          type: 'object',
+          fields: [
+            { name: 'role', pointer: '/relatedPartys/0/role', path: ['relatedPartys', '0', 'role'], required: false, nullable: false, type: 'string' },
+            {
+              name: 'partyOrPartyRole',
+              pointer: '/relatedPartys/0/partyOrPartyRole',
+              path: ['relatedPartys', '0', 'partyOrPartyRole'],
+              required: false,
+              nullable: false,
+              type: 'object',
+              fields: [{ name: 'tmfId', pointer: '/relatedPartys/0/partyOrPartyRole/tmfId', path: ['relatedPartys', '0', 'partyOrPartyRole', 'tmfId'], required: false, nullable: false, type: 'string' }],
+            },
+          ],
+        },
+      },
+    ];
+    const operation = {
+      ...operationWithBody(),
+      method: 'PATCH',
+      requestContentType: 'application/json',
+      requestBodyFields: fields,
+    };
+
+    expect(renderer.bodyForOperation(operation, { categorys: [], relatedPartys: [{ role: 'buyer', partyOrPartyRole: {} }] }, fields, false)).toEqual({
+      relatedPartys: [{ role: 'buyer' }],
+    });
+    expect(renderer.bodyForOperation(operation, { categorys: [], relatedPartys: [{ role: 'buyer', partyOrPartyRole: {} }] }, fields, true)).toEqual({
+      categorys: [],
+      relatedPartys: [{ role: 'buyer', partyOrPartyRole: {} }],
+    });
+  });
+
+  it('should omit absent defaulted empty arrays from sparse detail PATCH bodies while preserving explicit clears', () => {
+    const renderer = schemaRenderer(comp);
+    const referenceArray: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [{ name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' }],
+      },
+    };
+    const requiredItemArray: OpenApiSchemaField = {
+      name: 'lineItems',
+      pointer: '/lineItems',
+      path: ['lineItems'],
+      required: true,
+      nullable: false,
+      type: 'array',
+      minItems: 1,
+      items: {
+        name: 'lineItem',
+        pointer: '/lineItems/0',
+        path: ['lineItems', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [{ name: 'id', pointer: '/lineItems/0/id', path: ['lineItems', '0', 'id'], required: false, nullable: false, type: 'string' }],
+      },
+    };
+    const optionalObject: OpenApiSchemaField = {
+      name: 'orderSpecification',
+      pointer: '/orderSpecification',
+      path: ['orderSpecification'],
+      required: false,
+      nullable: false,
+      type: 'object',
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'PATCH',
+      requestContentType: 'application/json',
+      requestBodyFields: [referenceArray, requiredItemArray, optionalObject],
+    };
+    const options = { includeEmptyStructures: true, omitAbsentEmptyStructures: true };
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { references: [{ href: '/api/references/1' }], lineItems: [], orderSpecification: {} },
+        operation.requestBodyFields,
+        { ...options, originalSource: { references: [] } },
+      ),
+    ).toEqual({
+      references: [{ href: '/api/references/1' }],
+    });
+    expect(
+      renderer.bodyForOperation(operation, { references: [], lineItems: [], orderSpecification: {} }, operation.requestBodyFields, {
+        ...options,
+        originalSource: { references: [{ href: '/api/references/1' }], lineItems: [{ id: 'old' }], orderSpecification: {} },
+      }),
+    ).toEqual({
+      references: [],
+      lineItems: [],
+    });
+  });
+
+  it('should omit optional object branches that cannot satisfy nested required request fields', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'PATCH',
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: 'intent',
+          pointer: '/intent',
+          path: ['intent'],
+          required: false,
+          nullable: false,
+          type: 'object',
+          fields: [
+            { name: '@type', pointer: '/intent/@type', path: ['intent', '@type'], required: true, nullable: false, type: 'string' },
+            { name: 'tmfId', pointer: '/intent/tmfId', path: ['intent', 'tmfId'], required: true, nullable: false, type: 'string' },
+            { name: 'href', pointer: '/intent/href', path: ['intent', 'href'], required: false, nullable: false, type: 'string' },
+            { name: 'name', pointer: '/intent/name', path: ['intent', 'name'], required: false, nullable: false, type: 'string' },
+          ],
+        },
+        { name: 'name', pointer: '/name', path: ['name'], required: false, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { intent: { '@type': 'IntentRef', href: '/intent/1', name: 'Intent' }, name: 'Resource' },
+        operation.requestBodyFields,
+        { includeEmptyStructures: true, omitAbsentEmptyStructures: true, originalSource: { intent: { '@type': 'IntentRef', href: '/intent/1' } } },
+      ),
+    ).toEqual({ name: 'Resource' });
+  });
+
+  it('should omit optional polymorphic placeholder objects that only contain a discriminator and generated strings', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'POST',
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: 'relationship',
+          pointer: '/relationship',
+          path: ['relationship'],
+          required: true,
+          nullable: false,
+          type: 'object',
+          fields: [
+            {
+              name: 'target',
+              pointer: '/relationship/target',
+              path: ['relationship', 'target'],
+              required: false,
+              nullable: false,
+              type: 'object',
+              fields: [
+                {
+                  name: '@type',
+                  pointer: '/relationship/target/@type',
+                  path: ['relationship', 'target', '@type'],
+                  required: true,
+                  nullable: false,
+                  type: 'string',
+                  discriminatorValues: ['Value', 'ValueRef'],
+                },
+                { name: 'href', pointer: '/relationship/target/href', path: ['relationship', 'target', 'href'], required: false, nullable: false, type: 'string' },
+                { name: 'name', pointer: '/relationship/target/name', path: ['relationship', 'target', 'name'], required: false, nullable: false, type: 'string' },
+              ],
+            },
+            { name: 'relationshipType', pointer: '/relationship/relationshipType', path: ['relationship', 'relationshipType'], required: true, nullable: false, type: 'string' },
+          ],
+        },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { relationship: { relationshipType: 'dependsOn', target: { '@type': 'Value', href: 'string', name: 'string' } } },
+        operation.requestBodyFields,
+      ),
+    ).toEqual({ relationship: { relationshipType: 'dependsOn' } });
+  });
+
+  it('should omit optional array items that contain incomplete nested required request fields', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'POST',
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: 'relationships',
+          pointer: '/relationships',
+          path: ['relationships'],
+          required: false,
+          nullable: false,
+          type: 'array',
+          items: {
+            name: 'relationship',
+            pointer: '/relationships/0',
+            path: ['relationships', '0'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: 'relationshipType',
+                pointer: '/relationships/0/relationshipType',
+                path: ['relationships', '0', 'relationshipType'],
+                required: true,
+                nullable: false,
+                type: 'string',
+              },
+              {
+                name: 'target',
+                pointer: '/relationships/0/target',
+                path: ['relationships', '0', 'target'],
+                required: true,
+                nullable: false,
+                type: 'object',
+                fields: [
+                  {
+                    name: '@type',
+                    pointer: '/relationships/0/target/@type',
+                    path: ['relationships', '0', 'target', '@type'],
+                    required: true,
+                    nullable: false,
+                    type: 'string',
+                  },
+                  {
+                    name: 'expression',
+                    pointer: '/relationships/0/target/expression',
+                    path: ['relationships', '0', 'target', 'expression'],
+                    required: true,
+                    nullable: false,
+                    type: 'string',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        { name: 'name', pointer: '/name', path: ['name'], required: true, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { name: 'Service', relationships: [{ relationshipType: 'dependsOn', target: { '@type': 'IntentRef' } }] },
+        operation.requestBodyFields,
+      ),
+    ).toEqual({ name: 'Service' });
+  });
+
+  it('should omit optional array items with generated placeholder discriminator values', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'POST',
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: 'references',
+          pointer: '/references',
+          path: ['references'],
+          required: false,
+          nullable: false,
+          type: 'array',
+          items: {
+            name: 'reference',
+            pointer: '/references/0',
+            path: ['references', '0'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              { name: '@type', pointer: '/references/0/@type', path: ['references', '0', '@type'], required: true, nullable: false, type: 'string' },
+              { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+              { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+            ],
+          },
+        },
+        { name: 'name', pointer: '/name', path: ['name'], required: true, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(operation, { name: 'Service', references: [{ '@type': 'string', href: 'string', name: 'string' }] }, operation.requestBodyFields),
+    ).toEqual({ name: 'Service' });
+  });
+
+  it('should sanitize generated placeholder discriminator values inside free-form object examples', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'POST',
+      requestContentType: 'application/json',
+      requestBodyFields: [
+        {
+          name: 'statusContext',
+          pointer: '/statusContext',
+          path: ['statusContext'],
+          required: false,
+          nullable: false,
+          type: 'object',
+        },
+        { name: 'name', pointer: '/name', path: ['name'], required: true, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        {
+          name: 'Service',
+          statusContext: {
+            '@type': 'ContextUpdate',
+            reason: 'changed',
+            relatedEntitys: [{ '@type': 'string', href: 'string', name: 'string' }],
+          },
+        },
+        operation.requestBodyFields,
+      ),
+    ).toEqual({ name: 'Service', statusContext: { '@type': 'ContextUpdate', reason: 'changed', relatedEntitys: [] } });
+  });
+
+  it('should keep response identity fields visible in detail forms but exclude path identity from PATCH bodies', () => {
+    const renderer = schemaRenderer(comp);
+    const idField: OpenApiSchemaField = {
+      name: 'id',
+      pointer: '/id',
+      path: ['id'],
+      required: true,
+      nullable: false,
+      type: 'integer',
+    };
+    const hrefField: OpenApiSchemaField = {
+      name: 'href',
+      pointer: '/href',
+      path: ['href'],
+      required: false,
+      nullable: false,
+      type: 'string',
+    };
+    const nameField: OpenApiSchemaField = {
+      name: 'name',
+      pointer: '/name',
+      path: ['name'],
+      required: false,
+      nullable: false,
+      type: 'string',
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestContentType: 'application/json',
+      requestBodyFields: [idField, hrefField, nameField],
+    };
+    const resource = {
+      updateOperation: operation,
+      detailOperation: { responseBodyFields: [{ name: 'body', pointer: '', path: [], required: true, nullable: false, type: 'object', fields: [idField, hrefField, nameField] }] },
+    };
+
+    expect(renderer.detailSchemaFields(resource).map(field => field.name)).toEqual(['id', 'href', 'name']);
+    expect(renderer.bodyForOperation(operation, { id: 1, href: '/resources/1', name: 'Alpha' }, operation.requestBodyFields, true)).toEqual({
+      href: '/resources/1',
+      name: 'Alpha',
+    });
+  });
+
+  it('should merge update and response schemas so returned href fields remain visible in detail forms', () => {
+    const renderer = schemaRenderer(comp);
+    const updateField: OpenApiSchemaField = {
+      name: 'name',
+      pointer: '/name',
+      path: ['name'],
+      required: false,
+      nullable: false,
+      type: 'string',
+    };
+    const hrefField: OpenApiSchemaField = {
+      name: 'href',
+      pointer: '/href',
+      path: ['href'],
+      required: false,
+      nullable: false,
+      type: 'string',
+    };
+    const resource = {
+      updateOperation: { requestBodyFields: [updateField] },
+      detailOperation: { responseBodyFields: [{ name: 'body', pointer: '', path: [], required: true, nullable: false, type: 'object', fields: [hrefField, updateField] }] },
+    };
+
+    expect(renderer.detailSchemaFields(resource).map(field => field.name)).toEqual(['name', 'href']);
+    expect(renderer.detailSchemaFields(resource).find(field => field.name === 'href')?.readOnly).toBe(true);
+    expect(renderer.schemaField(renderer.detailSchemaFields(resource).find(field => field.name === 'href') as OpenApiSchemaField).props?.disabled).toBe(true);
+  });
+
+  it('should order identity fields first and group type metadata in a collapsed section', () => {
+    const renderer = schemaRenderer(comp);
+    const field = (name: string, type: OpenApiSchemaField['type'] = 'string'): OpenApiSchemaField => ({
+      name,
+      pointer: `/${name}`,
+      path: [name],
+      required: false,
+      nullable: false,
+      type,
+    });
+
+    const fields = renderer.schemaFieldGroup([
+      field('@schemaLocation'),
+      field('description'),
+      field('name'),
+      field('@type'),
+      field('lifecycleStatus'),
+      field('href'),
+      field('tmfId'),
+      field('@baseType'),
+      field('id', 'integer'),
+      field('@referredType'),
+    ]);
+
+    expect(fields.slice(0, 6).map(item => item.key)).toEqual(['id', 'tmfId', 'href', 'name', 'description', 'lifecycleStatus']);
+    const metadataSection = fields[fields.length - 1];
+    expect(metadataSection.props?.label).toBe('Metadata');
+    expect(metadataSection.props?.expanded).toBe(false);
+    expect(metadataSection.wrappers).toContain('form-crud-accordion');
+    expect(metadataSection.fieldGroup?.map(item => item.key)).toEqual(['@schemaLocation', '@type', '@baseType', '@referredType']);
+  });
+
+  it('should render object sections as collapsed Bootstrap accordions', () => {
+    const renderer = schemaRenderer(comp);
+    const objectField: OpenApiSchemaField = {
+      name: 'validFor',
+      pointer: '/validFor',
+      path: ['validFor'],
+      required: true,
+      nullable: false,
+      type: 'object',
+      fields: [
+        { name: 'startDateTime', pointer: '/validFor/startDateTime', path: ['validFor', 'startDateTime'], required: false, nullable: false, type: 'string' },
+        { name: 'endDateTime', pointer: '/validFor/endDateTime', path: ['validFor', 'endDateTime'], required: false, nullable: false, type: 'string' },
+      ],
+    };
+
+    const field = renderer.schemaField(objectField);
+
+    expect(field.wrappers).toEqual(['form-crud-accordion']);
+    expect(field.props?.expanded).toBe(false);
+  });
+
+  it('should transform nested array detail values before repopulating edit forms after save', () => {
+    const renderer = schemaRenderer(comp);
+    const field: OpenApiSchemaField = {
+      name: 'relatedPartys',
+      pointer: '/relatedPartys',
+      path: ['relatedPartys'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'relatedParty',
+        pointer: '/relatedPartys/0',
+        path: ['relatedPartys', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: 'validFor',
+            pointer: '/relatedPartys/0/validFor',
+            path: ['relatedPartys', '0', 'validFor'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: 'startDateTime',
+                pointer: '/relatedPartys/0/validFor/startDateTime',
+                path: ['relatedPartys', '0', 'validFor', 'startDateTime'],
+                required: false,
+                nullable: false,
+                type: 'string',
+                format: 'date-time',
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    expect(renderer.detailValueForField(field, [{ validFor: { startDateTime: '2026-06-01T10:30:45Z' } }])).toEqual([
+      { validFor: { startDateTime: '2026-06-01T10:30:45' } },
+    ]);
+  });
+
+  it('should keep submitted detail fields when PATCH responses omit writable arrays or objects', () => {
+    const renderer = schemaRenderer(comp);
+    const submitted = {
+      name: 'Catalog A',
+      href: '/submitted/catalog-a',
+      categorys: [
+        {
+          id: 1001,
+          tmfId: 'tmf-category-1001',
+          href: '/category/1001',
+          name: 'Category A',
+        },
+      ],
+      relatedPartys: [],
+      validFor: { startDateTime: '2026-01-01T00:00:00Z', endDateTime: '2026-01-02T00:00:00Z' },
+    };
+    const response = {
+      id: 10,
+      href: '/response/catalog-a',
+      name: 'Catalog A updated',
+      validFor: { startDateTime: '2026-01-01T00:00:00Z' },
+    };
+
+    expect(renderer.mergeSubmittedDetailWithResponse(submitted, response)).toEqual({
+      id: 10,
+      name: 'Catalog A updated',
+      href: '/response/catalog-a',
+      categorys: [
+        {
+          id: 1001,
+          tmfId: 'tmf-category-1001',
+          href: '/category/1001',
+          name: 'Category A',
+        },
+      ],
+      relatedPartys: [],
+      validFor: { startDateTime: '2026-01-01T00:00:00Z', endDateTime: '2026-01-02T00:00:00Z' },
+    });
+  });
+
+  it('should deep-clone nested array item defaults so editing one item does not clone or mutate siblings', () => {
+    const renderer = schemaRenderer(comp);
+    const arraySchema: OpenApiSchemaField = {
+      name: 'categories',
+      pointer: '/categories',
+      path: ['categories'],
+      required: true,
+      nullable: false,
+      type: 'array',
+      minItems: 2,
+      items: {
+        name: 'category',
+        pointer: '/categories/0',
+        path: ['categories', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'id', pointer: '/categories/0/id', path: ['categories', '0', 'id'], required: false, nullable: false, type: 'string' },
+          { name: '@baseType', pointer: '/categories/0/@baseType', path: ['categories', '0', '@baseType'], required: false, nullable: false, type: 'string' },
+          {
+            name: 'children',
+            pointer: '/categories/0/children',
+            path: ['categories', '0', 'children'],
+            required: false,
+            nullable: false,
+            type: 'array',
+            items: {
+              name: 'child',
+              pointer: '/categories/0/children/0',
+              path: ['categories', '0', 'children', '0'],
+              required: false,
+              nullable: false,
+              type: 'object',
+              fields: [{ name: 'id', pointer: '/categories/0/children/0/id', path: ['categories', '0', 'children', '0', 'id'], required: false, nullable: false, type: 'string' }],
+            },
+          },
+        ],
+      },
+    };
+
+    const initialValue = renderer.initialFieldValue(arraySchema) as Record<string, unknown>[];
+    const firstChildren = initialValue[0]?.children as unknown[];
+    const secondChildren = initialValue[1]?.children as unknown[];
+
+    expect(initialValue).toHaveLength(2);
+    expect(initialValue[0]).not.toBe(initialValue[1]);
+    expect(firstChildren).not.toBe(secondChildren);
+
+    initialValue[0]['@baseType'] = 'ChangedBaseType';
+    firstChildren.push({ id: 'child-1' });
+
+    expect(initialValue[1]['@baseType']).not.toBe('ChangedBaseType');
+    expect(secondChildren).toHaveLength(0);
+    expect(renderer.valueForField(arraySchema, initialValue)).toEqual([
+      { '@baseType': 'ChangedBaseType', children: [{ id: 'child-1' }] },
+      {},
+    ]);
+  });
+
+  it('should render all required request schema fields and block invalid create submits', () => {
+    const operation = OPENAPI_OPERATIONS.find(candidate => candidate.method === 'POST' && requiredRequestFieldNames(candidate).length > 0);
+    if (!operation) {
+      expect(OPENAPI_OPERATIONS.some(candidate => candidate.method === 'POST' && requiredRequestFieldNames(candidate).length > 0)).toBe(false);
+      return;
+    }
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+
+    const fieldKeys = flattenFieldKeys(comp.fields);
+    for (const requiredField of requiredRequestFieldNames(operation)) {
+      expect(fieldKeys).toContain(requiredField);
+    }
+
+    const fieldToClear = scalarRequiredRequestFields(operation).at(0);
+    if (!fieldToClear) {
+      expect(requiredRequestFieldNames(operation).length).toBeGreaterThan(0);
+      return;
+    }
+
+    const control = formControlForBodyField(fieldToClear);
+    expect(control).toBeTruthy();
+    control?.setValue('');
+    control?.markAsTouched();
+    comp.submit();
+
+    if (requiredRequestFieldNames(operation).length > 0) {
+      httpMock.expectNone(req => req.url.startsWith('/api'));
+      expect(comp.form.invalid).toBe(true);
+    }
+  });
+
+  it('should map backend validation errors back to matching Formly controls', () => {
+    const operation = OPENAPI_OPERATIONS.find(candidate => candidate.method === 'POST' && requiredRequestFieldNames(candidate).length > 0);
+    if (!operation) {
+      expect(OPENAPI_OPERATIONS.some(candidate => candidate.method === 'POST' && requiredRequestFieldNames(candidate).length > 0)).toBe(false);
+      return;
+    }
+    const requiredField = scalarRequiredRequestFields(operation).at(0);
+    if (!requiredField) {
+      expect(scalarRequiredRequestFields(operation).length).toBe(0);
+      return;
+    }
+
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+    const control = formControlForBodyField(requiredField);
+    expect(control).toBeTruthy();
+    control?.setValue(clientValidValueForField(requiredField));
+
+    comp.submit();
+
+    const request = httpMock.expectOne(req => req.method === operation.method && req.url.startsWith('/api'));
+    request.flush({ fieldErrors: [{ field: requiredField.name, message: 'Backend validation failed' }] }, { status: 400, statusText: 'Bad Request' });
+
+    expect(comp.responseStatus()).toBe(400);
+    expect(comp.responseError()).toContain(requiredField.name);
+    expect(control?.errors?.backend).toBe('Backend validation failed');
+  });
+
+  it('should display backend parse and problem details instead of only a generic bad request title', () => {
+    const operation = operationWithBody();
+    const renderer = schemaRenderer(comp);
+    routeParams.next(convertToParamMap({ operationId: operation.id }));
+    fixture.detectChanges();
+
+    expect(renderer.invalidControlSummaries(comp.form)).toEqual([]);
+    comp.submit();
+
+    const request = httpMock.expectOne(req => req.method === operation.method && req.url.startsWith('/api'));
+    request.flush(
+      {
+        type: 'about:blank',
+        title: 'Bad Request',
+        status: 400,
+        detail: 'Failed to read request',
+        requestError: 'Cannot deserialize TimePeriod from JSON string at field validFor',
+        message: 'Cannot deserialize payload field from JSON string',
+      },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    expect(comp.responseStatus()).toBe(400);
+    expect(comp.responseError()).toContain('Failed to read request');
+    expect(comp.responseError()).toContain('Cannot deserialize TimePeriod');
+    expect(comp.responseError()).toContain('Cannot deserialize payload field');
+  });
+
+  it('should extract backend parse paths from Jackson reference chains for field-level display', () => {
+    const renderer = schemaRenderer(comp);
+    const violations = renderer.validationViolations({
+      requestError:
+        'Cannot deserialize value of type `example.TimePeriod` from String "2026-01-01": through reference chain: example.Root["items"][0]["validity"]',
+    });
+
+    expect(violations).toContainEqual({
+      path: 'items.0.validity',
+      message:
+        'Cannot deserialize value of type `example.TimePeriod` from String "2026-01-01": through reference chain: example.Root["items"][0]["validity"]',
+    });
+  });
+
+  it('should fetch configured reference picker results and populate object arrays', () => {
+    const field: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'id', pointer: '/references/0/id', path: ['references', '0', 'id'], required: false, nullable: false, type: 'string' },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string' },
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+          { name: '@baseType', pointer: '/references/0/@baseType', path: ['references', '0', '@baseType'], required: false, nullable: false, type: 'string' },
+          { name: '@schemaLocation', pointer: '/references/0/@schemaLocation', path: ['references', '0', '@schemaLocation'], required: false, nullable: false, type: 'string' },
+          {
+            name: '@type',
+            pointer: '/references/0/@type',
+            path: ['references', '0', '@type'],
+            required: true,
+            nullable: false,
+            type: 'string',
+            enumValues: ['Reference'],
+            discriminatorValues: ['Reference'],
+          },
+        ],
+      },
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          displayFields: ['id', 'name'],
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'name', target: 'name' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+    comp.model.body = { references: [] };
+
+    comp.openReferencePicker(field);
+    const request = httpMock.expectOne('/api/targets');
+    request.flush([
+      {
+        id: 'target-1',
+        tmfId: 'target-tmf-id',
+        href: '/api/targets/target-1',
+        name: 'Target 1',
+        '@baseType': 'target-base',
+        '@schemaLocation': 'https://example.invalid/schema',
+        '@type': 'DifferentTargetType',
+        ignored: true,
+      },
+    ]);
+
+    expect(comp.referencePickerRows()).toHaveLength(1);
+    const previousFields = comp.fields;
+    comp.selectReferencePickerItem(comp.referencePickerRows()[0]);
+
+    expect(comp.model.body).toEqual({
+      references: [
+        {
+          id: 'target-1',
+          name: 'Target 1',
+          tmfId: 'target-tmf-id',
+          href: '/api/targets/target-1',
+          '@baseType': 'target-base',
+          '@schemaLocation': 'https://example.invalid/schema',
+        },
+      ],
+    });
+    expect(comp.fields).not.toBe(previousFields);
+  });
+
+  it('should augment configured embed reference mappings with compatible target scalar fields', () => {
+    const field: OpenApiSchemaField = {
+      name: 'categorys',
+      pointer: '/0/categorys',
+      path: ['0', 'categorys'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'category',
+        pointer: '/0/categorys/0',
+        path: ['0', 'categorys', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'id', pointer: '/0/categorys/0/id', path: ['0', 'categorys', '0', 'id'], required: false, nullable: false, type: 'integer', readOnly: true },
+          { name: 'tmfId', pointer: '/0/categorys/0/tmfId', path: ['0', 'categorys', '0', 'tmfId'], required: false, nullable: false, type: 'string', readOnly: true },
+          { name: 'href', pointer: '/0/categorys/0/href', path: ['0', 'categorys', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/0/categorys/0/name', path: ['0', 'categorys', '0', 'name'], required: false, nullable: false, type: 'string' },
+          { name: '@baseType', pointer: '/0/categorys/0/@baseType', path: ['0', 'categorys', '0', '@baseType'], required: false, nullable: false, type: 'string' },
+          { name: '@schemaLocation', pointer: '/0/categorys/0/@schemaLocation', path: ['0', 'categorys', '0', '@schemaLocation'], required: false, nullable: false, type: 'string' },
+          { name: '@referredType', pointer: '/0/categorys/0/@referredType', path: ['0', 'categorys', '0', '@referredType'], required: false, nullable: false, type: 'string' },
+          {
+            name: '@type',
+            pointer: '/0/categorys/0/@type',
+            path: ['0', 'categorys', '0', '@type'],
+            required: true,
+            nullable: false,
+            type: 'string',
+            enumValues: ['CategoryRef'],
+            discriminatorValues: ['CategoryRef'],
+          },
+        ],
+      },
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'category-picker',
+          sourcePath: 'categorys',
+          collectionPath: '/category',
+          displayFields: ['id', 'href', 'name'],
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'tmfId', target: 'tmfId' },
+            { source: 'href', target: 'href' },
+            { source: 'name', target: 'name' },
+          ],
+          mode: 'embed',
+          multiple: true,
+        },
+      ]),
+    );
+    comp.model.body = { categorys: [] };
+
+    comp.openReferencePicker(field);
+    const request = httpMock.expectOne('/api/category');
+    request.flush([
+      {
+        id: 1051,
+        tmfId: 'category-tmf-id',
+        href: '/api/category/1051',
+        name: 'Category 1051',
+        '@baseType': 'categoryBaseType',
+        '@schemaLocation': 'categorySchemaLocation',
+        '@referredType': 'Category',
+        '@type': 'Category',
+      },
+    ]);
+    comp.selectReferencePickerItem(comp.referencePickerRows()[0]);
+
+    expect(comp.model.body).toEqual({
+      categorys: [
+        {
+          id: 1051,
+          tmfId: 'category-tmf-id',
+          href: '/api/category/1051',
+          name: 'Category 1051',
+          '@baseType': 'categoryBaseType',
+          '@schemaLocation': 'categorySchemaLocation',
+          '@referredType': 'Category',
+        },
+      ],
+    });
+  });
+
+  it('should merge duplicate reference-picker selections by stable fields and replace stale selected identity fields', () => {
+    const field: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'id', pointer: '/references/0/id', path: ['references', '0', 'id'], required: false, nullable: false, type: 'integer' },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string' },
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+          { name: 'version', pointer: '/references/0/version', path: ['references', '0', 'version'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'reference-picker',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          displayFields: ['id', 'tmfId', 'href', 'name'],
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'tmfId', target: 'tmfId' },
+            { source: 'href', target: 'href' },
+            { source: 'name', target: 'name' },
+            { source: 'version', target: 'version' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+    comp.model.body = {
+      references: [
+        {
+          id: 3056,
+          tmfId: 'target-tmf-id',
+          href: '/api/targets/1003',
+          name: 'Old name',
+          version: '1.0',
+        },
+      ],
+    };
+
+    comp.openReferencePicker(field);
+    const request = httpMock.expectOne('/api/targets');
+    request.flush([
+      {
+        id: 1003,
+        tmfId: 'target-tmf-id',
+        href: '/api/targets/1003',
+        name: 'Updated name',
+        version: '2.0',
+      },
+    ]);
+    comp.selectReferencePickerItem(comp.referencePickerRows()[0]);
+
+    expect(comp.model.body).toEqual({
+      references: [
+        {
+          id: 1003,
+          tmfId: 'target-tmf-id',
+          href: '/api/targets/1003',
+          name: 'Updated name',
+          version: '2.0',
+        },
+      ],
+    });
+  });
+
+  it('should populate nested reference objects when a configured array item is a wrapper', () => {
+    const field: OpenApiSchemaField = {
+      name: 'relatedPartys',
+      pointer: '/relatedPartys',
+      path: ['relatedPartys'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'related party',
+        pointer: '/relatedPartys/0',
+        path: ['relatedPartys', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'role', pointer: '/relatedPartys/0/role', path: ['relatedPartys', '0', 'role'], required: false, nullable: false, type: 'string' },
+          {
+            name: 'partyOrPartyRole',
+            pointer: '/relatedPartys/0/partyOrPartyRole',
+            path: ['relatedPartys', '0', 'partyOrPartyRole'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              { name: 'id', pointer: '/relatedPartys/0/partyOrPartyRole/id', path: ['relatedPartys', '0', 'partyOrPartyRole', 'id'], required: false, nullable: false, type: 'integer', readOnly: true },
+              { name: 'tmfId', pointer: '/relatedPartys/0/partyOrPartyRole/tmfId', path: ['relatedPartys', '0', 'partyOrPartyRole', 'tmfId'], required: false, nullable: false, type: 'string', readOnly: true },
+              { name: 'href', pointer: '/relatedPartys/0/partyOrPartyRole/href', path: ['relatedPartys', '0', 'partyOrPartyRole', 'href'], required: false, nullable: false, type: 'string' },
+              { name: 'name', pointer: '/relatedPartys/0/partyOrPartyRole/name', path: ['relatedPartys', '0', 'partyOrPartyRole', 'name'], required: false, nullable: false, type: 'string' },
+              { name: '@baseType', pointer: '/relatedPartys/0/partyOrPartyRole/@baseType', path: ['relatedPartys', '0', 'partyOrPartyRole', '@baseType'], required: false, nullable: false, type: 'string' },
+              { name: '@schemaLocation', pointer: '/relatedPartys/0/partyOrPartyRole/@schemaLocation', path: ['relatedPartys', '0', 'partyOrPartyRole', '@schemaLocation'], required: false, nullable: false, type: 'string' },
+            ],
+          },
+        ],
+      },
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'related-party-reference',
+          sourcePath: 'relatedPartys',
+          collectionPath: '/parties',
+          displayFields: ['id', 'name'],
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'name', target: 'name' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+    comp.model.body = { relatedPartys: [] };
+
+    comp.openReferencePicker(field);
+    const request = httpMock.expectOne('/api/parties');
+    request.flush([
+      {
+        id: 42,
+        tmfId: 'party-tmf-id',
+        href: '/api/parties/42',
+        name: 'Party 42',
+        '@baseType': 'partyBaseType',
+        '@schemaLocation': 'partySchemaLocation',
+      },
+    ]);
+
+    comp.selectReferencePickerItem(comp.referencePickerRows()[0]);
+
+    expect(comp.model.body).toEqual({
+      relatedPartys: [
+        {
+          partyOrPartyRole: {
+            id: 42,
+            name: 'Party 42',
+            tmfId: 'party-tmf-id',
+            href: '/api/parties/42',
+            '@baseType': 'partyBaseType',
+            '@schemaLocation': 'partySchemaLocation',
+          },
+        },
+      ],
+    });
+  });
+
+  it('should preserve configured read-only reference identifiers in PATCH payloads', () => {
+    const renderer = schemaRenderer(comp);
+    const referenceArray: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'id', pointer: '/references/0/id', path: ['references', '0', 'id'], required: false, nullable: false, type: 'integer', readOnly: true },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string', readOnly: true },
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'updateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestBodyFields: [
+        { name: 'id', pointer: '/id', path: ['id'], required: false, nullable: false, type: 'integer', readOnly: true },
+        referenceArray,
+      ],
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          formId: 'patch-update-resource',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'href', target: 'href' },
+            { source: 'name', target: 'name' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { id: 1, references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }] },
+        operation.requestBodyFields,
+        true,
+      ),
+    ).toEqual({
+      references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }],
+    });
+  });
+
+  it('should omit selected reference identifiers when PATCH request schemas omit response identity fields', () => {
+    const renderer = schemaRenderer(comp);
+    const requestReferenceArray: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const detailReferenceArray: OpenApiSchemaField = {
+      ...requestReferenceArray,
+      items: {
+        ...requestReferenceArray.items!,
+        fields: [
+          { name: 'id', pointer: '/references/0/id', path: ['references', '0', 'id'], required: false, nullable: false, type: 'integer', readOnly: true },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string', readOnly: true },
+          ...(requestReferenceArray.items?.fields ?? []),
+        ],
+      },
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'updateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestBodyFields: [requestReferenceArray],
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          formId: 'patch-update-resource',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          copyFields: [{ source: 'href', target: 'href' }],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { id: 1, references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }] },
+        [detailReferenceArray],
+        true,
+      ),
+    ).toEqual({
+      references: [{ href: '/api/targets/1051', name: 'Target 1' }],
+    });
+  });
+
+  it('should seed free-form required nested objects from operation request examples', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'post-create-resource',
+      operationId: 'createResource',
+      method: 'POST',
+      path: '/resources',
+      parameters: [],
+      requestContentType: 'application/json',
+      requestBodyExample: {
+        items: [
+          {
+            service: {
+              serviceSpecification: {
+                '@type': 'ServiceSpecificationRef',
+                href: '/serviceSpecification/1',
+                name: 'Fiber',
+              },
+            },
+          },
+        ],
+      },
+      requestBodyFields: [
+        {
+          name: 'items',
+          pointer: '/items',
+          path: ['items'],
+          required: true,
+          nullable: false,
+          type: 'array',
+          items: {
+            name: 'item',
+            pointer: '/items/0',
+            path: ['items', '0'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: 'service',
+                pointer: '/items/0/service',
+                path: ['items', '0', 'service'],
+                required: true,
+                nullable: false,
+                type: 'object',
+                fields: [
+                  {
+                    name: 'serviceSpecification',
+                    pointer: '/items/0/service/serviceSpecification',
+                    path: ['items', '0', 'service', 'serviceSpecification'],
+                    required: true,
+                    nullable: false,
+                    type: 'object',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const model = renderer.initialModel(operation);
+
+    expect(renderer.bodyForOperation(operation, model.body, operation.requestBodyFields)).toEqual({
+      items: [
+        {
+          service: {
+            serviceSpecification: {
+              '@type': 'ServiceSpecificationRef',
+              href: '/serviceSpecification/1',
+              name: 'Fiber',
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it('should replace placeholder discriminator values in compact object examples', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'post-create-resource',
+      operationId: 'createResource',
+      method: 'POST',
+      path: '/resources',
+      parameters: [],
+      requestContentType: 'application/json',
+      requestBodyExample: {
+        target: {
+          '@type': 'string',
+          href: '/targets/1',
+        },
+      },
+      requestBodyFields: [
+        {
+          name: 'target',
+          pointer: '/target',
+          path: ['target'],
+          required: true,
+          nullable: false,
+          type: 'object',
+          example: {
+            '@type': 'ConcreteRef',
+            href: 'string',
+          },
+        },
+      ],
+    };
+    const model = renderer.initialModel(operation);
+
+    expect(renderer.bodyForOperation(operation, model.body, operation.requestBodyFields)).toEqual({
+      target: {
+        '@type': 'ConcreteRef',
+        href: '/targets/1',
+      },
+    });
+  });
+
+  it('should not seed optional compact arrays from unsafe placeholder object examples', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'post-create-resource',
+      operationId: 'createResource',
+      method: 'POST',
+      path: '/resources',
+      parameters: [],
+      requestContentType: 'application/json',
+      requestBodyExample: {
+        relatedItems: [
+          {
+            role: 'string',
+          },
+        ],
+        recursiveItems: [
+          {
+            '@type': 'ConcreteValue',
+          },
+        ],
+      },
+      requestBodyFields: [
+        {
+          name: 'relatedItems',
+          pointer: '/relatedItems',
+          path: ['relatedItems'],
+          required: false,
+          nullable: false,
+          type: 'array',
+          example: [
+            {
+              '@type': 'string',
+              role: 'string',
+            },
+          ],
+        },
+        {
+          name: 'recursiveItems',
+          pointer: '/recursiveItems',
+          path: ['recursiveItems'],
+          required: false,
+          nullable: false,
+          type: 'array',
+          example: [
+            {
+              '@type': 'ConcreteValue',
+            },
+          ],
+        },
+      ],
+    };
+    const model = renderer.initialModel(operation);
+
+    expect(renderer.bodyForOperation(operation, model.body, operation.requestBodyFields)).toEqual({});
+  });
+
+  it('should match reference pickers to the configured operation form and avoid duplicate api prefixes', () => {
+    const renderer = schemaRenderer(comp);
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'updateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+    };
+    const field: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [{ name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' }],
+      },
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          formId: 'patch-update-resource',
+          sourcePath: 'references',
+          targetBaseUrl: 'http://localhost:4201/api',
+          collectionPath: '/api/targets',
+          displayFields: ['href'],
+          copyFields: [{ source: 'href', target: 'href' }],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+
+    const createField = renderer.schemaField(field, false, 0, {}, undefined, {}, { ...operation, id: 'post-create-resource', method: 'POST', path: '/resources' });
+    const updateField = renderer.schemaField(field, false, 0, {}, undefined, {}, operation);
+
+    expect(createField.props?.referencePicker).toBeUndefined();
+    expect(updateField.props?.referencePicker).toBeDefined();
+    const sameOriginApi = `${window.location.origin}/api`;
+    expect(renderer.referencePickerUrl({ targetBaseUrl: sameOriginApi, collectionPath: '/api/targets' })).toBe('/api/targets');
+    expect(renderer.referencePickerUrl({ targetBaseUrl: sameOriginApi, collectionPath: '/targets' })).toBe('/api/targets');
+    expect(renderer.referencePickerUrl({ targetBaseUrl: 'https://example.invalid/api', collectionPath: '/api/targets' })).toBe(
+      'https://example.invalid/api/targets',
+    );
+    expect(renderer.referencePickerUrl({ targetBaseUrl: 'https://example.invalid/api', collectionPath: '/targets' })).toBe(
+      'https://example.invalid/api/targets',
+    );
+  });
+});

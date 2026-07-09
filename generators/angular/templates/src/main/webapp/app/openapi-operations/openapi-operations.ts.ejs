@@ -1,0 +1,290 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+import { DOCUMENT } from '@angular/common';
+import { HttpClient, HttpHeaders, HttpParams, HttpResponse } from '@angular/common/http';
+import { Component, inject, signal } from '@angular/core';
+import { AbstractControl, FormControl, FormGroup, ReactiveFormsModule, ValidatorFn, Validators } from '@angular/forms';
+import { finalize } from 'rxjs/operators';
+
+import SharedModule from 'app/shared/shared.module';
+
+import { OPENAPI_OPERATIONS, OpenApiOperationDefinition, OpenApiOperationParameter } from './openapi-operations.model';
+
+type OperationForm = FormGroup<Record<string, FormControl<string>>>;
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-openapi-operations',
+  templateUrl: './openapi-operations.html',
+  imports: [SharedModule, ReactiveFormsModule],
+})
+export default class OpenApiOperations {
+  readonly operations = OPENAPI_OPERATIONS;
+  readonly tags = [...new Set(this.operations.map(operation => operation.tag))];
+  readonly selectedOperation = signal<OpenApiOperationDefinition>(this.firstOperation());
+  readonly responseStatus = signal<number | null>(null);
+  readonly responseBody = signal('');
+  readonly responseError = signal('');
+  readonly isSubmitting = signal(false);
+  operationForm: OperationForm = this.createForm(this.firstOperation());
+
+  private readonly http = inject(HttpClient);
+  private readonly document = inject(DOCUMENT);
+
+  selectOperation(operationId: string): void {
+    const operation = this.operations.find(candidate => candidate.id === operationId) ?? this.firstOperation();
+    this.selectedOperation.set(operation);
+    this.operationForm = this.createForm(operation);
+    this.responseStatus.set(null);
+    this.responseBody.set('');
+    this.responseError.set('');
+  }
+
+  submit(): void {
+    if (this.operationForm.invalid || this.isSubmitting()) {
+      this.operationForm.markAllAsTouched();
+      return;
+    }
+    const operation = this.selectedOperation();
+    const request = this.buildRequest(operation);
+    this.isSubmitting.set(true);
+    this.responseStatus.set(null);
+    this.responseBody.set('');
+    this.responseError.set('');
+
+    this.http
+      .request(request.method, request.url, {
+        observe: 'response',
+        responseType: 'text',
+        body: request.body,
+        headers: request.headers,
+        params: request.params,
+      })
+      .pipe(finalize(() => this.isSubmitting.set(false)))
+      .subscribe({
+        next: response => this.captureResponse(response),
+        error: error => {
+          this.responseStatus.set(error.status ?? null);
+          this.responseError.set(this.formatBody(error.error));
+        },
+      });
+  }
+
+  controlName(parameter: OpenApiOperationParameter): string {
+    return `${parameter.location}:${parameter.name}`;
+  }
+
+  controlInvalid(name: string): boolean {
+    const control = this.operationForm.controls[name];
+    return control.invalid && (control.dirty || control.touched);
+  }
+
+  bodyInvalid(): boolean {
+    return this.controlInvalid('body');
+  }
+
+  parameterInputType(parameter: OpenApiOperationParameter): string {
+    if (parameter.type === 'integer' || parameter.type === 'number') return 'number';
+    if (parameter.format === 'date') return 'date';
+    if (parameter.format === 'date-time') return 'datetime-local';
+    return 'text';
+  }
+
+  parametersFor(location: OpenApiOperationParameter['location']): readonly OpenApiOperationParameter[] {
+    return this.selectedOperation().parameters.filter(parameter => parameter.location === location);
+  }
+
+  hasParameters(location: OpenApiOperationParameter['location']): boolean {
+    return this.parametersFor(location).length > 0;
+  }
+
+  private createForm(operation: OpenApiOperationDefinition): OperationForm {
+    const controls: Record<string, FormControl<string>> = {};
+    for (const parameter of operation.parameters) {
+      controls[this.controlName(parameter)] = new FormControl(this.initialParameterValue(parameter), {
+        nonNullable: true,
+        validators: parameter.required ? [Validators.required] : [],
+      });
+    }
+    if (operation.requestContentType) {
+      controls.body = new FormControl(this.initialBodyValue(operation), {
+        nonNullable: true,
+        validators: this.bodyValidators(operation),
+      });
+    }
+    return new FormGroup(controls);
+  }
+
+  private bodyValidators(operation: OpenApiOperationDefinition): ValidatorFn[] {
+    const validators = operation.requestBodyRequired ? [Validators.required] : [];
+    if (this.bodyUsesStructuredText(operation)) {
+      validators.push(this.jsonValidator);
+    }
+    return validators;
+  }
+
+  private initialParameterValue(parameter: OpenApiOperationParameter): string {
+    const value = parameter.example ?? parameter.defaultValue;
+    return this.formControlValue(value);
+  }
+
+  private initialBodyValue(operation: OpenApiOperationDefinition): string {
+    if (operation.requestBodyExample === undefined || operation.requestBodyExample === null) return '';
+    if (!this.bodyUsesStructuredText(operation) && typeof operation.requestBodyExample === 'string') return operation.requestBodyExample;
+    return JSON.stringify(operation.requestBodyExample, null, 2);
+  }
+
+  private jsonValidator(control: AbstractControl<string>): Record<string, boolean> | null {
+    const value = control.value.trim();
+    if (!value) return null;
+    try {
+      JSON.parse(value);
+      return null;
+    } catch {
+      return { json: true };
+    }
+  }
+
+  private buildRequest(operation: OpenApiOperationDefinition): {
+    method: string;
+    url: string;
+    params: HttpParams;
+    headers: HttpHeaders;
+    body: unknown;
+  } {
+    let url = this.apiPath(operation.path);
+    let params = new HttpParams();
+    let headers = new HttpHeaders();
+
+    for (const parameter of operation.parameters) {
+      const value = this.operationForm.controls[this.controlName(parameter)].value;
+      if (value === '') continue;
+      switch (parameter.location) {
+        case 'path':
+          url = url.replace(`{${parameter.name}}`, encodeURIComponent(value));
+          break;
+        case 'query':
+          params = params.set(parameter.name, value);
+          break;
+        case 'header':
+          headers = headers.set(parameter.name, value);
+          break;
+        case 'cookie':
+          this.setCookieParameter(parameter.name, value);
+          break;
+      }
+    }
+
+    let body: unknown;
+    if (operation.requestContentType) {
+      const rawBody = this.operationForm.controls.body.value.trim();
+      body = this.requestBodyFor(operation, rawBody);
+      if (!this.isMultipartContentType(operation.requestContentType)) {
+        headers = headers.set('Content-Type', operation.requestContentType);
+      }
+    }
+    return { method: operation.method, url, params, headers, body };
+  }
+
+  private apiPath(path: string): string {
+    return path.startsWith('/api/') || path === '/api' ? path : `/api${path.startsWith('/') ? path : `/${path}`}`;
+  }
+
+  private firstOperation(): OpenApiOperationDefinition {
+    return this.operations[0];
+  }
+
+  private setCookieParameter(name: string, value: string): void {
+    this.document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(value)}; path=/; SameSite=Lax`;
+  }
+
+  private requestBodyFor(operation: OpenApiOperationDefinition, rawBody: string | undefined): unknown {
+    if (!rawBody) return null;
+    const contentType = operation.requestContentType ?? '';
+    if (this.isJsonContentType(contentType)) return JSON.parse(rawBody);
+    if (contentType.includes('application/x-www-form-urlencoded')) {
+      const value = this.parseJsonIfPossible(rawBody);
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const params = new URLSearchParams();
+        for (const [key, entryValue] of Object.entries(value)) {
+          if (entryValue !== undefined && entryValue !== null) params.set(key, String(entryValue));
+        }
+        return params.toString();
+      }
+    }
+    if (this.isMultipartContentType(contentType)) {
+      const formData = new FormData();
+      const value = this.parseJsonIfPossible(rawBody);
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const [key, entryValue] of Object.entries(value)) {
+          if (entryValue !== undefined && entryValue !== null) formData.append(key, String(entryValue));
+        }
+      } else {
+        formData.append('value', rawBody);
+      }
+      return formData;
+    }
+    return rawBody;
+  }
+
+  private bodyUsesStructuredText(operation: OpenApiOperationDefinition): boolean {
+    const contentType = operation.requestContentType;
+    if (!contentType) return false;
+    return this.isJsonContentType(contentType) || contentType.includes('application/x-www-form-urlencoded') || this.isMultipartContentType(contentType);
+  }
+
+  private isJsonContentType(contentType: string): boolean {
+    return contentType.includes('json');
+  }
+
+  private isMultipartContentType(contentType: string): boolean {
+    return contentType.includes('multipart/form-data');
+  }
+
+  private parseJsonIfPossible(value: string): unknown {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private formControlValue(value: unknown): string {
+    if (value === undefined || value === null) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return value.toString();
+    return JSON.stringify(value);
+  }
+
+  private captureResponse(response: HttpResponse<string>): void {
+    this.responseStatus.set(response.status);
+    this.responseBody.set(this.formatBody(response.body));
+  }
+
+  private formatBody(value: unknown): string {
+    if (value === undefined || value === null || value === '') return '';
+    if (typeof value === 'string') {
+      try {
+        return JSON.stringify(JSON.parse(value), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return JSON.stringify(value, null, 2);
+  }
+}

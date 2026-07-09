@@ -12,6 +12,10 @@ if (!summaryPath || !outputPath) {
 const seedAuthorization =
   process.env.EVOMASTER_SEED_AUTHORIZATION ??
   (process.env.EVOMASTER_SEED_AUTH_TOKEN ? `Bearer ${process.env.EVOMASTER_SEED_AUTH_TOKEN}` : undefined);
+const seedIncludeAuthorization = process.env.EVOMASTER_SEED_INCLUDE_AUTHORIZATION === 'true';
+const seedIncludeStandardHeaders = process.env.EVOMASTER_SEED_INCLUDE_STANDARD_HEADERS === 'true';
+const seedBodyMode = process.env.EVOMASTER_SEED_BODY_MODE ?? 'safe';
+const OMIT_SEED_VALUE = Symbol('omitSeedValue');
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -56,6 +60,9 @@ const openApi = readOpenApi(openApiPath);
 const schemas = openApi?.components?.schemas ?? {};
 const seedStats = {
   sanitizedBodies: 0,
+  omittedBodies: 0,
+  omittedNullableValues: 0,
+  omittedEmptyBodies: 0,
   normalizedDateTimes: 0,
   normalizedTimes: 0,
   prunedFreeFormObjectValues: 0,
@@ -108,6 +115,16 @@ function isFreeFormObjectSchema(schema) {
   );
 }
 
+function schemaType(schema) {
+  schema = deref(schema) ?? {};
+  return Array.isArray(schema.type) ? schema.type.find(item => item !== 'null') : schema.type;
+}
+
+function schemaAllowsNull(schema) {
+  schema = deref(schema) ?? {};
+  return schema.nullable === true || (Array.isArray(schema.type) && schema.type.includes('null'));
+}
+
 function chooseVariant(schema, value) {
   schema = deref(schema) ?? {};
   const variants = schema.oneOf ?? schema.anyOf;
@@ -154,6 +171,11 @@ function normalizeTimeForEvoMaster(value) {
 
 function sanitizeSeedPayload(value, schema) {
   schema = deref(schema) ?? {};
+  if (seedBodyMode === 'none') return OMIT_SEED_VALUE;
+  if (seedBodyMode === 'safe' && schemaAllowsNull(schema)) {
+    seedStats.omittedNullableValues += 1;
+    return OMIT_SEED_VALUE;
+  }
   if (value === undefined || value === null) return value;
   if (schema.allOf?.length) {
     const merged = { ...schema, properties: collectProperties(schema) };
@@ -179,10 +201,11 @@ function sanitizeSeedPayload(value, schema) {
     }
     return value;
   }
-  const type = Array.isArray(schema.type) ? schema.type.find(item => item !== 'null') : schema.type;
+  const type = schemaType(schema);
   if (type === 'array') {
     const itemsSchema = schema.items ?? {};
-    return Array.isArray(value) ? value.map(item => sanitizeSeedPayload(item, itemsSchema)) : value;
+    if (!Array.isArray(value)) return value;
+    return value.map(item => sanitizeSeedPayload(item, itemsSchema)).filter(item => item !== OMIT_SEED_VALUE);
   }
   const properties = collectProperties(schema);
   if ((type === 'object' || Object.keys(properties).length) && value && typeof value === 'object' && !Array.isArray(value)) {
@@ -190,9 +213,15 @@ function sanitizeSeedPayload(value, schema) {
     for (const [property, propertyValue] of Object.entries(value)) {
       const propertySchema = properties[property];
       if (propertySchema) {
-        output[property] = sanitizeSeedPayload(propertyValue, propertySchema);
+        const sanitized = sanitizeSeedPayload(propertyValue, propertySchema);
+        if (sanitized !== OMIT_SEED_VALUE) {
+          output[property] = sanitized;
+        }
       } else if (schema.additionalProperties && schema.additionalProperties !== true) {
-        output[property] = sanitizeSeedPayload(propertyValue, schema.additionalProperties);
+        const sanitized = sanitizeSeedPayload(propertyValue, schema.additionalProperties);
+        if (sanitized !== OMIT_SEED_VALUE) {
+          output[property] = sanitized;
+        }
       } else if (schema.additionalProperties === true) {
         seedStats.skippedUnknownAdditionalProperties += 1;
       }
@@ -233,7 +262,9 @@ function itemForResult(result) {
     if (/^authorization$/i.test(key)) continue;
     pushHeader(headers, key, value);
   }
-  pushHeader(headers, 'Authorization', seedAuthorization);
+  if (seedIncludeAuthorization) {
+    pushHeader(headers, 'Authorization', seedAuthorization);
+  }
 
   let body;
   if (result.requestFile) {
@@ -243,13 +274,24 @@ function itemForResult(result) {
       payload = sanitizeSeedPayload(payload, requestSchema);
       seedStats.sanitizedBodies += 1;
     }
-    body = {
-      mode: 'raw',
-      raw: JSON.stringify(payload, null, 2),
-    };
-    pushHeader(headers, 'Content-Type', 'application/json');
+    if (payload === OMIT_SEED_VALUE) {
+      seedStats.omittedBodies += 1;
+    } else if (payload && typeof payload === 'object' && !Array.isArray(payload) && Object.keys(payload).length === 0) {
+      seedStats.omittedBodies += 1;
+      seedStats.omittedEmptyBodies += 1;
+    } else {
+      body = {
+        mode: 'raw',
+        raw: JSON.stringify(payload, null, 2),
+      };
+      if (seedIncludeStandardHeaders) {
+        pushHeader(headers, 'Content-Type', 'application/json');
+      }
+    }
   }
-  pushHeader(headers, 'Accept', 'application/json');
+  if (seedIncludeStandardHeaders) {
+    pushHeader(headers, 'Accept', 'application/json');
+  }
 
   return {
     name: `${result.method.toUpperCase()} ${result.path}`,
@@ -274,4 +316,13 @@ const collection = {
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, `${JSON.stringify(collection, null, 2)}\n`);
-console.log(JSON.stringify({ seedFile: outputPath, itemCount: items.length, ...seedStats }));
+console.log(
+  JSON.stringify({
+    seedFile: outputPath,
+    itemCount: items.length,
+    bodyMode: seedBodyMode,
+    includeAuthorization: seedIncludeAuthorization,
+    includeStandardHeaders: seedIncludeStandardHeaders,
+    ...seedStats,
+  }),
+);

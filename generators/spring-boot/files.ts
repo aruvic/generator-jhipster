@@ -344,6 +344,12 @@ export const baseServerFiles = asWriteFilesSection<SpringBootApplication>({
   ],
   serverJavaWeb: [
     {
+      condition: generator => generator.clientFrameworkAngular && Boolean((generator as any).oas3Input || (generator as any).openApiOperations?.length),
+      path: `${SERVER_MAIN_SRC_DIR}_package_/`,
+      renameTo: moveToJavaPackageSrcDir,
+      templates: ['web/rest/FormCrudReferencePickerResource.java'],
+    },
+    {
       condition: generator => generator.clientFrameworkAny && !generator.reactive,
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,
       renameTo: moveToJavaPackageSrcDir,

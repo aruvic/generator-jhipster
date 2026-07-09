@@ -242,6 +242,11 @@ describe(`generator - ${generator}`, () => {
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'SanitizingConnectionHandler');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sanitizeSqlStatement');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_SANITIZE_SQL_STATEMENTS');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'packagesToSkipInstrumentation');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_PACKAGES_TO_SKIP_INSTRUMENTATION',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'UnitsInfoRecorder.registerNewJpaConstraint');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sanitizeSqlCheckEnumInsertions');
       runResult.assertNoFileContent(
@@ -261,7 +266,16 @@ describe(`generator - ${generator}`, () => {
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'content.put("application/problem+json", problemContent)');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'content.put("application/json", problemContent)');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_STRIP_SCHEMA_PATTERNS');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'isOpenApiParameter');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'operationParameter && "schema".equals(entry.getKey())',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_STRIP_UNSUPPORTED_FORMATS');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'isUnsupportedEvoMasterStringFormat');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"email"');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"uri"');
+      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"base64"');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_MERGE_COMPOSED_SCHEMAS');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_FLATTEN_ALLOF_SCHEMAS');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_BOUND_FREE_FORM_OBJECT_SCHEMAS');

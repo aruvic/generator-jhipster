@@ -1,0 +1,231 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+import { DOCUMENT } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
+import { Component, OnInit, inject, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+
+import SharedModule from 'app/shared/shared.module';
+import {
+  FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+  FormCrudReferencePickerConfig,
+  FormCrudReferencePickerCopyField,
+  OPENAPI_OPERATIONS,
+  OpenApiOperationDefinition,
+} from 'app/openapi-operations/openapi-operations.model';
+
+type RegisteredForm = {
+  id: string;
+  label: string;
+  operation: OpenApiOperationDefinition;
+};
+
+type RegisteredRestApi = {
+  id: string;
+  label: string;
+  path: string;
+  searchParams: readonly string[];
+};
+
+@Component({
+  selector: '<%= jhiPrefixDashed %>-form-crud-reference-pickers',
+  templateUrl: './form-crud-reference-pickers.html',
+  imports: [SharedModule, FormsModule],
+})
+export default class FormCrudReferencePickers implements OnInit {
+  readonly registeredForms = this.formRegistrations();
+  readonly registeredRestApis = this.restApiRegistrations();
+  configs = signal<FormCrudReferencePickerConfig[]>([]);
+  error = signal('');
+  success = signal('');
+
+  private readonly document = inject(DOCUMENT);
+  private readonly http = inject(HttpClient);
+  private readonly resourceUrl = 'api/form-crud-reference-pickers';
+
+  ngOnInit(): void {
+    this.load();
+  }
+
+  addConfig(): void {
+    this.configs.update(configs => [
+      ...configs,
+      {
+        id: `picker-${Date.now()}`,
+        label: '',
+        formId: this.registeredForms[0]?.id,
+        targetApiId: this.registeredRestApis[0]?.id,
+        sourcePath: '',
+        collectionPath: this.registeredRestApis[0]?.path ?? '',
+        displayFields: this.defaultReferenceFields(),
+        copyFields: this.defaultReferenceCopyFields(),
+        mode: 'reference',
+        multiple: true,
+      },
+    ]);
+  }
+
+  removeConfig(index: number): void {
+    this.configs.update(configs => configs.filter((_, candidateIndex) => candidateIndex !== index));
+  }
+
+  setConfigField(index: number, field: keyof FormCrudReferencePickerConfig, value: unknown): void {
+    this.configs.update(configs =>
+      configs.map((config, candidateIndex) => {
+        if (candidateIndex !== index) return config;
+        const next = { ...config, [field]: value };
+        if (field === 'targetApiId' && typeof value === 'string') {
+          const api = this.registeredRestApis.find(candidate => candidate.id === value);
+          if (api) {
+            next.collectionPath = api.path;
+            if (!next.searchParam && api.searchParams.length) next.searchParam = api.searchParams[0];
+          }
+        }
+        return next;
+      }),
+    );
+  }
+
+  deleteConfig(index: number): void {
+    this.removeConfig(index);
+    this.save();
+  }
+
+  displayFieldsText(config: FormCrudReferencePickerConfig): string {
+    return (config.displayFields ?? []).join(', ');
+  }
+
+  setDisplayFields(index: number, value: string): void {
+    this.setConfigField(index, 'displayFields', this.parseList(value));
+  }
+
+  copyFieldsText(config: FormCrudReferencePickerConfig): string {
+    return (config.copyFields ?? []).map(mapping => `${mapping.source}:${mapping.target}`).join(', ');
+  }
+
+  setCopyFields(index: number, value: string): void {
+    const mappings = this.parseList(value)
+      .map(entry => {
+        const [source, target = source] = entry.split(':').map(part => part.trim());
+        return source ? ({ source, target } as FormCrudReferencePickerCopyField) : undefined;
+      })
+      .filter((mapping): mapping is FormCrudReferencePickerCopyField => mapping !== undefined);
+    this.setConfigField(index, 'copyFields', mappings);
+  }
+
+  save(): void {
+    const invalid = this.configs().find(config => !config.sourcePath.trim() || !config.collectionPath.trim());
+    if (invalid) {
+      this.error.set('Each picker needs a source form/schema path and target collection endpoint.');
+      this.success.set('');
+      return;
+    }
+    this.error.set('');
+    this.success.set('');
+    this.http.put<FormCrudReferencePickerConfig[]>(this.resourceUrl, this.configs()).subscribe({
+      next: configs => {
+        this.configs.set(Array.isArray(configs) ? configs : this.configs());
+        this.cacheConfigs(this.configs());
+        this.success.set('Reference picker configuration saved.');
+      },
+      error: error => {
+        this.error.set(this.errorMessage(error));
+      },
+    });
+  }
+
+  load(): void {
+    this.error.set('');
+    this.success.set('');
+    this.http.get<FormCrudReferencePickerConfig[]>(this.resourceUrl).subscribe({
+      next: configs => {
+        this.configs.set(Array.isArray(configs) ? configs : []);
+        this.cacheConfigs(this.configs());
+      },
+      error: error => {
+        this.error.set(this.errorMessage(error));
+        this.loadCached();
+      },
+    });
+  }
+
+  private loadCached(): void {
+    const storage = this.storage();
+    if (!storage) return;
+    try {
+      const parsed = JSON.parse(storage.getItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY) ?? '[]');
+      this.configs.set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      this.error.set('Stored reference picker configuration is not valid JSON.');
+      this.configs.set([]);
+    }
+  }
+
+  private cacheConfigs(configs: FormCrudReferencePickerConfig[]): void {
+    this.storage()?.setItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY, JSON.stringify(configs, null, 2));
+  }
+
+  private errorMessage(error: unknown): string {
+    if (error && typeof error === 'object') {
+      const body = (error as { error?: unknown }).error;
+      if (body && typeof body === 'object') {
+        const problem = body as { detail?: unknown; message?: unknown; title?: unknown };
+        return [problem.detail, problem.message, problem.title].filter(value => typeof value === 'string' && value.trim()).join(' ') || 'Unable to save reference picker configuration.';
+      }
+      if (typeof body === 'string' && body.trim()) return body;
+    }
+    return 'Unable to save reference picker configuration.';
+  }
+
+  private parseList(value: string): string[] {
+    return value
+      .split(',')
+      .map(entry => entry.trim())
+      .filter(Boolean);
+  }
+
+  private defaultReferenceFields(): string[] {
+    return ['id', 'tmfId', 'href', 'name'];
+  }
+
+  private defaultReferenceCopyFields(): FormCrudReferencePickerCopyField[] {
+    return this.defaultReferenceFields().map(field => ({ source: field, target: field }));
+  }
+
+  private storage(): Storage | undefined {
+    return this.document.defaultView?.localStorage;
+  }
+
+  private formRegistrations(): RegisteredForm[] {
+    return OPENAPI_OPERATIONS.filter(operation => operation.requestBodyFields?.length).map(operation => ({
+      id: operation.id,
+      label: `${operation.method} ${operation.path}`,
+      operation,
+    }));
+  }
+
+  private restApiRegistrations(): RegisteredRestApi[] {
+    return OPENAPI_OPERATIONS.filter(operation => operation.method === 'GET' && !operation.path.includes('{')).map(operation => ({
+      id: operation.id,
+      label: `${operation.method} ${operation.path}`,
+      path: operation.path,
+      searchParams: operation.parameters.filter(parameter => parameter.location === 'query').map(parameter => parameter.name),
+    }));
+  }
+}

@@ -30,10 +30,14 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <skipValidateSpec>false</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
@@ -138,10 +142,14 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <skipValidateSpec>false</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
@@ -234,10 +242,14 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <skipValidateSpec>false</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
@@ -327,10 +339,14 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                             <skipValidateSpec>false</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>

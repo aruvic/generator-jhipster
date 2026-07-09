@@ -83,9 +83,20 @@ describe('OpenAPI delegate generator', () => {
           `      type: object\n` +
           `      required:\n` +
           `        - kind\n` +
+          `        - href\n` +
+          `        - nullableCode\n` +
+          `        - secret\n` +
           `      properties:\n` +
           `        kind:\n` +
           `          type: string\n` +
+          `        href:\n` +
+          `          type: string\n` +
+          `        nullableCode:\n` +
+          `          type: string\n` +
+          `          nullable: true\n` +
+          `        secret:\n` +
+          `          type: string\n` +
+          `          writeOnly: true\n` +
           `        id:\n` +
           `          type: string\n` +
           `        agreements:\n` +
@@ -245,6 +256,9 @@ describe('OpenAPI delegate generator', () => {
       expect(output).not.toContain('CreateBookingRepository');
       expect(output).toContain('validatePayload(createBooking);');
       expect(output).toContain(
+        'validateRequiredProperties(createBooking, List.of(new RequiredPropertyRule("", "kind", false), new RequiredPropertyRule("/equipment", "isShipperOwned", false)));',
+      );
+      expect(output).toContain(
         'validatePayloadDiscriminators(createBooking, List.of(new DiscriminatorRule("", "kind", Set.of("CreateBooking")), new DiscriminatorRule("/equipment", "isShipperOwned", Set.of("false", "true"))));',
       );
       expect(output).toContain('return value != null && value.isValueNode() && allowedValues.contains(value.asText());');
@@ -252,20 +266,125 @@ describe('OpenAPI delegate generator', () => {
         output.indexOf('com.example.domain.Booking entity = this.createBookingMapper.toBookingEntity(createBooking);'),
       );
       expect(output).toContain('com.example.domain.Booking entity = this.createBookingMapper.toBookingEntity(createBooking);');
-      expect(output).toContain('CreateBookingResponse responseBody = mapResponseBody(() -> this.createBookingResponseMapper.toCreateBookingResponse(saved));');
+      expect(output).toContain(
+        'CreateBookingResponse responseBody = mapResponseBody(() -> this.createBookingResponseMapper.toCreateBookingResponse(responseEntity));',
+      );
       expect(output).toContain(
         'requireValidResponseDiscriminators(responseBody, List.of(new DiscriminatorRule("", "kind", Set.of("CreateBookingResponse"))));',
       );
-      expect(output).toContain('List<Booking> body = mapValidResponseBodies(entities, this.mapper::toBookingDto);');
+      expect(output).toContain(
+        'List<Booking> body = mapValidResponseBodies(entities, this.mapper::toBookingDto, List.of(new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "kind", false), new RequiredPropertyRule("", "nullableCode", true), new RequiredPropertyRule("/agreements/*", "kind", false)));',
+      );
+      expect(output).toContain(
+        'body = filterValidResponseRequiredProperties(body, List.of(new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "kind", false), new RequiredPropertyRule("", "nullableCode", true), new RequiredPropertyRule("/agreements/*", "kind", false)));',
+      );
       expect(output).toContain(
         'body = filterValidResponseDiscriminators(body, List.of(new DiscriminatorRule("", "kind", Set.of("Booking")), new DiscriminatorRule("/agreements/*", "kind", Set.of("AgreementRef"))));',
       );
+      expect(output).not.toContain('new RequiredPropertyRule("", "secret"');
       expect(output).toContain('private List<JsonNode> discriminatorTargets(JsonNode root, String pointer)');
       expect(output).toContain('this.objectMapper.writeValueAsBytes(body);');
-      expect(output).toContain('return isValidResponseBody(filtered) ? filtered : value;');
+      expect(output).toContain('responseBody = completeResponseRequiredProperties(responseBody, responseEntity, List.of(');
+      expect(output).toContain('private static final Pattern STRICT_OPENAPI_EMAIL_PATTERN = Pattern.compile(');
+      expect(output).toContain('isInvalidOpenApiEmailValue(nestedValue)');
+      expect(output).toContain(
+        'return isValidResponseBody(filtered) && hasRequiredResponseProperties(filtered, requiredRules) ? filtered : value;',
+      );
       expect(output).toContain('final HttpStatus successStatus = resolveSuccessStatus(202, HttpStatus.NO_CONTENT);');
       expect(output).toContain('if (successStatus == HttpStatus.ACCEPTED) {\n                return ResponseEntity.accepted().build();');
+      expect(output).toContain('this.repository.delete(maybeEntity.orElseThrow());');
+      expect(output).toContain('this.repository.flush();');
       expect(output).not.toContain('successStatus = HttpStatus.NO_CONTENT;');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns named array response models for schema-backed array responses when the generated interface is not available yet', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-array-model-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /pets:\n` +
+          `    get:\n` +
+          `      operationId: getPets\n` +
+          `      responses:\n` +
+          `        '200':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/PetList'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    Pet:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: integer\n` +
+          `          format: int64\n` +
+          `        name:\n` +
+          `          type: string\n` +
+          `    PetList:\n` +
+          `      type: array\n` +
+          `      items:\n` +
+          `        $ref: '#/components/schemas/Pet'\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Pet',
+              entityClass: 'Pet',
+              entityAbsoluteClass: 'com.example.domain.Pet',
+              entityInstance: 'pet',
+              entityInstancePlural: 'pets',
+              entityNameCapitalized: 'Pet',
+              entityNamePlural: 'Pets',
+              entityNameKebabCase: 'pet',
+            },
+          },
+        ],
+      };
+
+      await generateOpenApiDelegates(generator, {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      } as any);
+
+      const output = [...writes.values()].find(value => value.includes('class PetsApiDelegateImpl')) ?? '';
+      expect(output).toContain('import com.example.service.api.dto.PetList;');
+      expect(output).toContain('public ResponseEntity<PetList> getPets()');
+      expect(output).toContain('List<Pet> body = mapValidResponseBodies(entities, this.mapper::toPetDto, List.of());');
+      expect(output).toContain('PetList responseBody = new PetList();');
+      expect(output).toContain('responseBody.addAll(body);');
+      expect(output).toContain('return ResponseEntity.status(successStatus).body(responseBody);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -309,6 +428,8 @@ describe('OpenAPI delegate generator', () => {
           `  schemas:\n` +
           `    Service:\n` +
           `      type: object\n` +
+          `      required:\n` +
+          `        - id\n` +
           `      properties:\n` +
           `        id:\n` +
           `          type: string\n` +
@@ -319,7 +440,20 @@ describe('OpenAPI delegate generator', () => {
           `          type: string\n` +
           `    Service_RES:\n` +
           `      type: object\n` +
+          `      allOf:\n` +
+          `        - $ref: '#/components/schemas/Service'\n` +
+          `      required:\n` +
+          `        - '@type'\n` +
+          `        - href\n` +
+          `      discriminator:\n` +
+          `        propertyName: '@type'\n` +
+          `        mapping:\n` +
+          `          Service: '#/components/schemas/Service'\n` +
           `      properties:\n` +
+          `        '@type':\n` +
+          `          type: string\n` +
+          `        href:\n` +
+          `          type: string\n` +
           `        id:\n` +
           `          type: string\n`,
       );
@@ -419,8 +553,22 @@ describe('OpenAPI delegate generator', () => {
       const output = writes.get(outputPath) ?? '';
       expect(output).toContain('private final ServiceMapper mapper;');
       expect(output).not.toContain('private final ServiceResMapper serviceResMapper;');
-      expect(output).toContain('ServiceRES responseBody = mapResponseBody(() -> this.mapper.toServiceRES(saved));');
-      expect(output).toContain('List<ServiceRES> body = mapValidResponseBodies(entities, this.mapper::toServiceRES);');
+      expect(output).toContain('ServiceRES responseBody = mapResponseBody(() -> this.mapper.toServiceRES(responseEntity));');
+      expect(output).toContain(
+        'requireValidResponseDiscriminators(responseBody, List.of(new DiscriminatorRule("", "@type", Set.of("Service", "Service_RES"))));',
+      );
+      expect(output).toContain(
+        'requireValidResponseRequiredProperties(responseBody, List.of(new RequiredPropertyRule("", "@type", false), new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "id", false)));',
+      );
+      expect(output).toContain(
+        'body = filterValidResponseRequiredProperties(body, List.of(new RequiredPropertyRule("", "@type", false), new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "id", false)));',
+      );
+      expect(output).toContain(
+        'body = filterValidResponseDiscriminators(body, List.of(new DiscriminatorRule("", "@type", Set.of("Service", "Service_RES"))));',
+      );
+      expect(output).toContain(
+        'List<ServiceRES> body = mapValidResponseBodies(entities, this.mapper::toServiceRES, List.of(new RequiredPropertyRule("", "@type", false), new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "id", false)));',
+      );
       expect(output).not.toContain('this.serviceResMapper.toServiceResDto(saved)');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -835,6 +983,19 @@ describe('OpenAPI delegate generator', () => {
           `        id:\n` +
           `          type: string\n` +
           `        status:\n` +
+          `          type: string\n` +
+          `        relatedParty:\n` +
+          `          type: array\n` +
+          `          items:\n` +
+          `            $ref: '#/components/schemas/PartyRef'\n` +
+          `    PartyRef:\n` +
+          `      type: object\n` +
+          `      required:\n` +
+          `        - tmfId\n` +
+          `      properties:\n` +
+          `        tmfId:\n` +
+          `          type: string\n` +
+          `        name:\n` +
           `          type: string\n`,
       );
 
@@ -907,19 +1068,199 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('validatePayload(reference);');
       expect(output.indexOf('validatePayload(reference);')).toBeLessThan(output.indexOf('Reference entity = this.mapper.toReferenceEntity(reference);'));
       expect(output).toContain('Reference entity = this.mapper.toReferenceEntity(reference);');
-      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(saved));');
-      expect(output).toContain('return ResponseEntity.created(buildLocation(saved != null ? saved.getId() : null)).body(responseBody);');
+      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(responseEntity));');
+      expect(output).toContain(
+        'return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(responseBody);',
+      );
       expect(output).toContain('ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();');
       expect(output).toContain('String.format("/%s/%s", "reference", idValue)');
       expect(output).toContain('this.mapper.toReferenceEntity(reference)');
       expect(output).toContain('JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> this.mapper.toReferenceDto(existing)));');
       expect(output).toContain('convertAndValidate(patchedNode, Reference.class);');
+      expect(output).toContain('JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);');
       expect(output).toContain(
         'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), Reference.class);',
       );
       expect(output).toContain('validatePayload(mergedPayload);');
-      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(saved));');
+      expect(output).toContain(
+        'validateRequiredProperties(mergedPayload, List.of(new RequiredPropertyRule("/relatedParty/*", "tmfId", false)));',
+      );
+      expect(output).toContain('private JsonNode preservePatchedArrayItemValues(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode, PatchFormat format)');
+      expect(output).toContain('private void validateRequiredProperties(Object payload, List<RequiredPropertyRule> rules)');
+      expect(output).toContain('Missing required payload field(s): ');
+      expect(output).toContain('Map<String, Object> originalIdentifiers = snapshotIdentifierValues(existing);');
+      expect(output).toContain('restoreIdentifierValues(existing, originalIdentifiers);');
+      expect(output).toContain('private Map<String, Object> snapshotIdentifierValues(Object source)');
+      expect(output).toContain('private void restoreIdentifierValues(Object target, Map<String, Object> values)');
+      expect(output).toContain('private String primaryIdentifierKey(JsonNode node)');
+      expect(output).toContain('for (String preferred : List.of("tmfId", "href", "id"))');
+      expect(output).toContain('patchedByIdentifier.putIfAbsent(key, node);');
+      expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(responseEntity));');
       expect(output).toContain('return ResponseEntity.status(successStatus).body(responseBody);');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not enforce readOnly allOf-required fields on request payloads', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /offers:\n` +
+          `    post:\n` +
+          `      operationId: createOffer\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              $ref: '#/components/schemas/CreateOffer'\n` +
+          `      responses:\n` +
+          `        '201':\n` +
+          `          description: created\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/Offer'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    EntityRefFVO:\n` +
+          `      allOf:\n` +
+          `        - required:\n` +
+          `            - id\n` +
+          `            - tmfId\n` +
+          `          type: object\n` +
+          `          properties:\n` +
+          `            id:\n` +
+          `              type: integer\n` +
+          `              format: int64\n` +
+          `              readOnly: true\n` +
+          `            tmfId:\n` +
+          `              type: string\n` +
+          `              readOnly: true\n` +
+          `            href:\n` +
+          `              type: string\n` +
+          `            name:\n` +
+          `              type: string\n` +
+          `    RelationshipFVO:\n` +
+          `      allOf:\n` +
+          `        - $ref: '#/components/schemas/EntityRefFVO'\n` +
+          `        - required:\n` +
+          `            - id\n` +
+          `            - relationshipType\n` +
+          `          type: object\n` +
+          `          properties:\n` +
+          `            relationshipType:\n` +
+          `              type: string\n` +
+          `            role:\n` +
+          `              type: string\n` +
+          `    CreateOffer:\n` +
+          `      required:\n` +
+          `        - name\n` +
+          `        - tmfId\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        name:\n` +
+          `          type: string\n` +
+          `        tmfId:\n` +
+          `          type: string\n` +
+          `          format: uuid\n` +
+          `          readOnly: true\n` +
+          `        relationships:\n` +
+          `          type: array\n` +
+          `          items:\n` +
+          `            $ref: '#/components/schemas/RelationshipFVO'\n` +
+          `    Offer:\n` +
+          `      required:\n` +
+          `        - id\n` +
+          `        - name\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: integer\n` +
+          `          format: int64\n` +
+          `          readOnly: true\n` +
+          `        name:\n` +
+          `          type: string\n`,
+      );
+      writeFileSync(
+        join(swaggerDir, 'OfferApi.java'),
+        `package com.example.service.api;\n` +
+          `import org.springframework.http.ResponseEntity;\n` +
+          `import com.example.service.api.dto.CreateOffer;\n` +
+          `import com.example.service.api.dto.Offer;\n` +
+          `public interface OfferApi {\n` +
+          `    default ResponseEntity<Offer> createOffer(CreateOffer createOffer) {\n` +
+          `        return ResponseEntity.status(201).build();\n` +
+          `    }\n` +
+          `}\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Offer',
+              entityClass: 'Offer',
+              entityAbsoluteClass: 'com.example.domain.Offer',
+              entityInstance: 'offer',
+            },
+          },
+          {
+            definition: {
+              name: 'CreateOffer',
+              entityClass: 'CreateOffer',
+              entityAbsoluteClass: 'com.example.domain.CreateOffer',
+              entityInstance: 'createOffer',
+            },
+          },
+        ],
+      };
+
+      const application = {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      };
+
+      await generateOpenApiDelegates(generator, application as any);
+
+      const output = Array.from(writes.entries())
+        .filter(([filePath]) => filePath.endsWith('ApiDelegateImpl.java'))
+        .map(([, contents]) => contents)
+        .join('\n');
+      expect(output).toContain('new RequiredPropertyRule("", "name", false)');
+      expect(output).not.toContain('new RequiredPropertyRule("", "tmfId", false)');
+      expect(output).toContain('if (entity.getTmfId() == null) {\n            entity.setTmfId(java.util.UUID.randomUUID());\n        }');
+      expect(output).toContain('new RequiredPropertyRule("/relationships/*", "relationshipType", false)');
+      expect(output).not.toContain('new RequiredPropertyRule("/relationships/*", "id", false)');
+      expect(output).not.toContain('new RequiredPropertyRule("/relationships/*", "tmfId", false)');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1023,6 +1364,10 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('com.example.domain.IssuanceRequest entity = this.mapper.toIssuanceRequestEntity(issuanceRequest);');
       expect(output).toContain('com.example.domain.IssuanceRequest saved;');
       expect(output).toContain('saved = this.repository.saveAndFlush(entity);');
+      expect(output).toContain('if (populateGeneratedHref(saved, "issuance-request"))');
+      expect(output).toContain('final com.example.domain.IssuanceRequest responseEntity = saved;');
+      expect(output).not.toContain('EntityManager');
+      expect(output).not.toContain('refreshSavedEntity');
       expect(output).toContain('return ResponseEntity.status(resolvedStatus).body((Void) null);');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });

@@ -25,6 +25,13 @@ const routes: Routes = [
     loadComponent: () => import('./docs/docs'),
     title: 'global.menu.admin.apidocs',
   },
+<%_ if (openApiOperations?.length) { _%>
+  {
+    path: 'form-crud-reference-pickers',
+    loadComponent: () => import('./form-crud-reference-pickers/form-crud-reference-pickers'),
+    title: 'Form CRUD reference pickers',
+  },
+<%_ } _%>
 <%_ if (withAdminUi) { _%>
   {
     path: 'configuration',

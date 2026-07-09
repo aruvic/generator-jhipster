@@ -1,0 +1,39 @@
+diff --git a/generators/server/support/hybrid-mapper-generator.ts b/generators/server/support/hybrid-mapper-generator.ts
+--- a/generators/server/support/hybrid-mapper-generator.ts
++++ b/generators/server/support/hybrid-mapper-generator.ts
+@@ -4893,7 +4893,7 @@ export async function buildHybridMapperContexts(
+       const sourceEntityName = mapping.sourceSchemaName ?? mapper.entityName;
+       const domainProperties = collectDomainPropertyNames(sourceEntityName, entityDefinitions, domainPropertyCache);
+       const domainFieldTypes = collectDomainFieldTypes(sourceEntityName, entityDefinitions, domainFieldTypeCache);
+-      const collectionFields = collectCollectionFieldContexts(
++      const candidateCollectionFields = collectCollectionFieldContexts(
+         mapping.targetSchemaName,
+         schemas,
+         basePackage,
+@@ -4912,8 +4912,26 @@ export async function buildHybridMapperContexts(
+             !isScalarDomainFieldType(domainFieldTypes.get(field.targetField)) &&
+             domainProperties.has(field.targetField)
+           );
+-        });
++        });
++
++      const collectionFields = [];
++      for (const field of candidateCollectionFields) {
++        const referencedEntity = field.referencedEntity ?? field.baseEntity;
++        if (shouldIgnoreReference(sourceEntityName, referencedEntity, true)) {
++          mapping.annotations = mapping.annotations.filter(annotation => {
++            const target = extractMappingProperty(annotation, 'target');
++            return !target || (target !== field.sourceField && target !== field.targetField);
++          });
++          const ignoreAnnotation = `@Mapping(target = "${field.sourceField}", ignore = true)`;
++          if (!mapping.annotations.includes(ignoreAnnotation)) {
++            mapping.annotations.push(ignoreAnnotation);
++          }
++          continue;
++        }
++        collectionFields.push(field);
++      }
++
+       if (collectionFields.length === 0) {
+         continue;
+       }

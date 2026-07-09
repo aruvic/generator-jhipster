@@ -32,10 +32,10 @@ public class OpenApiOneOfDeserializerConfiguration {
     private static final String DTO_PACKAGE = "<%= packageName %>.service.api.dto";
 
     @Bean
+    @SuppressWarnings({ "rawtypes", "unchecked" })
     public Module openApiOneOfDeserializersModule() {
         SimpleModule module = new SimpleModule("openApiOneOfDeserializers");
         for (Map.Entry<Class<?>, List<Class<?>>> entry : discoverOpenApiInterfaces().entrySet()) {
-            @SuppressWarnings({ "rawtypes", "unchecked" })
             Class rawType = entry.getKey();
             module.addDeserializer(rawType, new ShapeBasedInterfaceDeserializer(entry.getKey(), entry.getValue()));
         }

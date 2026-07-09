@@ -1,0 +1,158 @@
+--- openapi-smoke.mjs
++++ openapi-smoke.corrected.mjs
+@@ -205,6 +205,33 @@
+   return mode === 'request' || mode === 'create' || mode === 'patch';
+ }
+ 
++function hasRequiredPayloadValue(output, requiredProperty, properties, mode) {
++  if (isRequestPayloadMode(mode)) {
++    return Boolean(
++      output &&
++        typeof output === 'object' &&
++        !Array.isArray(output) &&
++        output[requiredProperty] !== undefined
++    );
++  }
++
++  return hasRequiredValue(output, requiredProperty, properties);
++}
++
++function assignRequiredPayloadValue(output, requiredProperty, propertyKey, value, mode) {
++  if (value === undefined) return;
++
++  const outputKey = isRequestPayloadMode(mode) ? requiredProperty : propertyKey;
++  output[outputKey] = value;
++
++  // Some generated Spring/JHipster DTOs bind request bodies with exact JSON keys.
++  // If a schema exposes a differently cased property alias but marks another
++  // spelling as required, prefer the exact required key for request payloads.
++  if (outputKey !== propertyKey && output[propertyKey] !== undefined) {
++    delete output[propertyKey];
++  }
++}
++
+ function unknownRequiredPayload(property) {
+   return /(?:^|[_-])id$/i.test(property) || /id$/i.test(property) ? 1 : 'sample';
+ }
+@@ -217,17 +244,21 @@
+   const properties = collectProperties(schema);
+   const required = collectRequired(schema);
+   for (const property of required) {
+-    if (hasRequiredValue(output, property, properties)) continue;
++    if (hasRequiredPayloadValue(output, property, properties, mode)) continue;
++
+     const propertyKey = matchingPropertyName(property, properties) ?? property;
+     const propertySchema = properties[propertyKey];
++
+     if (propertySchema) {
+       if (mode === 'patch' && deref(propertySchema)?.readOnly) continue;
++
+       const sourceKey = matchingPropertyName(propertyKey, source);
+       const value =
+         sourceKey === undefined
+           ? payloadFor(propertySchema, { mode, full, seen, memo })
+           : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
+-      if (value !== undefined) output[propertyKey] = value;
++
++      assignRequiredPayloadValue(output, property, propertyKey, value, mode);
+     } else if (schema.additionalProperties !== false) {
+       const sourceKey = matchingPropertyName(property, source);
+       output[property] =
+@@ -676,13 +707,16 @@
+       if (value !== undefined) output[property] = value;
+     }
+     for (const property of required) {
+-      if (hasRequiredValue(output, property, properties)) continue;
++      if (hasRequiredPayloadValue(output, property, properties, mode)) continue;
++
+       const propertyKey = matchingPropertyName(property, properties) ?? property;
+       const propertySchema = properties[propertyKey];
++
+       if (propertySchema) {
+         if (mode === 'patch' && deref(propertySchema)?.readOnly) continue;
++
+         const value = payloadFor(propertySchema, { mode, full, seen, memo });
+-        if (value !== undefined) output[propertyKey] = value;
++        assignRequiredPayloadValue(output, property, propertyKey, value, mode);
+       } else if (schema.additionalProperties !== false) {
+         output[property] = unknownRequiredPayload(property);
+       }
+@@ -858,7 +892,7 @@
+         const propertySchema = deref(properties[property]);
+         if (mode === 'request' && propertySchema?.readOnly) continue;
+         if (mode === 'response' && propertySchema?.writeOnly) continue;
+-        if (!hasRequiredValue(value, property, properties)) errors.push(`${pointerFor([...pointer, property])} is required`);
++        if (!hasRequiredPayloadValue(value, property, properties, mode)) errors.push(`${pointerFor([...pointer, property])} is required`);
+       }
+       for (const [property, propertyValue] of Object.entries(value)) {
+         const propertySchema = properties[property];
+@@ -1099,6 +1133,52 @@
+   }
+ }
+ 
++function smokePathWithoutApiPrefix(rawPath, resolvedPath) {
++  const candidate = String(resolvedPath || rawPath || '').split('?')[0];
++  return candidate.replace(/^\/api(?=\/)/, '');
++}
++
++function ensureShippingInstructionEquipmentReference(payload) {
++  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
++
++  const reference = 'NARU3472484';
++
++  if (!Array.isArray(payload.utilizedTransportEquipments)) {
++    payload.utilizedTransportEquipments = [];
++  }
++
++  if (payload.utilizedTransportEquipments.length === 0) {
++    payload.utilizedTransportEquipments.push({});
++  }
++
++  for (const equipment of payload.utilizedTransportEquipments) {
++    if (!equipment || typeof equipment !== 'object' || Array.isArray(equipment)) continue;
++
++    if (
++      equipment.equipmentReference === undefined ||
++      equipment.equipmentReference === null ||
++      equipment.equipmentReference === ''
++    ) {
++      equipment.equipmentReference = reference;
++    }
++  }
++
++  return payload;
++}
++
++function fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload) {
++  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
++
++  const methodUpper = method.toUpperCase();
++  const normalizedPath = smokePathWithoutApiPrefix(rawPath, resolvedPath);
++
++  if (methodUpper === 'POST' && normalizedPath === '/v3/shipping-instructions') {
++    return ensureShippingInstructionEquipmentReference(payload);
++  }
++
++  return payload;
++}
++
+ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create') {
+   const resolvedPath = resolvePath(rawPath, pathItem, operation, false);
+   if (!resolvedPath) return undefined;
+@@ -1106,7 +1186,7 @@
+   const payloadPreparationStartEpochMs = Date.now();
+   const schema = requestSchemaFor(operation);
+   const explicit = schema ? explicitExample(operation, schema) : undefined;
+-  const payload =
++  let payload =
+     schema && bodyMode !== 'none'
+       ? explicit !== undefined
+         ? sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
+@@ -1114,6 +1194,7 @@
+       : undefined;
+   const requestHeaders = operationRequestHeaders(pathItem, operation);
+   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
++  payload = fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload);
+   evidenceSequence += 1;
+   const key = operationKey(method, rawPath, operation);
+   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);

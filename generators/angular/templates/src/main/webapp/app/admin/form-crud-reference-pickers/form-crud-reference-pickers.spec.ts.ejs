@@ -1,0 +1,128 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+<%_ if (clientTestFrameworkVitest) { _%>
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+<%_ } _%>
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { FaIconLibrary } from '@fortawesome/angular-fontawesome';
+import { faPlus, faSave, faTrashAlt } from '@fortawesome/free-solid-svg-icons';
+
+import { FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY } from 'app/openapi-operations/openapi-operations.model';
+import FormCrudReferencePickers from './form-crud-reference-pickers';
+
+describe('FormCrudReferencePickers', () => {
+  let fixture: ComponentFixture<FormCrudReferencePickers>;
+  let comp: FormCrudReferencePickers;
+  let httpMock: HttpTestingController;
+
+  beforeEach(() => {
+    localStorage.removeItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY);
+    TestBed.configureTestingModule({
+      imports: [FormCrudReferencePickers],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    TestBed.inject(FaIconLibrary).addIcons(faPlus, faSave, faTrashAlt);
+    httpMock = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(FormCrudReferencePickers);
+    comp = fixture.componentInstance;
+    fixture.detectChanges();
+    httpMock.expectOne('api/form-crud-reference-pickers').flush([]);
+  });
+
+  afterEach(() => {
+    httpMock.verify();
+  });
+
+  it('should add and persist generic reference picker mappings through the backend API', () => {
+    comp.addConfig();
+    comp.setConfigField(0, 'sourcePath', 'references');
+    comp.setConfigField(0, 'collectionPath', '/targets');
+    comp.setDisplayFields(0, 'id, name');
+    comp.setCopyFields(0, 'id:id, href:href');
+
+    comp.save();
+
+    const request = httpMock.expectOne('api/form-crud-reference-pickers');
+    expect(request.request.method).toBe('PUT');
+    expect(request.request.body).toMatchObject([{ sourcePath: 'references', collectionPath: '/targets' }]);
+    request.flush(comp.configs());
+
+    const stored = JSON.parse(localStorage.getItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY) ?? '[]') as unknown[];
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({
+      sourcePath: 'references',
+      collectionPath: '/targets',
+      displayFields: ['id', 'name'],
+      copyFields: [
+        { source: 'id', target: 'id' },
+        { source: 'href', target: 'href' },
+      ],
+    });
+    expect(comp.success()).toContain('saved');
+  });
+
+  it('should expose OpenAPI-driven form and REST API registrations for picker mappings', () => {
+    expect(Array.isArray(comp.registeredForms)).toBe(true);
+    expect(Array.isArray(comp.registeredRestApis)).toBe(true);
+
+    comp.addConfig();
+    expect(comp.configs()[0]).toMatchObject({
+      mode: 'reference',
+      displayFields: ['id', 'tmfId', 'href', 'name'],
+      copyFields: [
+        { source: 'id', target: 'id' },
+        { source: 'tmfId', target: 'tmfId' },
+        { source: 'href', target: 'href' },
+        { source: 'name', target: 'name' },
+      ],
+    });
+    if (comp.registeredRestApis.length) {
+      const api = comp.registeredRestApis[0];
+      comp.setConfigField(0, 'targetApiId', api.id);
+
+      expect(comp.configs()[0].targetApiId).toBe(api.id);
+      expect(comp.configs()[0].collectionPath).toBe(api.path);
+      if (api.searchParams.length) {
+        expect(comp.configs()[0].searchParam).toBe(api.searchParams[0]);
+      }
+    }
+    if (comp.registeredForms.length) {
+      comp.setConfigField(0, 'formId', comp.registeredForms[0].id);
+
+      expect(comp.configs()[0].formId).toBe(comp.registeredForms[0].id);
+    }
+  });
+
+  it('should delete a picker mapping through the backend API', () => {
+    comp.addConfig();
+    comp.setConfigField(0, 'sourcePath', 'references');
+    comp.setConfigField(0, 'collectionPath', '/targets');
+
+    comp.deleteConfig(0);
+
+    const request = httpMock.expectOne('api/form-crud-reference-pickers');
+    expect(request.request.method).toBe('PUT');
+    expect(request.request.body).toEqual([]);
+    request.flush([]);
+
+    expect(comp.configs()).toEqual([]);
+  });
+});

@@ -1,0 +1,311 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+<div data-cy="formCrud">
+  <h2 id="form-crud-heading" data-cy="formCrudHeading">
+    <span>Form CRUD</span>
+
+    <div class="d-flex justify-content-end">
+      <button class="btn btn-info me-2" type="button" (click)="submit()" [disabled]="isSubmitting()" data-cy="formCrudRefreshButton">
+        <fa-icon icon="sync" [animation]="isSubmitting() ? 'spin' : undefined" />
+        <span>{{ isReadOperation(selectedOperation()) ? 'Refresh list' : 'Submit' }}</span>
+      </button>
+    </div>
+  </h2>
+
+  <<%= jhiPrefixDashed %>-alert-error />
+  <<%= jhiPrefixDashed %>-alert />
+
+  <div class="row g-3">
+    <div class="col-12">
+      <button class="btn btn-outline-secondary btn-sm" type="button" (click)="toggleResourcePanel()" data-cy="formCrudTogglePanel">
+        <fa-icon [icon]="isResourcePanelCollapsed() ? 'list' : 'times'" />
+        <span>{{ isResourcePanelCollapsed() ? 'Show categories' : 'Hide categories' }}</span>
+      </button>
+    </div>
+
+    @if (!isResourcePanelCollapsed()) {
+      <aside class="col-12 col-xl-3" data-cy="formCrudResourcePanel">
+        <div class="list-group" data-cy="formCrudOperationList">
+          @for (group of resourceGroups; track group.key) {
+            <div class="list-group-item bg-light fw-semibold" [attr.data-cy]="'form-crud-group-' + group.key">{{ group.label }}</div>
+            @for (resource of group.resources; track resource.key) {
+              <div class="list-group-item py-2 fw-semibold" [attr.data-cy]="'form-crud-resource-' + resource.key">{{ resource.label }}</div>
+              @if (resource.listOperation) {
+                <a
+                  class="list-group-item list-group-item-action"
+                  [class.active]="resource.listOperation.id === selectedOperation().id"
+                  [routerLink]="['/form-crud', resource.listOperation.id]"
+                  [attr.data-cy]="'form-crud-operation-' + resource.listOperation.id"
+                >
+                  <div class="d-flex align-items-center justify-content-between gap-2">
+                    <span>{{ operationMenuLabel(resource, resource.listOperation) }}</span>
+                    <span class="badge text-bg-secondary">GET</span>
+                  </div>
+                </a>
+              }
+              @if (resource.createOperation) {
+                <a
+                  class="list-group-item list-group-item-action"
+                  [class.active]="resource.createOperation.id === selectedOperation().id"
+                  [routerLink]="['/form-crud', resource.createOperation.id]"
+                  [attr.data-cy]="'form-crud-operation-' + resource.createOperation.id"
+                >
+                  <div class="d-flex align-items-center justify-content-between gap-2">
+                    <span>{{ operationMenuLabel(resource, resource.createOperation) }}</span>
+                    <span class="badge text-bg-secondary">POST</span>
+                  </div>
+                </a>
+              }
+            }
+            @for (childGroup of group.childGroups ?? []; track childGroup.key) {
+              <div class="list-group-item bg-body-tertiary fw-semibold ps-4" [attr.data-cy]="'form-crud-group-' + childGroup.key">{{ childGroup.label }}</div>
+              @for (resource of childGroup.resources; track resource.key) {
+                <div class="list-group-item py-2 fw-semibold ps-4" [attr.data-cy]="'form-crud-resource-' + resource.key">{{ resource.label }}</div>
+                @if (resource.listOperation) {
+                  <a
+                    class="list-group-item list-group-item-action ps-4"
+                    [class.active]="resource.listOperation.id === selectedOperation().id"
+                    [routerLink]="['/form-crud', resource.listOperation.id]"
+                    [attr.data-cy]="'form-crud-operation-' + resource.listOperation.id"
+                  >
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                      <span>{{ operationMenuLabel(resource, resource.listOperation) }}</span>
+                      <span class="badge text-bg-secondary">GET</span>
+                    </div>
+                  </a>
+                }
+                @if (resource.createOperation) {
+                  <a
+                    class="list-group-item list-group-item-action ps-4"
+                    [class.active]="resource.createOperation.id === selectedOperation().id"
+                    [routerLink]="['/form-crud', resource.createOperation.id]"
+                    [attr.data-cy]="'form-crud-operation-' + resource.createOperation.id"
+                  >
+                    <div class="d-flex align-items-center justify-content-between gap-2">
+                      <span>{{ operationMenuLabel(resource, resource.createOperation) }}</span>
+                      <span class="badge text-bg-secondary">POST</span>
+                    </div>
+                  </a>
+                }
+              }
+            }
+          }
+        </div>
+      </aside>
+    }
+
+    <main class="col-12" [class.col-xl-9]="!isResourcePanelCollapsed()" [class.col-xl-12]="isResourcePanelCollapsed()">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div>
+          <h3 class="h5 mb-1">{{ operationLabel(selectedOperation()) }}</h3>
+          <div class="font-monospace text-muted">{{ selectedOperation().method }} {{ selectedOperation().path }}</div>
+        </div>
+        @if (selectedOperation().requestContentType) {
+          <span class="badge text-bg-light">{{ selectedOperation().requestContentType }}</span>
+        }
+      </div>
+
+      <form name="formCrudOperationForm" [formGroup]="form" (ngSubmit)="submit()" novalidate data-cy="formCrudOperationForm">
+        <formly-form [form]="form" [fields]="fields" [model]="model"></formly-form>
+
+        @if (!fields.length) {
+          <div class="alert alert-secondary" role="status" data-cy="formCrudEmptyForm">This operation has no editable fields.</div>
+        }
+
+        @if (responseError()) {
+          <div class="alert alert-danger" role="alert" data-cy="formCrudError">
+            <pre class="mb-0">{{ responseError() }}</pre>
+          </div>
+        }
+        @if (responseSuccess()) {
+          <div class="alert alert-success" role="status" data-cy="formCrudSuccess">
+            {{ responseSuccess() }}
+          </div>
+        }
+
+        <div class="d-flex align-items-center gap-3 mt-3">
+          <button class="btn btn-primary" type="submit" data-cy="formCrudSubmit" [disabled]="isSubmitting()">
+            <fa-icon icon="sync" />
+            <span>{{ isReadOperation(selectedOperation()) ? 'Load' : 'Submit' }}</span>
+          </button>
+          @if (responseStatus() !== null) {
+            <span class="badge text-bg-info" data-cy="formCrudStatus">HTTP {{ responseStatus() }}</span>
+          }
+        </div>
+      </form>
+
+      @if (isReadOperation(selectedOperation())) {
+        @if (responseStatus() !== null && responseRows().length === 0 && !responseError()) {
+          <div class="alert alert-warning mt-4" id="no-result" data-cy="formCrudNoResult">
+            <span>No results found</span>
+          </div>
+        } @else if (responseRows().length > 0) {
+          <div class="table-responsive table-entities mt-4" id="form-crud-entities">
+            <table class="table table-striped" aria-describedby="form-crud-heading" data-cy="formCrudTable">
+              <thead>
+                <tr>
+                  @for (column of responseColumns(); track column) {
+                    <th scope="col">
+                      <div class="d-flex">
+                        <span>{{ column }}</span>
+                      </div>
+                    </th>
+                  }
+                  <th scope="col"></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of responseRows(); track $index) {
+                  <tr data-cy="formCrudTableRow">
+                    @for (column of responseColumns(); track column) {
+                      <td>{{ responseCellValue(row.cells[column]) }}</td>
+                    }
+                    <td class="text-end">
+                      <div class="btn-group">
+                        <button type="button" class="btn btn-info btn-sm" (click)="selectResponseItem(row)" data-cy="formCrudDetailsButton">
+                          <fa-icon icon="eye" />
+                          <span class="d-none d-md-inline">View</span>
+                        </button>
+                        @if (currentResource()?.deleteOperation) {
+                          <button type="button" class="btn btn-danger btn-sm" (click)="deleteResponseItem(row)" [disabled]="isDeleting()" data-cy="formCrudDeleteButton">
+                            <fa-icon icon="trash-alt" />
+                            <span class="d-none d-md-inline">Delete</span>
+                          </button>
+                        }
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+
+        @if (selectedResponseItem() !== null) {
+          <div class="d-flex justify-content-center mt-4" data-cy="formCrudDetails">
+            <div class="col-12 col-lg-10">
+              <h3 class="h5">Details</h3>
+              <hr />
+              @if (detailError()) {
+                <div class="alert alert-danger" role="alert" data-cy="formCrudDetailError">
+                  <pre class="mb-0">{{ detailError() }}</pre>
+                </div>
+              }
+              <form name="formCrudDetailsForm" [formGroup]="responseDetailForm" (ngSubmit)="saveSelectedItem()" novalidate data-cy="formCrudDetailsForm">
+                <formly-form [form]="responseDetailForm" [fields]="responseDetailFields" [model]="responseDetailModel"></formly-form>
+                <div class="d-flex align-items-center gap-3 mt-3">
+                  @if (currentResource()?.updateOperation) {
+                    <button class="btn btn-primary" type="submit" [disabled]="isDetailSubmitting()" data-cy="formCrudSaveButton">
+                      <fa-icon icon="save" />
+                      <span>Save</span>
+                    </button>
+                  }
+                  @if (detailStatus() !== null) {
+                    <span class="badge text-bg-info" data-cy="formCrudDetailStatus">HTTP {{ detailStatus() }}</span>
+                  }
+                  @if (deleteStatus() !== null) {
+                    <span class="badge text-bg-warning" data-cy="formCrudDeleteStatus">Delete HTTP {{ deleteStatus() }}</span>
+                  }
+                </div>
+              </form>
+            </div>
+          </div>
+        }
+      } @else if (responseBody()) {
+        <section class="mt-4">
+          <h4 class="h6 text-uppercase text-muted mb-2">Response</h4>
+          <pre class="border rounded p-3 bg-light overflow-auto" data-cy="formCrudResponse">{{ responseBody() }}</pre>
+        </section>
+      }
+    </main>
+  </div>
+
+  @if (referencePickerState(); as picker) {
+    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" data-cy="formCrudReferencePickerModal">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3 class="modal-title h5">Select existing item</h3>
+            <button type="button" class="btn-close" aria-label="Close" (click)="closeReferencePicker()"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label" for="formCrudReferenceSearch">Search</label>
+              <div class="input-group">
+                <input
+                  id="formCrudReferenceSearch"
+                  class="form-control"
+                  type="search"
+                  [value]="referencePickerSearch()"
+                  (input)="referencePickerSearch.set($any($event.target).value)"
+                  [disabled]="!picker.config.searchParam"
+                  data-cy="formCrudReferencePickerSearch"
+                />
+                <button class="btn btn-info" type="button" (click)="loadReferencePickerResults()" [disabled]="isReferencePickerLoading()" data-cy="formCrudReferencePickerSearchButton">
+                  <fa-icon icon="search" />
+                  <span>Search</span>
+                </button>
+              </div>
+              @if (!picker.config.searchParam) {
+                <div class="form-text">Search is disabled until this picker has a search parameter configured.</div>
+              }
+            </div>
+
+            @if (referencePickerError()) {
+              <div class="alert alert-danger" role="alert" data-cy="formCrudReferencePickerError">
+                <pre class="mb-0">{{ referencePickerError() }}</pre>
+              </div>
+            }
+
+            <div class="table-responsive">
+              <table class="table table-striped table-hover" data-cy="formCrudReferencePickerTable">
+                <thead>
+                  <tr>
+                    @for (column of referencePickerColumns(); track column) {
+                      <th scope="col">{{ column }}</th>
+                    }
+                    <th scope="col"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (row of referencePickerRows(); track $index) {
+                    <tr data-cy="formCrudReferencePickerRow">
+                      @for (column of referencePickerColumns(); track column) {
+                        <td>{{ responseCellValue(row.cells[column]) }}</td>
+                      }
+                      <td class="text-end">
+                        <button class="btn btn-primary btn-sm" type="button" (click)="selectReferencePickerItem(row)" data-cy="formCrudReferencePickerSelect">
+                          Select
+                        </button>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" type="button" (click)="closeReferencePicker()">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+  }
+</div>

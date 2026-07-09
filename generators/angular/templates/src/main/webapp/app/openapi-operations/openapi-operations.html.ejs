@@ -1,0 +1,139 @@
+<%#
+ Copyright 2013-2025 the original author or authors from the JHipster project.
+
+ This file is part of the JHipster project, see https://www.jhipster.tech/
+ for more information.
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-%>
+<div class="container-fluid py-3" data-cy="openapiOperations">
+  <div class="row g-3">
+    <div class="col-12 col-xl-4">
+      <h2 class="h4 mb-3" id="openapi-operations-heading">API operations</h2>
+
+      <label class="form-label" for="openapi-operation-select">Operation</label>
+      <select
+        id="openapi-operation-select"
+        class="form-select"
+        data-cy="openapiOperationSelect"
+        [value]="selectedOperation().id"
+        (change)="selectOperation($any($event.target).value)"
+      >
+        @for (tag of tags; track tag) {
+          <optgroup [label]="tag">
+            @for (operation of operations; track operation.id) {
+              @if (operation.tag === tag) {
+                <option [value]="operation.id">{{ operation.method }} {{ operation.path }}</option>
+              }
+            }
+          </optgroup>
+        }
+      </select>
+
+      <div class="mt-3">
+        <span class="badge text-bg-secondary me-2">{{ selectedOperation().method }}</span>
+        <span class="font-monospace">{{ selectedOperation().path }}</span>
+      </div>
+      <p class="text-muted mt-2 mb-0">{{ selectedOperation().summary }}</p>
+    </div>
+
+    <div class="col-12 col-xl-8">
+      <form name="openapiOperationForm" [formGroup]="operationForm" (ngSubmit)="submit()" novalidate>
+        @for (location of ['path', 'query', 'header', 'cookie']; track location) {
+          @if (hasParameters($any(location))) {
+            <section class="mb-4">
+              <h3 class="h6 text-uppercase text-muted mb-3">{{ location }} parameters</h3>
+              <div class="row g-3">
+                @for (parameter of parametersFor($any(location)); track controlName(parameter)) {
+                  <div class="col-12 col-md-6">
+                    <label class="form-label" [for]="controlName(parameter)">
+                      {{ parameter.name }}
+                      @if (parameter.required) {
+                        <span class="text-danger">*</span>
+                      }
+                    </label>
+                    @if (parameter.enumValues?.length) {
+                      <select
+                        class="form-select"
+                        [id]="controlName(parameter)"
+                        [formControlName]="controlName(parameter)"
+                        [attr.data-cy]="'openapi-param-' + parameter.location + '-' + parameter.name"
+                      >
+                        @if (!parameter.required) {
+                          <option value=""></option>
+                        }
+                        @for (value of parameter.enumValues; track value) {
+                          <option [value]="value">{{ value }}</option>
+                        }
+                      </select>
+                    } @else {
+                      <input
+                        class="form-control"
+                        [id]="controlName(parameter)"
+                        [type]="parameterInputType(parameter)"
+                        [formControlName]="controlName(parameter)"
+                        [attr.data-cy]="'openapi-param-' + parameter.location + '-' + parameter.name"
+                      />
+                    }
+                    @if (controlInvalid(controlName(parameter))) {
+                      <div class="invalid-feedback d-block">Required value</div>
+                    }
+                  </div>
+                }
+              </div>
+            </section>
+          }
+        }
+
+        @if (selectedOperation().requestContentType) {
+          <section class="mb-4">
+            <div class="d-flex align-items-center gap-2 mb-2">
+              <h3 class="h6 text-uppercase text-muted mb-0">Request body</h3>
+              <span class="badge text-bg-light">{{ selectedOperation().requestContentType }}</span>
+              @if (selectedOperation().requestBodyRequired) {
+                <span class="text-danger">*</span>
+              }
+            </div>
+            <textarea class="form-control font-monospace" rows="14" formControlName="body" data-cy="openapiRequestBody"></textarea>
+            @if (bodyInvalid()) {
+              <div class="invalid-feedback d-block">Valid JSON is required</div>
+            }
+          </section>
+        }
+
+        @if (responseError()) {
+          <div class="alert alert-danger" role="alert" data-cy="openapiOperationError">
+            <pre class="mb-0">{{ responseError() }}</pre>
+          </div>
+        }
+
+        <div class="d-flex align-items-center gap-3">
+          <button class="btn btn-primary" type="submit" data-cy="openapiOperationSubmit" [disabled]="operationForm.invalid || isSubmitting()">
+            <fa-icon icon="sync" />
+            <span>Send</span>
+          </button>
+          @if (responseStatus() !== null) {
+            <span class="badge text-bg-info" data-cy="openapiOperationStatus">HTTP {{ responseStatus() }}</span>
+          }
+        </div>
+      </form>
+
+      @if (responseBody()) {
+        <section class="mt-4">
+          <h3 class="h6 text-uppercase text-muted mb-2">Response</h3>
+          <pre class="border rounded p-3 bg-light overflow-auto" data-cy="openapiOperationResponse">{{ responseBody() }}</pre>
+        </section>
+      }
+    </div>
+  </div>
+</div>
