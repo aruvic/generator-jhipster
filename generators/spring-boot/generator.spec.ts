@@ -8,6 +8,7 @@ import { PRIORITY_NAMES } from '../base-application/priorities.ts';
 import { asPostWritingTask } from '../base-application/support/task-type-inference.ts';
 import { filterBasicServerGenerators } from '../server/__test-support/index.ts';
 
+import { openApiDocumentOwnsFormCrudReferencePickerCollection, openApiOwnsFormCrudReferencePickerCollection } from './files.ts';
 import Generator from './generator.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,6 +17,59 @@ const __dirname = dirname(__filename);
 const generator = basename(__dirname);
 
 describe(`generator - ${generator}`, () => {
+  describe('reference-picker endpoint ownership', () => {
+    it('detects an OAS-owned collection path with or without the API prefix', () => {
+      expect(
+        openApiOwnsFormCrudReferencePickerCollection({
+          openApiOperations: [{ method: 'get', path: '/form-crud-reference-pickers' }],
+        }),
+      ).toBe(true);
+      expect(
+        openApiOwnsFormCrudReferencePickerCollection({
+          openApiOperations: [{ method: 'PUT', path: '/api/form-crud-reference-pickers/' }],
+        }),
+      ).toBe(true);
+    });
+
+    it('keeps the generated proxy for unrelated or item-only operations', () => {
+      expect(
+        openApiOwnsFormCrudReferencePickerCollection({
+          openApiOperations: [{ method: 'GET', path: '/other-reference-pickers' }],
+        }),
+      ).toBe(false);
+      expect(
+        openApiOwnsFormCrudReferencePickerCollection({
+          openApiOperations: [{ method: 'GET', path: '/form-crud-reference-pickers/{pickerId}' }],
+        }),
+      ).toBe(false);
+      expect(openApiOwnsFormCrudReferencePickerCollection({})).toBe(false);
+    });
+
+    it('detects ownership directly from an OAS document before Angular metadata is available', () => {
+      expect(
+        openApiDocumentOwnsFormCrudReferencePickerCollection({
+          paths: {
+            '/form-crud-reference-pickers': { get: {}, put: {} },
+          },
+        }),
+      ).toBe(true);
+      expect(
+        openApiDocumentOwnsFormCrudReferencePickerCollection({
+          paths: {
+            '/api/form-crud-reference-pickers/': { get: {} },
+          },
+        }),
+      ).toBe(true);
+      expect(
+        openApiDocumentOwnsFormCrudReferencePickerCollection({
+          paths: {
+            '/form-crud-reference-pickers/{pickerId}': { get: {} },
+          },
+        }),
+      ).toBe(false);
+    });
+  });
+
   shouldSupportFeatures(Generator);
   describe('blueprint support', () => testBlueprintSupport(generator));
   checkEnforcements({}, generator);
@@ -54,6 +108,19 @@ describe(`generator - ${generator}`, () => {
 
     it('should match generated files snapshot', () => {
       expect(runResult.getStateSnapshot()).toMatchSnapshot();
+    });
+
+    it('should not log REST arguments or response values', () => {
+      runResult.assertFileContent('src/main/java/com/mycompany/myapp/aop/logging/LoggingAspect.java', 'argumentTypes(joinPoint.getArgs())');
+      runResult.assertFileContent('src/main/java/com/mycompany/myapp/aop/logging/LoggingAspect.java', 'valueType(result)');
+      runResult.assertNoFileContent(
+        'src/main/java/com/mycompany/myapp/aop/logging/LoggingAspect.java',
+        'Arrays.toString(joinPoint.getArgs())',
+      );
+      runResult.assertNoFileContent(
+        'src/main/java/com/mycompany/myapp/aop/logging/LoggingAspect.java',
+        'with result = {}", joinPoint.getSignature().getName(), result',
+      );
     });
   });
 
@@ -94,16 +161,33 @@ describe(`generator - ${generator}`, () => {
       runResult.assertFileContent('pom.xml', '<useBeanValidation>true</useBeanValidation>');
       runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/OpenApiConfiguration.java', 'normalizeDiscriminatorSchemas');
       runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/OpenApiConfiguration.java', 'JsonSubTypes');
+      runResult.assertFileContent(
+        'src/main/openapi-templates/typeInfoAnnotation.mustache',
+        'JsonTypeInfo.As.EXISTING_PROPERTY',
+      );
+      runResult.assertNoFileContent('src/main/openapi-templates/typeInfoAnnotation.mustache', 'JsonIgnoreProperties');
       runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/SecurityConfiguration.java', 'setAllowUrlEncodedPercent(true)');
       runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/SecurityConfiguration.java', 'setAllowBackSlash(true)');
       runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/SecurityConfiguration.java', 'setAllowSemicolon(true)');
-      runResult.assertFileContent('src/main/java/com/mycompany/myapp/config/JacksonConfiguration.java', 'serializationInclusion(JsonInclude.Include.NON_NULL)');
+      runResult.assertFileContent(
+        'src/main/java/com/mycompany/myapp/config/JacksonConfiguration.java',
+        'serializationInclusion(JsonInclude.Include.NON_NULL)',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'movePathParametersToOperations');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'normalizeDiscriminatorSubtypes');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'removeResponseContentWithoutSchemas');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'mergeResponseEntry(normalized, String.valueOf(key), value)');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'removeResponseContentWithoutSchemas',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'mergeResponseEntry(normalized, String.valueOf(key), value)',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'mergePropertySchema');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'uniqueStringList(target.get("enum"), value)');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'uniqueStringList(target.get("enum"), value)',
+      );
       runResult.assertFileContent(
         'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
         'registerLiquibaseCheckEnumConstraintsForEvoMaster',
@@ -121,18 +205,27 @@ describe(`generator - ${generator}`, () => {
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sqlColumnNameCandidates');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'camelCaseToSnakeCase');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'findPostgreSqlCheckEnumValues');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sanitizePrintableSqlTemporalLiteral');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'sanitizePrintableSqlTemporalLiteral',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'SQL_TIMESTAMP_LITERAL');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'SQL_INSERT_VALUES');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'SanitizingConnectionHandler');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sanitizeSqlStatement');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_SANITIZE_SQL_STATEMENTS');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_SANITIZE_SQL_STATEMENTS',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'packagesToSkipInstrumentation');
       runResult.assertFileContent(
         'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
         'EVOMASTER_PACKAGES_TO_SKIP_INSTRUMENTATION',
       );
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'UnitsInfoRecorder.registerNewJpaConstraint');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'UnitsInfoRecorder.registerNewJpaConstraint',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'sanitizeSqlCheckEnumInsertions');
       runResult.assertNoFileContent(
         'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
@@ -148,29 +241,71 @@ describe(`generator - ${generator}`, () => {
       );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '!map.containsKey("$ref")');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'response.remove("$ref")');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'content.put("application/problem+json", problemContent)');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'content.put("application/json", problemContent)');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_STRIP_SCHEMA_PATTERNS');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'content.put("application/problem+json", problemContent)',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'content.put("application/json", problemContent)',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_STRIP_SCHEMA_PATTERNS',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'isOpenApiParameter');
       runResult.assertFileContent(
         'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
         'operationParameter && "schema".equals(entry.getKey())',
       );
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_STRIP_UNSUPPORTED_FORMATS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'isUnsupportedEvoMasterStringFormat');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_STRIP_UNSUPPORTED_FORMATS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'isUnsupportedEvoMasterStringFormat',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"email"');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"uri"');
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', '"base64"');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_MERGE_COMPOSED_SCHEMAS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_FLATTEN_ALLOF_SCHEMAS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_BOUND_FREE_FORM_OBJECT_SCHEMAS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_INLINE_OPERATION_SCHEMAS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_STRIP_SCHEMA_DISCRIMINATORS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'EVOMASTER_RELAX_RESPONSE_DISCRIMINATOR_ENUMS');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'relaxResponseDiscriminatorEnums');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_MERGE_COMPOSED_SCHEMAS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_FLATTEN_ALLOF_SCHEMAS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_BOUND_FREE_FORM_OBJECT_SCHEMAS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_INLINE_OPERATION_SCHEMAS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_STRIP_SCHEMA_DISCRIMINATORS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'EVOMASTER_RELAX_RESPONSE_DISCRIMINATOR_ENUMS',
+      );
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'relaxResponseDiscriminatorEnums',
+      );
       runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'property.remove("enum")');
-      runResult.assertFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'property.putIfAbsent("default", discriminatorValue)');
-      runResult.assertNoFileContent('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java', 'property.putIfAbsent("example"');
+      runResult.assertFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'property.putIfAbsent("default", discriminatorValue)',
+      );
+      runResult.assertNoFileContent(
+        'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
+        'property.putIfAbsent("example"',
+      );
       runResult.assertNoFileContent(
         'src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java',
         'property.put("enum", List.of(discriminatorValue));',

@@ -23,6 +23,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.js';
 import { JavaApplicationGenerator } from '../../generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../support/files.ts';
+import { getOpenApiModelNameMappings } from '../../../server/support/openapi-mapper-generator.ts';
 
 export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator {
   async beforeQueue() {
@@ -44,6 +45,10 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
         });
       },
       async writing({ application }) {
+        if (application.oas3Input) {
+          await this.prepareProvidedOpenApiSpec(application);
+        }
+
         await this.writeFiles({
           blocks: [
             { templates: ['README.md.jhi.openapi-generator'] },
@@ -71,6 +76,16 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
     return this.asPostWritingTaskGroup({
       addDependencies({ source, application }) {
         const { addOpenapiGeneratorPlugin, buildToolGradle, javaDependencies } = application;
+        const openApiModelNameMappings = (application as any).openApiModelNameMappings;
+        const modelNameMappings = Array.isArray(openApiModelNameMappings)
+          ? openApiModelNameMappings
+              .map(
+                (mapping: { sourceName: string; targetName: string }) =>
+                  `                                <modelNameMapping>${mapping.sourceName}=${mapping.targetName}</modelNameMapping>`,
+              )
+              .join('\n')
+          : '';
+
         source.addJavaDefinitions!(
           {
             dependencies: [
@@ -100,13 +115,24 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                             <goal>generate</goal>
                         </goals>
                         <configuration>
-                            <inputSpec>\${project.basedir}/${application.srcMainResources}swagger/api.yml</inputSpec>
+                            <inputSpec>\${project.basedir}/${application.srcMainResources}swagger/${
+                              application.openApiGeneratorInputFile ?? 'api.yml'
+                            }</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>${application.packageName}.web.api</apiPackage>
                             <modelPackage>${application.packageName}.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
+${
+                              modelNameMappings
+                                ? `                            <modelNameMappings>\n${modelNameMappings}\n                            </modelNameMappings>\n`
+                                : ''
+                            }
                             <configOptions>${
                               application.reactive
                                 ? `
@@ -115,6 +141,7 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 : ''
                             }
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>${application.dasherizedBaseName}</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
@@ -125,14 +152,12 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
@@ -166,6 +191,26 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
   }
 
   async copyProvidedOpenApiSpec(application: any) {
+    const preparedSpec = await this.prepareProvidedOpenApiSpec(application);
+    const destination = `${application.srcMainResources}swagger/api.yml`;
+
+    // `api.yml` is the externally visible source contract and must remain
+    // byte-for-byte equivalent to the supplied OAS. OpenAPI Generator's Java
+    // model renderer cannot compile a child allOf property that narrows an
+    // inherited property (for example a string discriminator narrowed to an
+    // enum). Give that renderer a private compatibility input instead of
+    // silently weakening the runtime contract.
+    this.writeDestination(destination, sanitizeOpenApiSpec(preparedSpec.specContents));
+    if (preparedSpec.generatorContents) {
+      this.writeDestination(`${application.srcMainResources}swagger/api.generator.yml`, preparedSpec.generatorContents);
+    }
+  }
+
+  async prepareProvidedOpenApiSpec(application: any): Promise<{ specContents: string; generatorContents?: string }> {
+    if (application.preparedOpenApiSpec) {
+      return application.preparedOpenApiSpec;
+    }
+
     const resolvedInputPath = this.destinationPath(application.oas3Input);
     const candidatePaths = this.buildOpenApiSourceCandidates(resolvedInputPath);
     const failedCandidates: string[] = [];
@@ -188,9 +233,27 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
     if (usedPath !== resolvedInputPath) {
       this.log.info(`Using OpenAPI specification at ${usedPath}`);
     }
-    const destination = `${application.srcMainResources}swagger/api.yml`;
-    const finalContents = sanitizeOpenApiSpec(specContents);
-    this.writeDestination(destination, finalContents);
+    const parsedSpec = parseYaml(specContents) as { components?: { schemas?: Record<string, unknown> } };
+    application.openApiModelNameMappings = getOpenApiModelNameMappings(Object.keys(parsedSpec?.components?.schemas ?? {}));
+
+    const generatorSpec = deepCopy(parsedSpec);
+    normalizeAllOfInheritedPropertyOverrides(generatorSpec);
+    // OpenAPI Generator flattens inline anyOf/oneOf object alternatives into a
+    // single Java bean. Keeping each alternative's `required` array then turns
+    // an "email or phone" contract into "email and phone" Bean Validation.
+    // This is a Java-generator compatibility input only; the public api.yml
+    // remains the exact source OpenAPI contract used at runtime.
+    normalizeInlineComposedRequiredProperties(generatorSpec);
+    let generatorContents: string | undefined;
+    if (JSON.stringify(generatorSpec) !== JSON.stringify(parsedSpec)) {
+      application.openApiGeneratorInputFile = 'api.generator.yml';
+      generatorContents = sanitizeOpenApiSpec(stringifyYaml(generatorSpec));
+    } else {
+      application.openApiGeneratorInputFile = 'api.yml';
+    }
+
+    application.preparedOpenApiSpec = { specContents, generatorContents };
+    return application.preparedOpenApiSpec;
   }
 
   buildOpenApiSourceCandidates(resolvedInputPath: string) {
@@ -211,46 +274,14 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
 }
 
 /**
- * Sanitize and normalize external OpenAPI specs so downstream generators (OpenAPI Generator, MapStruct)
- * don't choke on overly complex example payloads, invalid component keys, or inconsistent line endings.
- *
- * - Parses YAML/JSON content
- * - Strips `example`/`examples` blocks (they often contain unescaped quotes/newlines that break Java annotation generation)
- * - Renames component schema keys that OpenAPI Generator rejects and rewrites internal refs to match
- * - Writes back as YAML with a trailing newline
+ * The supplied OpenAPI document is the API contract. Keep it intact so the
+ * runtime validator, generated DTOs, Form CRUD metadata, and published API
+ * describe exactly the same paths, schemas, constraints, examples, and
+ * discriminators. Generator-specific compatibility must be handled outside
+ * the contract instead of silently rewriting it here.
  */
 function sanitizeOpenApiSpec(rawContents: string): string {
-  try {
-    const specObject = parseYaml(rawContents);
-    normalizeComponentSchemaNames(specObject);
-    reconcileDiscriminatorProperties(specObject);
-    normalizeDiscriminatorOneOfBases(specObject);
-    normalizeAllOfInheritedPropertyOverrides(specObject);
-    normalizeConcreteEventPayloadProperties(specObject);
-    normalizeJsonPatchResponseSchemas(specObject);
-    normalizeInlineComposedRequiredProperties(specObject);
-    const stripExamples = (node: any) => {
-      if (!node || typeof node !== 'object') return;
-
-      if ('example' in node) {
-        delete node.example;
-      }
-      if ('examples' in node) {
-        delete node.examples;
-      }
-
-      for (const value of Object.values(node)) {
-        stripExamples(value);
-      }
-    };
-
-    stripExamples(specObject);
-    const normalized = stringifyYaml(specObject, { lineWidth: 0 });
-    return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
-  } catch (error) {
-    // If parsing fails, fall back to original content but keep newline termination
-    return rawContents.endsWith('\n') ? rawContents : `${rawContents}\n`;
-  }
+  return rawContents.endsWith('\n') ? rawContents : `${rawContents}\n`;
 }
 
 function normalizeDiscriminatorOneOfBases(specObject: any): void {
@@ -1044,3 +1075,15 @@ function rewriteComponentSchemaRef(ref: string, renamedSchemas: Map<string, stri
   parts[2] = normalizedName;
   return `#/${parts.map(part => part.replace(/~/g, '~0').replace(/\//g, '~1')).join('/')}`;
 }
+
+// Retained for focused migration tests and Java-generator-only compatibility
+// inputs. None of these mutators is allowed to alter the published api.yml.
+void [
+  normalizeDiscriminatorOneOfBases,
+  normalizeComponentSchemaNames,
+  reconcileDiscriminatorProperties,
+  normalizeAllOfInheritedPropertyOverrides,
+  normalizeInlineComposedRequiredProperties,
+  normalizeConcreteEventPayloadProperties,
+  normalizeJsonPatchResponseSchemas,
+];

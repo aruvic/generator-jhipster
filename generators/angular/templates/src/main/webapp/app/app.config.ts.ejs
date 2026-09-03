@@ -23,7 +23,7 @@ import { ServiceWorkerModule } from '@angular/service-worker';
 import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';
 
 import { NgbDateAdapter } from '@ng-bootstrap/ng-bootstrap';
-<%_ if (openApiOperations?.length) { _%>
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations?.length) { _%>
 import { withFormlyBootstrap } from '@ngx-formly/bootstrap';
 import { provideFormlyCore } from '@ngx-formly/core';
 <%_ } _%>
@@ -71,7 +71,7 @@ export const appConfig: ApplicationConfig = {
     importProvidersFrom(TranslationModule),
 <%_ } _%>
     provideHttpClient(withInterceptorsFromDi()),
-<%_ if (openApiOperations?.length) { _%>
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations?.length) { _%>
     provideFormlyCore(withFormlyBootstrap()),
 <%_ } _%>
     Title,

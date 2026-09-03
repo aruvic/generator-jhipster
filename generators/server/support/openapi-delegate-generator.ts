@@ -117,8 +117,10 @@ type EntityInfo = {
 type OperationContext = {
   kind: OperationKind;
   methodName: string;
+  httpMethod?: string;
   parameters: ParameterContext[];
   requestBodyType?: string;
+  requestBodyIsArray?: boolean;
   requestBodyResolvedType?: JavaResolvedType;
   responseType?: string;
   responseIsArray?: boolean;
@@ -438,8 +440,28 @@ function isIdentifierFieldName(fieldName?: string): boolean {
   return fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName) || /(?:Id|ID)$/.test(fieldName);
 }
 
+function isReferenceFieldName(fieldName?: string): boolean {
+  if (!fieldName) {
+    return false;
+  }
+  return /(?:^|[_-])reference$/i.test(fieldName) || /Reference$/.test(fieldName);
+}
+
 function isUuidSchema(schema: any): boolean {
   return schema?.type === 'string' && schema?.format === 'uuid';
+}
+
+function buildGeneratedStringIdentityExpression(fieldName: string, field: any | undefined, schema: any): string | undefined {
+  const fieldType = String(field?.fieldType ?? fieldTypeFromSchema(schema)).toLowerCase();
+  if (
+    fieldType !== 'string' ||
+    schema?.type !== 'string' ||
+    schema?.default !== undefined ||
+    (!isIdentifierFieldName(fieldName) && !isReferenceFieldName(fieldName))
+  ) {
+    return undefined;
+  }
+  return 'java.util.UUID.randomUUID().toString()';
 }
 
 function addGeneratedUuidInitializer(initializers: GeneratedUuidInitializer[], seen: Set<string>, fieldName: string | undefined): void {
@@ -557,7 +579,8 @@ function buildSchemaBackedDefaultInitializers(
     if (!validationRules.includes('required') && !requiredBySchema.has(fieldName)) {
       continue;
     }
-    const valueExpression = buildSchemaDefaultValueExpression(field, schema);
+    const valueExpression =
+      buildGeneratedStringIdentityExpression(rawFieldName, field, schema) ?? buildSchemaDefaultValueExpression(field, schema);
     if (!valueExpression) {
       continue;
     }
@@ -592,7 +615,7 @@ function buildRequiredPropertyRulesExpression(
   schemaObject: any,
   schemaName: string | undefined,
   schemas: Record<string, any>,
-  options: { arrayItemsAsRoot?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
+  options: { arrayItemsAsRoot?: boolean; skipSchemaNameFallback?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
 ): string | undefined {
   const rules = buildRequiredPropertyRules(schemaObject, schemaName, schemas, options);
   if (rules.length === 0) {
@@ -607,7 +630,7 @@ function buildRequiredPropertyRules(
   schemaObject: any,
   schemaName: string | undefined,
   schemas: Record<string, any>,
-  options: { arrayItemsAsRoot?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
+  options: { arrayItemsAsRoot?: boolean; skipSchemaNameFallback?: boolean; excludeReadOnly?: boolean; excludeWriteOnly?: boolean } = {},
 ): RequiredPropertyRuleContext[] {
   const rulesByLocation = new Map<string, RequiredPropertyRuleContext>();
   const excludeReadOnly = options.excludeReadOnly === true;
@@ -698,7 +721,12 @@ function buildRequiredPropertyRules(
   const rootSchema = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? schemaObject.items : schemaObject;
   const rootSchemaName = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
   visit(rootSchema, rootSchemaName, new Set(), '');
-  if (schemaName && !options.arrayItemsAsRoot && (!schemaObject || !extractSchemaRef(schemaObject))) {
+  if (
+    schemaName &&
+    !options.arrayItemsAsRoot &&
+    !options.skipSchemaNameFallback &&
+    (!schemaObject || (!extractSchemaRef(schemaObject) && schemaObject.type !== 'array'))
+  ) {
     visit(schemas[schemaName], schemaName, new Set(), '');
   }
 
@@ -1772,6 +1800,13 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     const resolverOptions = dtoPackage ? { dtoPackage } : undefined;
     const opContext = buildOperationContext(operation, prefix, methodName, parsedSignature, { schemas: spec.schemas }, resolverOptions);
     const sourceOperation = findSourceOperation(operation, sourceOfTruthSpec) ?? operation;
+    const requestBodyParam = opContext.parameters.find(param => param.in === 'body');
+    const requestBodyIsCollection = Boolean(
+      opContext.requestBodyIsArray ||
+        requestBodyParam?.resolvedType?.isList ||
+        isCollectionTypeSignature(requestBodyParam?.fullType) ||
+        isCollectionTypeSignature(requestBodyParam?.javaType),
+    );
     opContext.requestDiscriminatorRulesExpression = buildDiscriminatorRulesExpression(
       sourceOperation.requestBodySchemaObject,
       sourceOperation.requestBodySchema,
@@ -1782,6 +1817,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       sourceOperation.requestBodySchema,
       sourceOfTruthSpec.schemas,
       {
+        skipSchemaNameFallback: Boolean(
+          requestBodyIsCollection || sourceOperation.requestBodyIsArray || sourceOperation.requestBodySchemaObject?.type === 'array',
+        ),
         excludeReadOnly: true,
         excludeWriteOnly: false,
       },
@@ -2356,6 +2394,13 @@ function buildOperationContext(
   const bodyParam = parameterContexts.find(param => param.in === 'body');
   const requestBodyResolvedType = resolvedRequestBodyType ?? bodyParam?.resolvedType;
   const requestBodyType = requestBodyResolvedType?.baseType ?? bodyParam?.javaType;
+  const requestBodyIsArray = Boolean(
+    operation.requestBodyIsArray ||
+      operation.requestBodySchemaObject?.type === 'array' ||
+      requestBodyResolvedType?.isList ||
+      isCollectionTypeSignature(bodyParam?.fullType) ||
+      isCollectionTypeSignature(bodyParam?.signatureFragment),
+  );
 
   const responseSchema = operation.responseSchemaObject;
   const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext, resolverOptions) : undefined;
@@ -2374,8 +2419,10 @@ function buildOperationContext(
   return {
     kind,
     methodName,
+    httpMethod: operation.method?.toUpperCase(),
     parameters: parameterContexts,
     requestBodyType,
+    requestBodyIsArray,
     requestBodyResolvedType,
     responseType,
     responseResolvedType,

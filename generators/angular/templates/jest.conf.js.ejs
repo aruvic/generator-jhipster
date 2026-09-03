@@ -34,6 +34,15 @@ module.exports = {
   modulePaths: [`<rootDir>/${baseUrl}`],
   cacheDirectory: '<rootDir>/<%= this.relativeDir(clientRootDir, temporaryDir) %>jest-cache',
   coverageDirectory: '<rootDir>/<%= this.relativeDir(clientRootDir, temporaryDir) %>test-results/',
+  coverageReporters: ['text', 'json', 'json-summary', 'lcov'],
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations?.length) { _%>
+  collectCoverageFrom: [
+    '<rootDir>/<%= this.relativeDir(clientRootDir, clientSrcDir) %>app/form-crud/**/*.ts',
+    '<rootDir>/<%= this.relativeDir(clientRootDir, clientSrcDir) %>app/admin/form-crud-reference-pickers/**/*.ts',
+    '<rootDir>/<%= this.relativeDir(clientRootDir, clientSrcDir) %>app/openapi-operations/**/*.ts',
+    '!**/*.spec.ts',
+  ],
+<%_ } _%>
   moduleNameMapper: pathsToModuleNameMapper(paths, { prefix: `<rootDir>/${baseUrl}/` }),
   reporters: [
     'default',

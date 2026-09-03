@@ -38,6 +38,9 @@ exports[`generator - angular gateway-jwt-skipUserManagement(true)-withAdminUi(fa
   "clientRoot/proxy.config.mjs": {
     "stateCleared": "modified",
   },
+  "clientRoot/setup-jest.ts": {
+    "stateCleared": "modified",
+  },
   "clientRoot/src/404.html": {
     "stateCleared": "modified",
   },
@@ -761,6 +764,9 @@ exports[`generator - angular gateway-oauth2-withAdminUi(true)-skipJhipsterDepend
     "stateCleared": "modified",
   },
   "clientRoot/proxy.config.mjs": {
+    "stateCleared": "modified",
+  },
+  "clientRoot/setup-jest.ts": {
     "stateCleared": "modified",
   },
   "clientRoot/src/404.html": {
@@ -1708,6 +1714,9 @@ exports[`generator - angular microservice-jwt-skipUserManagement(false)-withAdmi
   "clientRoot/package.json": {
     "stateCleared": "modified",
   },
+  "clientRoot/setup-jest.ts": {
+    "stateCleared": "modified",
+  },
   "clientRoot/src/404.html": {
     "stateCleared": "modified",
   },
@@ -2429,6 +2438,9 @@ exports[`generator - angular microservice-oauth2-withAdminUi(true)-skipJhipsterD
     "stateCleared": "modified",
   },
   "package.json": {
+    "stateCleared": "modified",
+  },
+  "setup-jest.ts": {
     "stateCleared": "modified",
   },
   "src/main/webapp/404.html": {
@@ -3171,6 +3183,9 @@ exports[`generator - angular monolith-jwt-skipUserManagement(false)-withAdminUi(
     "stateCleared": "modified",
   },
   "proxy.config.mjs": {
+    "stateCleared": "modified",
+  },
+  "setup-jest.ts": {
     "stateCleared": "modified",
   },
   "src/main/webapp/404.html": {
@@ -4292,6 +4307,9 @@ exports[`generator - angular monolith-oauth2-withAdminUi(false)-skipJhipsterDepe
   "proxy.config.mjs": {
     "stateCleared": "modified",
   },
+  "setup-jest.ts": {
+    "stateCleared": "modified",
+  },
   "src/main/webapp/404.html": {
     "stateCleared": "modified",
   },
@@ -4982,6 +5000,9 @@ exports[`generator - angular monolith-session-skipUserManagement(true)-withAdmin
     "stateCleared": "modified",
   },
   "proxy.config.mjs": {
+    "stateCleared": "modified",
+  },
+  "setup-jest.ts": {
     "stateCleared": "modified",
   },
   "src/main/webapp/404.html": {

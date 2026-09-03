@@ -32,7 +32,7 @@ const routes: Routes = [
     loadComponent: () => import('./docs/docs'),
     title: 'global.menu.admin.apidocs',
   },
-<%_ if (openApiOperations?.length) { _%>
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations?.length) { _%>
   {
     path: 'form-crud-reference-pickers',
     loadComponent: () => import('./form-crud-reference-pickers/form-crud-reference-pickers'),

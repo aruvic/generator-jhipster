@@ -110,6 +110,7 @@ export type OpenApiOperationDefinition = {
   requestContentType?: string;
   requestBodyExample?: unknown;
   requestBodyFields?: OpenApiSchemaField[];
+  responseStatusCodes?: string[];
   responseContentType?: string;
   responseBodyFields?: OpenApiSchemaField[];
 };

@@ -85,7 +85,21 @@ record_status() {
   local log_file="$4"
   local message="$5"
   local artifact_dir="$OUTPUT_DIR/$artifact"
+  local runtime_summary_file=""
+  local runtime_junit_file=""
+  local runtime_artifacts_file=""
+  local runtime_failures_file=""
+  local runtime_form_crud_gui_summary_file=""
+  local runtime_evomaster_summary_file=""
   mkdir -p "$artifact_dir/harness"
+  if [[ "$phase" == "runtime-loop" ]]; then
+    runtime_summary_file="$artifact_dir/harness/runtime-summary.json"
+    runtime_junit_file="$artifact_dir/harness/runtime-junit.xml"
+    runtime_artifacts_file="$artifact_dir/harness/runtime-artifacts.json"
+    runtime_failures_file="$artifact_dir/harness/runtime-failures.json"
+    runtime_form_crud_gui_summary_file="$artifact_dir/harness/runtime-form-crud-gui-summary.json"
+    runtime_evomaster_summary_file="$artifact_dir/harness/runtime-evomaster-summary.json"
+  fi
   jq -n \
     --arg artifact "$artifact" \
     --arg phase "$phase" \
@@ -97,10 +111,45 @@ record_status() {
     --arg endEpoch "$LAST_RUN_END_EPOCH" \
     --arg endIso "$(iso_from_epoch "$LAST_RUN_END_EPOCH")" \
     --arg durationSeconds "$LAST_RUN_DURATION_SECONDS" \
+    --arg runtimeSummary "$runtime_summary_file" \
+    --arg runtimeJunit "$runtime_junit_file" \
+    --arg runtimeArtifacts "$runtime_artifacts_file" \
+    --arg runtimeFailures "$runtime_failures_file" \
+    --arg runtimeFormCrudGuiSummary "$runtime_form_crud_gui_summary_file" \
+    --arg runtimeEvoMasterSummary "$runtime_evomaster_summary_file" \
     'def nullable_number($v): if ($v | length) == 0 then null else ($v | tonumber) end;
-    {artifact: $artifact, phase: $phase, exitCode: ($status | tonumber), ok: (($status | tonumber) == 0), log: $log, message: $message, startEpoch: nullable_number($startEpoch), startIso: $startIso, endEpoch: nullable_number($endEpoch), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber)}' \
+    {artifact: $artifact, phase: $phase, exitCode: ($status | tonumber), ok: (($status | tonumber) == 0), log: $log, message: $message, startEpoch: nullable_number($startEpoch), startIso: $startIso, endEpoch: nullable_number($endEpoch), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber)}
+    + (if ($runtimeSummary | length) > 0 then {
+      runtimeSummary: $runtimeSummary,
+      runtimeJunit: $runtimeJunit,
+      runtimeArtifacts: $runtimeArtifacts,
+      runtimeFailures: $runtimeFailures,
+      runtimeFormCrudGuiSummary: $runtimeFormCrudGuiSummary,
+      runtimeEvoMasterSummary: $runtimeEvoMasterSummary
+    } else {} end)' \
     > "$artifact_dir/harness/${phase}-status.json"
-  cat "$artifact_dir/harness/${phase}-status.json" >> "$SUMMARY_JSONL"
+  jq -c . "$artifact_dir/harness/${phase}-status.json" >> "$SUMMARY_JSONL"
+}
+
+archive_runtime_loop_reports() {
+  local artifact="$1"
+  local artifact_dir="$OUTPUT_DIR/$artifact"
+  local harness_dir="$artifact_dir/harness"
+  local report_name
+  mkdir -p "$harness_dir"
+  for report_name in \
+    runtime-summary.json \
+    runtime-junit.xml \
+    runtime-artifacts.json \
+    runtime-failures.json \
+    runtime-form-crud-gui-summary.json \
+    runtime-evomaster-summary.json; do
+    if [[ -f "$OUTPUT_DIR/$report_name" ]]; then
+      cp "$OUTPUT_DIR/$report_name" "$harness_dir/$report_name"
+    else
+      rm -f "$harness_dir/$report_name"
+    fi
+  done
 }
 
 write_summary() {
@@ -113,7 +162,13 @@ write_summary() {
   done < <(find "$OUTPUT_DIR" -path '*/evomaster/status.json' -type f | sort)
   while IFS= read -r status_file; do
     form_crud_gui_status_files+=("$status_file")
-  done < <(find "$OUTPUT_DIR" -path '*/form-crud-gui/form-crud-gui-smoke.json' -type f | sort)
+  done < <(
+    find "$OUTPUT_DIR" -path '*/form-crud-gui/form-crud-gui-summary.json' -type f | sort
+    find "$OUTPUT_DIR" -path '*/form-crud-gui/form-crud-gui-smoke.json' -type f | sort | while IFS= read -r smoke_file; do
+      summary_file="${smoke_file%/form-crud-gui-smoke.json}/form-crud-gui-summary.json"
+      [[ -f "$summary_file" ]] || printf '%s\n' "$smoke_file"
+    done
+  )
   if [[ "${#evomaster_status_files[@]}" -gt 0 ]]; then
     jq -s '
       def ratio($n; $d): if ($d // 0) == 0 then 0 else (($n // 0) / $d) end;
@@ -192,18 +247,56 @@ write_summary() {
         totalSuccessfulDeleteResources: (map(.coverage.successfulDeleteResources // 0) | add // 0),
         totalExercisedReferencePickerSaves: (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0),
         totalSuccessfulReferencePickerSaves: (map(.coverage.successfulReferencePickerSaves // 0) | add // 0),
+        totalDeclaredOperations: (map(.coverage.declaredOperations // 0) | add // 0),
+        totalRenderedOperations: (map(.coverage.renderedOperations // 0) | add // 0),
+        totalSubmittedOperations: (map(.coverage.submittedOperations // 0) | add // 0),
+        totalSuccessfulOperations: (map(.coverage.successfulOperations // 0) | add // 0),
+        totalApiOperationsPageRenderedOperations: (map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0),
+        totalApiOperationsPageSubmittedOperations: (map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0),
+        totalApiOperationsPageSuccessfulOperations: (map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0),
+        totalApiOperationsPageDeclaredResponseOperations: (map(.coverage.apiOperationsPageDeclaredResponseOperations // 0) | add // 0),
+        totalApiOperationsPageContractCoveredOperations: (map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0),
+        totalApiOperationsPageAccountedOperations: (map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0),
+        totalApiOperationsPageUnexecutableOperations: (map(.coverage.apiOperationsPageUnexecutableOperations // 0) | add // 0),
+        totalApiOperationsPageFailedOperations: (map(.coverage.apiOperationsPageFailedOperations // 0) | add // 0),
+        totalApiOperationsPageRoundTripChecks: (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0),
+        totalApiOperationsPageSuccessfulRoundTripChecks: (map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0),
+        totalStructuredObjectOperations: (map(.coverage.structuredObjectOperations // 0) | add // 0),
+        totalStructuredArrayOperations: (map(.coverage.structuredArrayOperations // 0) | add // 0),
+        totalObjectStringControlFailures: (map(.coverage.objectStringControlFailures // 0) | add // 0),
+        totalResponsiveViewportsChecked: (map(.coverage.responsiveViewportsChecked // 0) | add // 0),
+        totalCombinedSourceLines: (map(.sourceCoverage.combined.lines.total // 0) | add // 0),
+        totalCoveredCombinedSourceLines: (map(.sourceCoverage.combined.lines.covered // 0) | add // 0),
+        totalCombinedSourceBranches: (map(.sourceCoverage.combined.branches.total // 0) | add // 0),
+        totalCoveredCombinedSourceBranches: (map(.sourceCoverage.combined.branches.covered // 0) | add // 0),
         totalScreenshots: (map((.screenshots // []) | length) | add // 0),
+        angularJestPassed: (map(select((.jest.status // "skipped") == "passed")) | length),
+        angularJestFailed: (map(select((.jest.status // "skipped") == "failed")) | length),
+        angularJestSkipped: (map(select((.jest.status // "skipped") == "skipped")) | length),
+        totalAngularJestDurationMs: (map(.jest.durationMs // 0) | add // 0),
         createSuccessRatio: ratio((map(.coverage.successfulCreateResources // 0) | add // 0); (map(.coverage.plannedCreateResources // 0) | add // 0)),
         listExerciseRatio: ratio((map(.coverage.exercisedListResources // 0) | add // 0); (map(.coverage.plannedListResources // 0) | add // 0)),
         updateSuccessRatio: ratio((map(.coverage.successfulUpdateResources // 0) | add // 0); (map(.coverage.exercisedUpdateResources // 0) | add // 0)),
         deleteSuccessRatio: ratio((map(.coverage.successfulDeleteResources // 0) | add // 0); (map(.coverage.exercisedDeleteResources // 0) | add // 0)),
         referencePickerSaveSuccessRatio: ratio((map(.coverage.successfulReferencePickerSaves // 0) | add // 0); (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0)),
+        operationRenderCoverageRatio: ratio((map(.coverage.renderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageRenderCoverageRatio: ratio((map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSuccessCoverageRatio: ratio((map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageContractCoverageRatio: ratio((map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageAccountedCoverageRatio: ratio((map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageRoundTripSuccessRatio: ratio((map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0); (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0)),
+        combinedSourceLineCoverageRatio: ratio((map(.sourceCoverage.combined.lines.covered // 0) | add // 0); (map(.sourceCoverage.combined.lines.total // 0) | add // 0)),
+        combinedSourceBranchCoverageRatio: ratio((map(.sourceCoverage.combined.branches.covered // 0) | add // 0); (map(.sourceCoverage.combined.branches.total // 0) | add // 0)),
         artifacts: map({
           artifact,
           status,
           durationMs,
           resourceCount: (.resourceCount // .coverage.discoveredResources // 0),
           coverage,
+          sourceCoverage,
+          angularJest: (.jest // null),
+          browserStatus: (.browser.status // .status),
           screenshotCount: ((.screenshots // []) | length),
           error: (.error.message // "")
         })
@@ -328,6 +421,7 @@ while IFS=$'\t' read -r name _app_dir _jdl_file _yaml_file _db_user _db_name _ba
       MAVEN_OFFLINE="$MAVEN_OFFLINE" \
       DOCKER_COMPOSE_UP_ARGS="$DOCKER_COMPOSE_UP_ARGS" \
       "$SCRIPT_DIR/runtime_loop.sh"; then
+      archive_runtime_loop_reports "$name"
       if [[ "${EVOMASTER_ENABLED:-true}" == "true" ]]; then
         record_status "$name" "runtime-loop" "0" "$runtime_log" "runtime smoke and EvoMaster passed"
       else
@@ -336,6 +430,7 @@ while IFS=$'\t' read -r name _app_dir _jdl_file _yaml_file _db_user _db_name _ba
     else
       status=$?
       overall_status=1
+      archive_runtime_loop_reports "$name"
       record_status "$name" "runtime-loop" "$status" "$runtime_log" "runtime smoke or EvoMaster failed"
     fi
   elif [[ "$FULL_MATRIX_RUNTIME" == "true" ]]; then

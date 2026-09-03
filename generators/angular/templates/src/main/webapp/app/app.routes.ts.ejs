@@ -62,7 +62,7 @@ const routes: Routes = [
     title: 'login.title',
   },
 <%_ } _%>
-<%_ if (openApiOperations?.length) { _%>
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations?.length) { _%>
   {
     path: 'openapi-operations',
     loadComponent: () => import('./openapi-operations/openapi-operations'),

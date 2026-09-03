@@ -138,7 +138,9 @@ export default class FormCrudReferencePickers implements OnInit {
     }
     this.error.set('');
     this.success.set('');
-    this.http.put<FormCrudReferencePickerConfig[]>(this.resourceUrl, this.configs()).subscribe({
+    this.http
+      .put<FormCrudReferencePickerConfig[]>(this.resourceUrl, this.configs())
+      .subscribe({
       next: configs => {
         this.configs.set(Array.isArray(configs) ? configs : this.configs());
         this.cacheConfigs(this.configs());

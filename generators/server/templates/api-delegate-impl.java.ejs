@@ -124,6 +124,7 @@ _%>
     const hasResponseBody = Boolean(op.responseType);
     const canMapResponseBody = Boolean(responseField && responseMethod);
     const persistenceTypeFqcn = persistenceType(op);
+    const requestBodyIsArray = Boolean(op.requestBodyIsArray || bodyParam?.resolvedType?.isList || op.requestBodyResolvedType?.isList);
 _%>
     @Transactional
     @Override
@@ -141,6 +142,74 @@ _%>
 <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
 <%_ } _%>
+<%_ if (requestBodyIsArray) { _%>
+        List<<%= persistenceTypeFqcn %>> entities = <%= bodyParam.varName %>.stream()
+            .map(item -> this.<%= mapperField %>.<%= mapperMethod %>(item))
+            .toList();
+        if (entities.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
+        }
+        for (<%= persistenceTypeFqcn %> entity : entities) {
+  <%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
+            if (entity.get<%= field.accessor %>() == null) {
+                entity.set<%= field.accessor %>(java.util.UUID.randomUUID());
+            }
+  <%_ } _%>
+  <%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
+            if (entity.get<%= field.accessor %>() == null) {
+                entity.set<%= field.accessor %>(<%- field.valueExpression %>);
+            }
+  <%_ } _%>
+            validatePayload(entity);
+        }
+        List<<%= persistenceTypeFqcn %>> saved;
+        try {
+  <%_ if (op.httpMethod === 'PUT') { _%>
+            this.<%= repoField %>.deleteAll();
+            this.<%= repoField %>.flush();
+  <%_ } _%>
+            saved = this.<%= repoField %>.saveAllAndFlush(entities);
+            boolean hrefChanged = false;
+            for (<%= persistenceTypeFqcn %> entity : saved) {
+                hrefChanged = populateGeneratedHref(entity, "<%= resolvedResourceSlug %>") || hrefChanged;
+            }
+            if (hrefChanged) {
+                saved = this.<%= repoField %>.saveAllAndFlush(saved);
+            }
+        } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
+            throw persistenceViolation(ex);
+        }
+        final List<<%= persistenceTypeFqcn %>> responseEntities = saved;
+        LOG.info("Created {} <%= resolvedResourceSlug %> item(s)", responseEntities.size());
+<%_ if (!hasResponseBody) { _%>
+        return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
+<%_ } else if (canMapResponseBody && op.responseIsArray) { _%>
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapValidResponseBodies(responseEntities, this.<%= responseField %>::<%= responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
+<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+        requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
+<%_ } _%>
+        return ResponseEntity.status(resolvedStatus).body(responseBody);
+<%_ } else if (canMapResponseBody) { _%>
+    if (responseEntities.size() != 1) {
+        throw new ResponseStatusException(
+        HttpStatus.NOT_IMPLEMENTED,
+        "Bulk operation cannot map " + responseEntities.size() + " saved entities to a single response body"
+        );
+    }
+    final <%= persistenceTypeFqcn %> responseEntity = responseEntities.get(0);
+    <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
+<%_ if (op.responseRequiredRulesExpression) { _%>
+    responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
+    requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
+<%_ } _%>
+<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+    requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
+<%_ } _%>
+    return ResponseEntity.status(resolvedStatus).body(responseBody);
+<%_ } else { _%>
+    throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Unable to map bulk operation response body");
+<%_ } _%>
+<%_ } else { _%>
         <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
         if (entity == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
@@ -193,6 +262,7 @@ _%>
             return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(null);
         }
         return ResponseEntity.status(resolvedStatus).body(null);
+<%_ } _%>
 <%_ } _%>
 <%_ } _%>
     }
@@ -1159,7 +1229,7 @@ _%>
             return "";
         }
         Matcher matcher = Pattern.compile("(==\\s*)([^'\"\\s\\]]+)").matcher(expression);
-        StringBuffer buffer = new StringBuffer();
+        StringBuilder buffer = new StringBuilder();
         while (matcher.find()) {
             String value = matcher.group(2);
             matcher.appendReplacement(buffer, matcher.group(1) + "'" + value + "'");
@@ -1464,7 +1534,7 @@ _%>
             return false;
         }
         try {
-            hrefSetter.get().invoke(target, buildResourceHref(resourceSlug, identifier));
+            hrefSetter.orElseThrow().invoke(target, buildResourceHref(resourceSlug, identifier));
             return true;
         } catch (ReflectiveOperationException | RuntimeException ex) {
             LOG.debug("Unable to write generated href", ex);

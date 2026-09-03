@@ -19,6 +19,7 @@ package <%- packageName %>;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.BeanMapping;
+import org.mapstruct.CollectionMappingStrategy;
 import org.mapstruct.MappingTarget;
 import org.mapstruct.NullValuePropertyMappingStrategy;
 import org.mapstruct.ReportingPolicy;
@@ -65,6 +66,7 @@ import java.util.function.Function;
 @Lazy
 @Mapper(
   componentModel = "spring",
+  collectionMappingStrategy = CollectionMappingStrategy.TARGET_IMMUTABLE,
   unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
   uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
 )
@@ -209,42 +211,42 @@ _%>
             return;
         }
     <%_ for (const field of collectionFields) { _%>
-        Function<<%- field.elementDomainType %>, Object> <%- field.targetField %>ExistingKey = item -> {
       <%_ const existingKeyExpressions = field.existingKeyExpressions ?? field.keyExpressions ?? []; _%>
-      <%_ if (existingKeyExpressions.length > 0) { _%>
-            Object key = null;
-        <%_ for (const expr of existingKeyExpressions) { _%>
-            if (key == null) {
-                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
-                if (candidateKey != null) {
-                    key = candidateKey;
-                }
-            }
-        <%_ } _%>
-            return key;
-      <%_ } else { _%>
-            return null;
-      <%_ } _%>
-        };
-        Function<<%- field.elementDtoType %>, Object> <%- field.targetField %>IncomingKey = item -> {
       <%_ const incomingKeyExpressions = field.incomingKeyExpressions ?? []; _%>
-      <%_ if (incomingKeyExpressions.length > 0) { _%>
-            Object key = null;
-        <%_ for (const expr of incomingKeyExpressions) { _%>
-            if (key == null) {
-                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
-                if (candidateKey != null) {
-                    key = candidateKey;
-                }
-            }
-        <%_ } _%>
-            return key;
-      <%_ } else { _%>
-            return null;
-      <%_ } _%>
-        };
       <%_ const hasKeyExpressions = (existingKeyExpressions?.length ?? 0) > 0 || (incomingKeyExpressions?.length ?? 0) > 0; _%>
       <%_ if (hasKeyExpressions) { _%>
+        Function<<%- field.elementDomainType %>, Object> <%- field.targetField %>ExistingKey = item -> {
+        <%_ if (existingKeyExpressions.length > 0) { _%>
+            Object key = null;
+          <%_ for (const expr of existingKeyExpressions) { _%>
+            if (key == null) {
+                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
+                }
+            }
+          <%_ } _%>
+            return key;
+        <%_ } else { _%>
+            return null;
+        <%_ } _%>
+        };
+        Function<<%- field.elementDtoType %>, Object> <%- field.targetField %>IncomingKey = item -> {
+        <%_ if (incomingKeyExpressions.length > 0) { _%>
+            Object key = null;
+          <%_ for (const expr of incomingKeyExpressions) { _%>
+            if (key == null) {
+                Object candidateKey = <%- expr.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
+                }
+            }
+          <%_ } _%>
+            return key;
+        <%_ } else { _%>
+            return null;
+        <%_ } _%>
+        };
         BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard =
             (existingItem, incomingItem) -> {
                 Object existingKey = <%- field.targetField %>ExistingKey.apply(existingItem);
@@ -253,15 +255,12 @@ _%>
                     throw new IllegalArgumentException("Identifier for <%- field.targetField %> is immutable");
                 }
             };
-      <%_ } else { _%>
-        BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard = null;
-      <%_ } _%>
         Consumer<<%- field.elementDomainType %>> <%- field.targetField %>Initializer =
-      <%_ if (field.hasId) { _%>
+        <%_ if (field.hasId && !field.preserveNewItemId) { _%>
             item -> item.setId(null);
-      <%_ } else { _%>
+        <%_ } else { _%>
             null;
-      <%_ } _%>
+        <%_ } _%>
         ;
         List<<%- field.elementDomainType %>> merged<%- field.targetGetter %> = mergeCollection(
             target.get<%- field.targetGetter %>(),
@@ -274,6 +273,25 @@ _%>
             <%- field.targetField %>Initializer
         );
         target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);
+      <%_ } else { _%>
+        if (source.get<%- field.sourceGetter %>() == null) {
+            target.<%- field.targetSetter %>(null);
+        } else {
+            List<<%- field.elementDomainType %>> replaced<%- field.targetGetter %> = new ArrayList<>();
+            for (<%- field.elementDtoType %> incomingItem : source.get<%- field.sourceGetter %>()) {
+                if (incomingItem != null) {
+                    <%- field.elementDomainType %> mappedItem = <% if (field.useInlineElementMapping) { %>this.<%- field.inlineMapMethod %>(incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.mapMethod %>(incomingItem)<% } %>;
+                    if (mappedItem != null) {
+                      <%_ if (field.hasId && !field.preserveNewItemId) { _%>
+                        mappedItem.setId(null);
+                      <%_ } _%>
+                        replaced<%- field.targetGetter %>.add(mappedItem);
+                    }
+                }
+            }
+            target.<%- field.targetSetter %>(replaced<%- field.targetGetter %>);
+        }
+      <%_ } _%>
     <%_ } _%>
     }
 

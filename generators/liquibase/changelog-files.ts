@@ -34,7 +34,7 @@ export const addEntityFiles = asWriteFilesSection<TemplateData<LiquibaseEntity> 
       ],
     },
     {
-      condition: generator => generator.entity.anyRelationshipIsOwnerSide,
+      condition: generator => generator.entity.anyRelationshipIsOwnerSide || generator.entity.polymorphicChild,
       path: SERVER_MAIN_RES_DIR,
       templates: [
         {

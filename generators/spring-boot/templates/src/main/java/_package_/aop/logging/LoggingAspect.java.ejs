@@ -115,17 +115,25 @@ public class LoggingAspect {
     public Object logAround(ProceedingJoinPoint joinPoint) throws Throwable {
         var log = logger(joinPoint);
         if (log.isDebugEnabled()) {
-            log.debug("Enter: {}() with argument[s] = {}", joinPoint.getSignature().getName(), Arrays.toString(joinPoint.getArgs()));
+            log.debug("Enter: {}() with argument type[s] = {}", joinPoint.getSignature().getName(), argumentTypes(joinPoint.getArgs()));
         }
         try {
             Object result = joinPoint.proceed();
             if (log.isDebugEnabled()) {
-                log.debug("Exit: {}() with result = {}", joinPoint.getSignature().getName(), result);
+                log.debug("Exit: {}() with result type = {}", joinPoint.getSignature().getName(), valueType(result));
             }
             return result;
         } catch (IllegalArgumentException e) {
-            log.error("Illegal argument: {} in {}()", Arrays.toString(joinPoint.getArgs()), joinPoint.getSignature().getName());
+            log.error("Illegal argument type[s]: {} in {}()", argumentTypes(joinPoint.getArgs()), joinPoint.getSignature().getName());
             throw e;
         }
+    }
+
+    private String argumentTypes(Object[] arguments) {
+        return Arrays.stream(arguments).map(this::valueType).toList().toString();
+    }
+
+    private String valueType(Object value) {
+        return value == null ? "null" : value.getClass().getName();
     }
 }

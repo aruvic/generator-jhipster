@@ -52,7 +52,7 @@ import { createRequestOption } from 'app/core/request/request-util';
 <%_ if (searchEngineAny) { _%>
 import { <%= searchType %> } from 'app/core/request/request.model';
 <%_ } _%>
-import { I<%= entityAngularName %><% if (!readOnly) { %>, New<%= entityAngularName %><% } %> } from '../<%= entityFileName %>.model';
+import { I<%= entityAngularName %><% if (!readOnly && primaryKey) { %>, New<%= entityAngularName %><% } %> } from '../<%= entityFileName %>.model';
 <%_ if (!readOnly && updatableEntity) { _%>
 
 export type PartialUpdate<%= entityAngularName %> = Partial<I<%= entityAngularName %>> & Pick<I<%= entityAngularName %>, '<%= primaryKey.name %>'>;
@@ -60,7 +60,7 @@ export type PartialUpdate<%= entityAngularName %> = Partial<I<%= entityAngularNa
 
 <%_ const entityRestName = anyFieldIsDateDerived ? `Rest${entityAngularName}` : `I${entityAngularName}`; _%>
 <%_ if (anyFieldIsDateDerived) { _%>
-type RestOf<T extends I<%= entityAngularName %><% if (!readOnly) { %> | New<%= entityAngularName %><% } %>> =
+type RestOf<T extends I<%= entityAngularName %><% if (!readOnly && primaryKey) { %> | New<%= entityAngularName %><% } %>> =
   Omit<T, '<%- fields.filter(field => field.fieldTypeTemporal).map(field => field.fieldName).join("' | '") %>'> &
   {
   <%_ for (const field of fields.filter(field => field.fieldTypeTemporal)) { _%>
@@ -69,7 +69,7 @@ type RestOf<T extends I<%= entityAngularName %><% if (!readOnly) { %> | New<%= e
   };
 
 export type <%= entityRestName %> = RestOf<I<%= entityAngularName %>>;
-  <%_ if (!readOnly) { _%>
+  <%_ if (!readOnly && primaryKey) { _%>
 
 export type New<%= entityRestName %> = RestOf<New<%= entityAngularName %>>;
   <%_ } _%>
@@ -92,7 +92,7 @@ export class <%= entityAngularName %>Service {
     protected resourceSearchUrl = this.applicationConfigService.getEndpointFor('api/<%= entityApiUrl %>/_search'<% if ((applicationTypeGateway || applicationTypeMicroservice) && locals.microserviceName) { %>, '<%= microserviceName.toLowerCase() %>'<% } %>);
 <%_ } _%>
 
-<%_ if (!readOnly) { _%>
+<%_ if (!readOnly && primaryKey) { _%>
     create(<%= entityInstance %>: New<%= entityAngularName %>): Observable<EntityResponseType> {
     <%_ if (anyFieldIsDateDerived) { _%>
         const copy = this.convertDateFromClient(<%= entityInstance %>);
@@ -194,7 +194,7 @@ export class <%= entityAngularName %>Service {
     }
 
 <%_ if (anyFieldIsDateDerived) { _%>
-    protected convertDateFromClient<T extends I<%= entityAngularName %><% if (!readOnly) { %> | New<%= entityAngularName %><% } %><% if (!readOnly && updatableEntity) { %> | PartialUpdate<%= entityAngularName %><% } %>>(<%= entityInstance %>: T): RestOf<T> {
+    protected convertDateFromClient<T extends I<%= entityAngularName %><% if (!readOnly && primaryKey) { %> | New<%= entityAngularName %><% } %><% if (!readOnly && updatableEntity) { %> | PartialUpdate<%= entityAngularName %><% } %>>(<%= entityInstance %>: T): RestOf<T> {
         return {
             ...<%= entityInstance %>,
     <%_ for (const field of fields) { _%>
@@ -231,7 +231,7 @@ export class <%= entityAngularName %>Service {
 <%_ } _%>
 <%_ if (builtInUserManagement) { _%>
 
-  protected convertUserManagementFromClient<T extends I<%= entityAngularName %><% if (!readOnly) { %> | New<%= entityAngularName %><% } %><% if (!readOnly && updatableEntity) { %> | PartialUpdate<%= entityAngularName %><% } %>>(<%= entityInstance %>: T): any {
+  protected convertUserManagementFromClient<T extends I<%= entityAngularName %><% if (!readOnly && primaryKey) { %> | New<%= entityAngularName %><% } %><% if (!readOnly && updatableEntity) { %> | PartialUpdate<%= entityAngularName %><% } %>>(<%= entityInstance %>: T): any {
     return {
       ...<%= entityInstance %>,
       authorities: <%= entityInstance %>.authorities?.map(authority => authority.name),

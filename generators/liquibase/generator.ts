@@ -625,7 +625,7 @@ export default class LiquibaseGenerator<
     const fileName = `${databaseChangelog.changelogDate}_added_entity_${entity.entityClass}`;
     source.addLiquibaseChangelog!({ changelogName: fileName, section: entity.incremental ? 'incremental' : 'base' });
 
-    if (entity.anyRelationshipIsOwnerSide) {
+    if (entity.anyRelationshipIsOwnerSide || entity.polymorphicChild) {
       const constFileName = `${databaseChangelog.changelogDate}_added_entity_constraints_${entity.entityClass}`;
       source.addLiquibaseChangelog!({ changelogName: constFileName, section: entity.incremental ? 'incremental' : 'constraints' });
     }

@@ -40,8 +40,8 @@
     </div>
 
     @if (!isResourcePanelCollapsed()) {
-      <aside class="col-12 col-xl-3" data-cy="formCrudResourcePanel">
-        <div class="list-group" data-cy="formCrudOperationList">
+      <aside class="col-12 col-xl-3 form-crud-resource-panel" data-cy="formCrudResourcePanel">
+        <div class="list-group form-crud-resource-nav" data-cy="formCrudOperationList">
           @for (group of resourceGroups; track group.key) {
             <div class="list-group-item bg-light fw-semibold" [attr.data-cy]="'form-crud-group-' + group.key">{{ group.label }}</div>
             @for (resource of group.resources; track resource.key) {

@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 import { before, describe, expect, it } from 'esmocha';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +34,15 @@ const generator = `${basename(resolve(__dirname, '../../'))}:${basename(__dirnam
 describe(`generator - ${generator}`, () => {
   shouldSupportFeatures(Generator);
   describe('blueprint support', () => testBlueprintSupport(generator));
+
+  it('configures the generated-model template directory for Gradle', async () => {
+    const convention = await readFile(
+      join(__dirname, 'templates/buildSrc/src/main/groovy/jhipster.openapi-generator-conventions.gradle.ejs'),
+      'utf8',
+    );
+
+    expect(convention).toContain('templateDir = "$rootDir/src/main/openapi-templates".toString()');
+  });
 
   for (const [name, config] of Object.entries(
     fromMatrix({ buildTool: ['maven' as const, 'gradle' as const], addOpenapiGeneratorPlugin: [true, false] }),
@@ -89,8 +98,14 @@ paths:
     });
 
     it('should copy the provided specification to api.yml without altering its contents', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'title: Custom External API');
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
       result.assertNoFileContent('src/main/resources/swagger/api.yml', '<% if (authenticationTypeJwt) { %>');
+    });
+
+    it('should configure the generated-model template directory', () => {
+      expect(JSON.stringify(result.sourceCallsArg)).toContain(
+        '<templateDirectory>${project.basedir}/src/main/openapi-templates</templateDirectory>',
+      );
     });
   });
 
@@ -163,11 +178,8 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'spaced.yaml' });
     });
 
-    it('should normalize component keys and matching refs in the copied api.yml', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'VesselVoyage:');
-      result.assertFileContent('src/main/resources/swagger/api.yml', '$ref: "#/components/schemas/VesselVoyage"');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Vessel Voyage:');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', '#/components/schemas/Vessel Voyage');
+    it('should preserve component keys and matching refs in the copied api.yml', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 
@@ -219,11 +231,12 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'collision.yaml' });
     });
 
-    it('should rename colliding component keys and matching refs in the copied api.yml', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'TimestampModel:');
-      result.assertFileContent('src/main/resources/swagger/api.yml', '$ref: "#/components/schemas/TimestampModel"');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Timestamp:');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', '#/components/schemas/Timestamp"');
+    it('should preserve colliding component keys and matching refs in the copied api.yml', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
+    });
+
+    it('should configure a Java model mapping without changing the OpenAPI contract', () => {
+      expect(JSON.stringify(result.sourceCallsArg)).toContain('<modelNameMapping>Timestamp=TimestampModel</modelNameMapping>');
     });
   });
 
@@ -291,9 +304,8 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'variant-discriminator.yaml' });
     });
 
-    it('should add the discriminator property shape to the base schema and drop unsupported non-string discriminator metadata', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'owned:\n          type: boolean');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'propertyName: owned');
+    it('should preserve a discriminator property declared on variants', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 
@@ -359,9 +371,8 @@ components:
         });
     });
 
-    it('should keep discriminator properties as strings so generated Java subtype getters stay compatible', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', '"@type":\n          type: string');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'GeoJsonPoint');
+    it('should preserve discriminator property types and enum values', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 
@@ -430,10 +441,8 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'discriminator-oneof.yaml' });
     });
 
-    it('should keep oneOf for Java subtype generation and remove redundant discriminator-only base properties', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'discriminator:\n        propertyName: "@type"');
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'oneOf:\n        - $ref: "#/components/schemas/Reference"');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'ReferenceOrValue:\n      type: object\n      discriminator:\n        propertyName: "@type"\n        mapping:\n          Reference: "#/components/schemas/Reference"\n          Value: "#/components/schemas/Value"\n      properties:');
+    it('should preserve oneOf bases and discriminator-only base properties', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 
@@ -498,17 +507,24 @@ components:
           await writeFile(join(dir, 'inherited-overrides.yaml'), customSpec);
         })
         .withJHipsterConfig({
-          buildTool: 'maven',
+          buildTool: 'gradle',
           addOpenapiGeneratorPlugin: true,
           oas3Input: 'inherited-overrides.yaml',
         });
     });
 
-    it('should remove compatible duplicated child properties so generated DTOs do not override validated inherited getters', () => {
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Duplicate inherited id');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'Duplicate inherited href');
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'childOnly:');
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'required:\n            - childOnly');
+    it('should preserve compatible duplicated child properties in the public contract', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
+    });
+
+    it('should use a private compatibility input for Java generation', () => {
+      result.assertFileContent('src/main/resources/swagger/api.generator.yml', 'childOnly:\n              type: integer');
+      result.assertNoFileContent('src/main/resources/swagger/api.generator.yml', 'description: Duplicate inherited id');
+      result.assertNoFileContent('src/main/resources/swagger/api.generator.yml', 'description: Duplicate inherited href');
+      result.assertFileContent(
+        'buildSrc/src/main/groovy/jhipster.openapi-generator-conventions.gradle',
+        'inputSpec = "$rootDir/src/main/resources/swagger/api.generator.yml".toString()',
+      );
     });
   });
 
@@ -565,10 +581,14 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'inline-anyof.yaml' });
     });
 
-    it('should preserve root required fields but not turn alternatives into unconditional DTO required fields', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'required:\n        - name');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - phone');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'required:\n            - email');
+    it('should preserve inline anyOf required alternatives in the public contract', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
+    });
+
+    it('should remove inline alternative requirements only from the private Java generator input', () => {
+      result.assertFileContent('src/main/resources/swagger/api.generator.yml', 'anyOf:');
+      result.assertNoFileContent('src/main/resources/swagger/api.generator.yml', 'required:\n          - phone');
+      result.assertNoFileContent('src/main/resources/swagger/api.generator.yml', 'required:\n          - email');
     });
   });
 
@@ -624,9 +644,8 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'json-patch-response.yaml' });
     });
 
-    it('should use the normal response schema for JSON Patch response content instead of discriminatorless oneOf alternatives', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'application/json-patch+json:\n              schema:\n                $ref: "#/components/schemas/Item"');
-      result.assertNoFileContent('src/main/resources/swagger/api.yml', 'oneOf:\n                  - $ref: "#/components/schemas/Item"');
+    it('should preserve JSON Patch response schemas', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 
@@ -692,8 +711,8 @@ components:
         .withJHipsterConfig({ buildTool: 'maven', addOpenapiGeneratorPlugin: true, oas3Input: 'concrete-events.yaml' });
     });
 
-    it('should type the concrete event event property with the matching payload schema', () => {
-      result.assertFileContent('src/main/resources/swagger/api.yml', 'event:\n              $ref: "#/components/schemas/ItemCreateEventPayload"');
+    it('should preserve concrete event payload schemas', () => {
+      result.assertFileContent('src/main/resources/swagger/api.yml', customSpec);
     });
   });
 });

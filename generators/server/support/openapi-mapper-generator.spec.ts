@@ -23,11 +23,14 @@ import {
   buildDomainFqcn,
   buildDtoFqcn,
   buildSchemaGraph,
+  clearDtoNameOverrides,
   extractSchemaRef,
   findNestedSchemas,
+  getOpenApiModelNameMappings,
   getOperationType,
   isEnumSchema,
   isPolymorphicSchema,
+  registerDtoNameOverride,
   stripDtoSuffix,
 } from './openapi-mapper-generator.ts';
 
@@ -81,6 +84,16 @@ describe('OpenAPI Mapper Generator', () => {
     it('should build correct DTO FQCN', () => {
       const result = buildDtoFqcn('PartyInteractionFVO', 'eu.example.app');
       expect(result).toBe('eu.example.app.service.api.dto.PartyInteractionFVO');
+    });
+
+    it('uses the configured generated model name for a colliding schema', () => {
+      const [mapping] = getOpenApiModelNameMappings(['Timestamp']);
+      clearDtoNameOverrides();
+      registerDtoNameOverride(mapping.sourceName, mapping.targetName);
+
+      expect(buildDtoFqcn('Timestamp', 'eu.example.app')).toBe('eu.example.app.service.api.dto.TimestampModel');
+
+      clearDtoNameOverrides();
     });
   });
 

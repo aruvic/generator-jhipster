@@ -7,6 +7,7 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$GENERATOR_ROOT/.." && pwd)}"
 ARTIFACTS="${ARTIFACT_ROOT:-$WORKSPACE_ROOT/oas-to-jdl/artifacts}"
 SMOKE="$SCRIPT_DIR/openapi-smoke.mjs"
 FORM_CRUD_GUI_SMOKE="$SCRIPT_DIR/form-crud-gui-smoke.mjs"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE="$SCRIPT_DIR/form-crud-reference-picker-config-service.mjs"
 DB_VERIFY_SQL="$SCRIPT_DIR/tmf683-db-verify.sql"
 EVOMASTER_SEED_BUILDER="$SCRIPT_DIR/evomaster-postman-seed.mjs"
 EVOMASTER_OPENAPI_EXAMPLE_BUILDER="$SCRIPT_DIR/evomaster-openapi-smoke-examples.mjs"
@@ -17,8 +18,44 @@ TMF_PAYLOAD="${TMF_PAYLOAD:-$GENERATOR_ROOT/party-interaction-full.json}"
 REGRESSION_APP_ROOT="${REGRESSION_APP_ROOT:-$WORKSPACE_ROOT}"
 PORT="${PORT:-8081}"
 LIQUIBASE_CONTEXTS="${LIQUIBASE_CONTEXTS:-dev}"
+LIQUIBASE_ASYNC_START="${LIQUIBASE_ASYNC_START:-false}"
+AUTHENTICATION_TIMEOUT_SECONDS="${AUTHENTICATION_TIMEOUT_SECONDS:-120}"
+AUTHENTICATION_RETRY_SLEEP_SECONDS="${AUTHENTICATION_RETRY_SLEEP_SECONDS:-2}"
+POSTGRES_HOST="${POSTGRES_HOST:-127.0.0.1}"
+POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+
+total_memory_mb() {
+  awk '
+    /MemTotal:/ { mem=$2 }
+    /SwapTotal:/ { swap=$2 }
+    END { print int((mem + swap) / 1024) }
+  ' /proc/meminfo
+}
+
+artifact_matches_name_filter() {
+  local name="$1"
+  local regex="${ARTIFACT_NAME_REGEX,,}"
+
+  [[ -z "$regex" || "${name,,}" =~ $regex ]]
+}
+
+default_generator_node_heap_mb() {
+  local total_mb
+  total_mb="$(total_memory_mb)"
+  if [[ "$total_mb" -ge 24576 ]]; then
+    echo 8192
+  elif [[ "$total_mb" -ge 12288 ]]; then
+    echo 6144
+  else
+    echo 4096
+  fi
+}
+
+GENERATOR_NODE_OPTIONS="${GENERATOR_NODE_OPTIONS:---max-old-space-size=$(default_generator_node_heap_mb)}"
+ANGULAR_NODE_OPTIONS="${ANGULAR_NODE_OPTIONS:-$GENERATOR_NODE_OPTIONS}"
 EVOMASTER_ENABLED="${EVOMASTER_ENABLED:-true}"
 FORM_CRUD_GUI_ENABLED="${FORM_CRUD_GUI_ENABLED:-true}"
+ARTIFACT_NAME_REGEX="${ARTIFACT_NAME_REGEX:-}"
 FORM_CRUD_GUI_PORT="${FORM_CRUD_GUI_PORT:-4201}"
 FORM_CRUD_GUI_HOST="${FORM_CRUD_GUI_HOST:-0.0.0.0}"
 FORM_CRUD_GUI_PUBLIC_HOST="${FORM_CRUD_GUI_PUBLIC_HOST:-localhost}"
@@ -29,17 +66,50 @@ FORM_CRUD_GUI_HEADLESS="${FORM_CRUD_GUI_HEADLESS:-true}"
 FORM_CRUD_GUI_NPM_INSTALL="${FORM_CRUD_GUI_NPM_INSTALL:-offline}"
 FORM_CRUD_GUI_NPM_INSTALL_COMMAND="${FORM_CRUD_GUI_NPM_INSTALL_COMMAND:-npm install --no-audit --no-fund}"
 FORM_CRUD_GUI_START_COMMAND="${FORM_CRUD_GUI_START_COMMAND:-npm start -- --host $FORM_CRUD_GUI_HOST --port $FORM_CRUD_GUI_PORT}"
-FORM_CRUD_GUI_PLAYWRIGHT_ROOT="${FORM_CRUD_GUI_PLAYWRIGHT_ROOT:-}"
+FORM_CRUD_GUI_JEST_ENABLED="${FORM_CRUD_GUI_JEST_ENABLED:-true}"
+FORM_CRUD_GUI_JEST_COMMAND="${FORM_CRUD_GUI_JEST_COMMAND:-npx jest --runInBand --coverage --config jest.conf.js}"
+FORM_CRUD_GUI_JEST_NODE_OPTIONS="${FORM_CRUD_GUI_JEST_NODE_OPTIONS:-${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}}"
+FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS:-900}"
+FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS:-30}"
+FORM_CRUD_GUI_NODE_OPTIONS="${FORM_CRUD_GUI_NODE_OPTIONS:-${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}}"
+FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS:-2400}"
+FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS:-30}"
+FORM_CRUD_GUI_PLAYWRIGHT_ROOT="${FORM_CRUD_GUI_PLAYWRIGHT_ROOT:-/tmp/playwright-tests}"
+FORM_CRUD_GUI_PLAYWRIGHT_INSTALL="${FORM_CRUD_GUI_PLAYWRIGHT_INSTALL:-offline}"
+FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE="${FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE:-@playwright/test}"
+FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="${FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS:-skip}"
+FORM_CRUD_GUI_PLAYWRIGHT_BROWSER="${FORM_CRUD_GUI_PLAYWRIGHT_BROWSER:-chromium}"
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR="${FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR:-true}"
 FORM_CRUD_GUI_FAIL_ON_HTTP_4XX="${FORM_CRUD_GUI_FAIL_ON_HTTP_4XX:-false}"
 FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM="${FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM:-true}"
 FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR="${FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR:-true}"
 FORM_CRUD_GUI_MAX_LIST_RESOURCES="${FORM_CRUD_GUI_MAX_LIST_RESOURCES:-all}"
 FORM_CRUD_GUI_MAX_CREATE_RESOURCES="${FORM_CRUD_GUI_MAX_CREATE_RESOURCES:-all}"
+FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS="${FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS:-all}"
+FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID="${FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID:-}"
+FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH="${FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH:-}"
 FORM_CRUD_GUI_EXERCISE_CREATE="${FORM_CRUD_GUI_EXERCISE_CREATE:-true}"
 FORM_CRUD_GUI_EXERCISE_UPDATE="${FORM_CRUD_GUI_EXERCISE_UPDATE:-true}"
 FORM_CRUD_GUI_EXERCISE_DELETE="${FORM_CRUD_GUI_EXERCISE_DELETE:-true}"
+FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED="${FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED:-true}"
+FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX:-false}"
+FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED:-true}"
+FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS="${FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS:-true}"
 FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS="${FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS:-true}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="${FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED:-true}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="${FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT:-3}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES:-67108864}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES:-2097152}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="${FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB:-1024}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="${FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST:-$FORM_CRUD_GUI_JEST_ENABLED}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_URL="${FORM_CRUD_REFERENCE_PICKER_CONFIG_URL:-}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN="${FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN:-}"
+FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION="${FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION:-false}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED:-auto}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST:-127.0.0.1}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST:-localhost}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT:-8085}"
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE:-$OUTPUT_DIR/form-crud-reference-pickers.json}"
 EVOMASTER_JAR="${EVOMASTER_JAR:-$WORKSPACE_ROOT/tools/evomaster/evomaster-6.0.0.jar}"
 EVOMASTER_MODE="${EVOMASTER_MODE:-coverage}"
 EVOMASTER_SECONDS_PER_API="${EVOMASTER_SECONDS_PER_API:-600}"
@@ -301,6 +371,75 @@ cleanup_process() {
   fi
 }
 
+cleanup_reference_picker_config_service() {
+  local pid="${1:-}"
+  cleanup_process "$pid"
+}
+
+should_start_reference_picker_config_service() {
+  case "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED" in
+    true)
+      [[ -z "$FORM_CRUD_REFERENCE_PICKER_CONFIG_URL" ]]
+      ;;
+    false|skip)
+      return 1
+      ;;
+    auto)
+      [[ "$FORM_CRUD_GUI_ENABLED" == "true" && -z "$FORM_CRUD_REFERENCE_PICKER_CONFIG_URL" ]]
+      ;;
+    *)
+      echo "Unsupported FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED=$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED; use auto, true, false, or skip." >&2
+      return 2
+      ;;
+  esac
+}
+
+start_reference_picker_config_service() {
+  local log_file="$OUTPUT_DIR/form-crud-reference-picker-config-service.log"
+  local pid
+  timestamped_step "harness" "Form CRUD reference picker config service start"
+  rm -f "$log_file"
+  mkdir -p "$(dirname "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE")"
+  (
+    exec setsid env \
+      OUTPUT_DIR="$OUTPUT_DIR" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST="$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT="$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE="$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE" \
+      node "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE" \
+        --host "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST" \
+        --port "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT" \
+        --storage "$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE" >"$log_file" 2>&1 < /dev/null
+  ) &
+  pid=$!
+  wait_for_http \
+    "http://$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST:$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT/management/health" \
+    "$log_file" \
+    "Form CRUD reference picker config service" \
+    "$pid"
+  reference_picker_config_service_pid="$pid"
+  FORM_CRUD_REFERENCE_PICKER_CONFIG_URL="http://$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST:$FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT/api/form-crud-reference-pickers"
+  echo "FORM_CRUD_REFERENCE_PICKER_CONFIG_URL=$FORM_CRUD_REFERENCE_PICKER_CONFIG_URL"
+}
+
+cleanup_form_crud_gui_port() {
+  local port="$FORM_CRUD_GUI_PORT"
+  local listener_pids
+  listener_pids=$(ss -tlnp | sed -nE "s/.*:${port} .*pid=([0-9]+).*/\1/p" | sort -u)
+  for listener_pid in $listener_pids; do
+    kill "$listener_pid" >/dev/null 2>&1 || true
+  done
+  for _ in $(seq 1 20); do
+    if ! ss -tlnp | grep -q ":$port "; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Form CRUD GUI port $port is still in use after cleanup" >&2
+  ss -tlnp | grep ":$port " >&2 || true
+  return 1
+}
+
 wait_for_http() {
   local url="$1"
   local log_file="$2"
@@ -342,10 +481,10 @@ ensure_form_crud_gui_dependencies() {
     cd "$app_dir"
     case "$FORM_CRUD_GUI_NPM_INSTALL" in
       offline)
-        env NO_UPDATE_NOTIFIER=1 $FORM_CRUD_GUI_NPM_INSTALL_COMMAND --offline < /dev/null
+        env CI=true NG_CLI_ANALYTICS=false NO_UPDATE_NOTIFIER=1 $FORM_CRUD_GUI_NPM_INSTALL_COMMAND --offline < /dev/null
         ;;
       online)
-        env NO_UPDATE_NOTIFIER=1 $FORM_CRUD_GUI_NPM_INSTALL_COMMAND < /dev/null
+        env CI=true NG_CLI_ANALYTICS=false NO_UPDATE_NOTIFIER=1 $FORM_CRUD_GUI_NPM_INSTALL_COMMAND < /dev/null
         ;;
       *)
         echo "Unsupported FORM_CRUD_GUI_NPM_INSTALL=$FORM_CRUD_GUI_NPM_INSTALL; use offline, online, or skip." >&2
@@ -357,6 +496,173 @@ ensure_form_crud_gui_dependencies() {
   timestamped_step "$name" "Form CRUD GUI npm install finished in $(duration_seconds "$install_start" "$install_end")s"
 }
 
+ensure_form_crud_gui_playwright_dependencies() {
+  local name="$1"
+  local install_start install_end browser_start browser_end
+
+  if FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies >/dev/null 2>&1; then
+    if [[ "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" == "skip" ]]; then
+      return 0
+    fi
+  else
+    case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL" in
+      skip)
+        FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies
+        ;;
+      offline|online)
+        install_start="$(now_epoch)"
+        timestamped_step "$name" "Form CRUD GUI Playwright install start ($FORM_CRUD_GUI_PLAYWRIGHT_INSTALL)"
+        mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT"
+        case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL" in
+          offline)
+            env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" --offline < /dev/null
+            ;;
+          online)
+            env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" < /dev/null
+            ;;
+        esac
+        install_end="$(now_epoch)"
+        timestamped_step "$name" "Form CRUD GUI Playwright install finished in $(duration_seconds "$install_start" "$install_end")s"
+        ;;
+      *)
+        echo "Unsupported FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL; use offline, online, or skip." >&2
+        return 2
+        ;;
+    esac
+
+    FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies
+  fi
+
+  case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" in
+    skip)
+      ;;
+    online)
+      browser_start="$(now_epoch)"
+      timestamped_step "$name" "Form CRUD GUI Playwright browser install start ($FORM_CRUD_GUI_PLAYWRIGHT_BROWSER)"
+      if [[ ! -x "${FORM_CRUD_GUI_PLAYWRIGHT_ROOT%/}/node_modules/.bin/playwright" ]]; then
+        mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT"
+        env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" < /dev/null
+      fi
+      env NO_UPDATE_NOTIFIER=1 "${FORM_CRUD_GUI_PLAYWRIGHT_ROOT%/}/node_modules/.bin/playwright" install "$FORM_CRUD_GUI_PLAYWRIGHT_BROWSER" < /dev/null
+      browser_end="$(now_epoch)"
+      timestamped_step "$name" "Form CRUD GUI Playwright browser install finished in $(duration_seconds "$browser_start" "$browser_end")s"
+      ;;
+    *)
+      echo "Unsupported FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS; use online or skip." >&2
+      return 2
+      ;;
+  esac
+}
+
+run_form_crud_gui_jest() {
+  local name="$1"
+  local app_dir="$2"
+  local artifact_output_dir="$3"
+  local gui_dir="$artifact_output_dir/form-crud-gui"
+  local jest_log="$gui_dir/angular-jest.log"
+  local jest_status_file="$gui_dir/angular-jest.json"
+  local jest_start jest_end jest_status
+
+  mkdir -p "$gui_dir"
+  if [[ "$FORM_CRUD_GUI_JEST_ENABLED" != "true" ]]; then
+    jq -n \
+      --arg artifact "$name" \
+      --arg status "skipped" \
+      --arg command "$FORM_CRUD_GUI_JEST_COMMAND" \
+      --arg nodeOptions "$FORM_CRUD_GUI_JEST_NODE_OPTIONS" \
+      '{artifact: $artifact, status: $status, command: $command, nodeOptions: $nodeOptions, durationMs: 0, exitCode: 0}' \
+      > "$jest_status_file"
+    return 0
+  fi
+
+  jest_start="$(now_epoch)"
+  timestamped_step "$name" "Form CRUD GUI Angular Jest start"
+  set +e
+  (
+    cd "$app_dir"
+    timeout --kill-after="${FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS}s" \
+      env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="$FORM_CRUD_GUI_JEST_NODE_OPTIONS" NO_UPDATE_NOTIFIER=1 bash -lc "$FORM_CRUD_GUI_JEST_COMMAND" >"$jest_log" 2>&1 < /dev/null
+  )
+  jest_status=$?
+  set -e
+  jest_end="$(now_epoch)"
+  timestamped_step "$name" "Form CRUD GUI Angular Jest finished in $(duration_seconds "$jest_start" "$jest_end")s"
+
+  jq -n \
+    --arg artifact "$name" \
+    --arg status "$(if [[ "$jest_status" == "0" ]]; then printf passed; else printf failed; fi)" \
+    --arg command "$FORM_CRUD_GUI_JEST_COMMAND" \
+    --arg nodeOptions "$FORM_CRUD_GUI_JEST_NODE_OPTIONS" \
+    --arg log "$jest_log" \
+    --arg startEpoch "$jest_start" \
+    --arg startIso "$(iso_from_epoch "$jest_start")" \
+    --arg endEpoch "$jest_end" \
+    --arg endIso "$(iso_from_epoch "$jest_end")" \
+    --arg durationMs "$(( (jest_end - jest_start) * 1000 ))" \
+    --arg exitCode "$jest_status" \
+    '{
+      artifact: $artifact,
+      status: $status,
+      command: $command,
+      nodeOptions: $nodeOptions,
+      log: $log,
+      startEpoch: ($startEpoch | tonumber),
+      startIso: $startIso,
+      endEpoch: ($endEpoch | tonumber),
+      endIso: $endIso,
+      durationMs: ($durationMs | tonumber),
+      exitCode: ($exitCode | tonumber)
+    }' \
+    > "$jest_status_file"
+  return "$jest_status"
+}
+
+write_form_crud_gui_combined_summary() {
+  local name="$1"
+  local artifact_output_dir="$2"
+  local gui_dir="$artifact_output_dir/form-crud-gui"
+  local summary_file="$gui_dir/form-crud-gui-summary.json"
+  local smoke_file="$gui_dir/form-crud-gui-smoke.json"
+  local jest_file="$gui_dir/angular-jest.json"
+  local default_smoke_file="$gui_dir/form-crud-gui-smoke-default.json"
+  local default_jest_file="$gui_dir/angular-jest-default.json"
+
+  mkdir -p "$gui_dir"
+  if [[ ! -f "$smoke_file" ]]; then
+    jq -n --arg artifact "$name" '{artifact: $artifact, status: "not-run", durationMs: 0}' > "$default_smoke_file"
+    smoke_file="$default_smoke_file"
+  fi
+  if [[ ! -f "$jest_file" ]]; then
+    jq -n --arg artifact "$name" '{artifact: $artifact, status: "not-run", durationMs: 0, exitCode: 0}' > "$default_jest_file"
+    jest_file="$default_jest_file"
+  fi
+
+  jq -n \
+    --slurpfile browser "$smoke_file" \
+    --slurpfile jest "$jest_file" \
+    '
+      ($browser[0] // {}) as $b |
+      ($jest[0] // {}) as $j |
+      {
+        artifact: ($b.artifact // $j.artifact),
+        status: (if ($b.status == "passed" and ($j.status == "passed" or $j.status == "skipped")) then "passed" else "failed" end),
+        durationMs: (($b.durationMs // 0) + ($j.durationMs // 0)),
+        coverage: ($b.coverage // {}),
+        sourceCoverage: ($b.sourceCoverage // {}),
+        resourceCount: ($b.resourceCount // $b.coverage.discoveredResources // 0),
+        screenshots: ($b.screenshots // []),
+        failedResponses: ($b.failedResponses // []),
+        pageErrors: ($b.pageErrors // []),
+        console: ($b.console // []),
+        browser: $b,
+        jest: $j,
+        error: (if ($b.status != "passed") then ($b.error // {message: "Form CRUD browser smoke failed or did not run"})
+                elif ($j.status != "passed" and $j.status != "skipped") then {message: "Generated Angular Jest suite failed", log: $j.log}
+                else null end)
+      }
+    ' > "$summary_file"
+}
+
 run_form_crud_gui_smoke() {
   local name="$1"
   local app_dir="$2"
@@ -364,28 +670,34 @@ run_form_crud_gui_smoke() {
   local gui_dir="$artifact_output_dir/form-crud-gui"
   local gui_log="$gui_dir/angular.log"
   local gui_status=0
+  local jest_status=0
   local angular_pid=""
   local gui_start gui_end
 
   mkdir -p "$gui_dir"
   ensure_form_crud_gui_dependencies "$name" "$app_dir"
-  FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies
+  run_form_crud_gui_jest "$name" "$app_dir" "$artifact_output_dir" || jest_status=$?
+  ensure_form_crud_gui_playwright_dependencies "$name"
+  cleanup_form_crud_gui_port
 
   gui_start="$(now_epoch)"
   timestamped_step "$name" "Form CRUD GUI browser smoke start"
   (
     cd "$app_dir"
-    exec setsid env NO_UPDATE_NOTIFIER=1 bash -lc "$FORM_CRUD_GUI_START_COMMAND" >"$gui_log" 2>&1 < /dev/null
+    exec setsid env CI=true NG_CLI_ANALYTICS=false NO_UPDATE_NOTIFIER=1 bash -lc "$FORM_CRUD_GUI_START_COMMAND" >"$gui_log" 2>&1 < /dev/null
   ) &
   angular_pid=$!
 
   if ! wait_for_http "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT/" "$gui_log" "Angular dev server" "$angular_pid"; then
     cleanup_process "$angular_pid"
+    write_form_crud_gui_combined_summary "$name" "$artifact_output_dir"
     return 1
   fi
 
+  NODE_OPTIONS="$FORM_CRUD_GUI_NODE_OPTIONS" \
   FORM_CRUD_GUI_USERNAME="$FORM_CRUD_GUI_USERNAME" \
   FORM_CRUD_GUI_PASSWORD="$FORM_CRUD_GUI_PASSWORD" \
+  FORM_CRUD_GUI_APP_DIR="$app_dir" \
   FORM_CRUD_GUI_TIMEOUT_MS="$FORM_CRUD_GUI_TIMEOUT_MS" \
   FORM_CRUD_GUI_HEADLESS="$FORM_CRUD_GUI_HEADLESS" \
   FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" \
@@ -395,23 +707,67 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR="$FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR" \
   FORM_CRUD_GUI_MAX_LIST_RESOURCES="$FORM_CRUD_GUI_MAX_LIST_RESOURCES" \
   FORM_CRUD_GUI_MAX_CREATE_RESOURCES="$FORM_CRUD_GUI_MAX_CREATE_RESOURCES" \
+  FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS="$FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS" \
+  FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID="$FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID" \
+  FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH="$FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH" \
   FORM_CRUD_GUI_EXERCISE_CREATE="$FORM_CRUD_GUI_EXERCISE_CREATE" \
   FORM_CRUD_GUI_EXERCISE_UPDATE="$FORM_CRUD_GUI_EXERCISE_UPDATE" \
   FORM_CRUD_GUI_EXERCISE_DELETE="$FORM_CRUD_GUI_EXERCISE_DELETE" \
+  FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED="$FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED" \
+  FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX="$FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX" \
+  FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED="$FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED" \
+  FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS="$FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS" \
   FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS="$FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS" \
-    node "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
+  FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="$FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="$FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="$FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="$FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST" \
+    timeout --kill-after="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS}s" \
+      node "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
 
   cleanup_process "$angular_pid"
   gui_end="$(now_epoch)"
+  if [[ "$gui_status" != "0" && ! -f "$gui_dir/form-crud-gui-smoke.json" ]]; then
+    jq -n \
+      --arg artifact "$name" \
+      --arg startIso "$(iso_from_epoch "$gui_start")" \
+      --arg endIso "$(iso_from_epoch "$gui_end")" \
+      --arg durationMs "$(( (gui_end - gui_start) * 1000 ))" \
+      --arg exitCode "$gui_status" \
+      --arg nodeOptions "$FORM_CRUD_GUI_NODE_OPTIONS" \
+      --arg timeoutSeconds "$FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS" \
+      '{
+        artifact: $artifact,
+        status: "failed",
+        startIso: $startIso,
+        endIso: $endIso,
+        durationMs: ($durationMs | tonumber),
+        exitCode: ($exitCode | tonumber),
+        nodeOptions: $nodeOptions,
+        timeoutSeconds: ($timeoutSeconds | tonumber),
+        error: {
+          message: (if ($exitCode | tonumber) == 124 then "Form CRUD browser smoke exceeded its configured timeout" else "Form CRUD browser smoke exited before writing its report" end)
+        }
+      }' > "$gui_dir/form-crud-gui-smoke.json"
+  fi
   timestamped_step "$name" "Form CRUD GUI browser smoke finished in $(duration_seconds "$gui_start" "$gui_end")s"
+  write_form_crud_gui_combined_summary "$name" "$artifact_output_dir"
+  if [[ "$jest_status" != "0" ]]; then
+    return "$jest_status"
+  fi
   return "$gui_status"
 }
 
 wait_for_db() {
   local app_dir="$1"
-  local db_user="$2"
+  local _db_user="$2"
   for _ in $(seq 1 60); do
-    if (cd "$app_dir" && docker compose -f src/main/docker/postgresql.yml exec -T postgresql pg_isready -U "$db_user") >/dev/null 2>&1; then
+    # A local TCP connect is enough for Spring's JDBC pool to begin its own
+    # authenticated startup. It avoids docker compose exec hangs observed on
+    # layered Docker/WSL transports after the container is already healthy.
+    if timeout 2s bash -c ': >"/dev/tcp/$1/$2"' -- "$POSTGRES_HOST" "$POSTGRES_PORT" >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -422,6 +778,7 @@ wait_for_db() {
 
 wait_for_app() {
   local log_file="$1"
+  local pid="${2:-}"
   for _ in $(seq 1 120); do
     if grep -q "Started .*App" "$log_file" 2>/dev/null; then
       local code
@@ -430,7 +787,12 @@ wait_for_app() {
         return 0
       fi
     fi
-    if grep -q "APPLICATION FAILED TO START" "$log_file" 2>/dev/null; then
+    if grep -Eq "APPLICATION FAILED TO START|Application run failed|Liquibase could not start correctly, your database is NOT ready" "$log_file" 2>/dev/null; then
+      tail -n 200 "$log_file" >&2
+      return 1
+    fi
+    if [[ -n "$pid" ]] && ! kill -0 "$pid" >/dev/null 2>&1; then
+      echo "Spring Boot process exited before port $PORT became reachable" >&2
       tail -n 200 "$log_file" >&2
       return 1
     fi
@@ -467,14 +829,34 @@ wait_for_controller() {
 
 authenticate() {
   local token
-  token=$(curl -s -X POST "http://localhost:$PORT/api/authenticate" \
-    -H "Content-Type: application/json" \
-    -d '{"username":"admin","password":"admin"}' | jq -r '.id_token // empty')
-  if [[ -z "$token" || "$token" == "null" ]]; then
-    echo "Authentication failed on port $PORT" >&2
-    return 1
-  fi
-  printf '%s\n' "$token"
+  local start_epoch
+  local now_epoch
+  local response_file
+  response_file="$(mktemp)"
+  start_epoch="$(date +%s)"
+  while true; do
+    if curl -s -X POST "http://localhost:$PORT/api/authenticate" \
+      -H "Content-Type: application/json" \
+      -d '{"username":"admin","password":"admin"}' >"$response_file"; then
+      token="$(jq -r '.id_token // empty' "$response_file" 2>/dev/null || true)"
+      if [[ -n "$token" && "$token" != "null" ]]; then
+        rm -f "$response_file"
+        printf '%s\n' "$token"
+        return 0
+      fi
+    fi
+    now_epoch="$(date +%s)"
+    if (( now_epoch - start_epoch >= AUTHENTICATION_TIMEOUT_SECONDS )); then
+      echo "Authentication failed on port $PORT after ${AUTHENTICATION_TIMEOUT_SECONDS}s" >&2
+      if [[ -s "$response_file" ]]; then
+        cat "$response_file" >&2
+        echo >&2
+      fi
+      rm -f "$response_file"
+      return 1
+    fi
+    sleep "$AUTHENTICATION_RETRY_SLEEP_SECONDS"
+  done
 }
 
 package_name() {
@@ -1646,13 +2028,212 @@ fi
 processed_count=0
 failure_count=0
 failure_summary_lines_file="$OUTPUT_DIR/runtime-failures.jsonl"
+failure_summary_json="$OUTPUT_DIR/runtime-failures.json"
+runtime_status_lines_file="$OUTPUT_DIR/runtime-artifacts.jsonl"
+runtime_status_json="$OUTPUT_DIR/runtime-artifacts.json"
+processed_artifacts_file="$OUTPUT_DIR/runtime-processed-artifacts.txt"
+runtime_summary_json="$OUTPUT_DIR/runtime-summary.json"
+runtime_junit_xml="$OUTPUT_DIR/runtime-junit.xml"
+runtime_form_crud_gui_summary_json="$OUTPUT_DIR/runtime-form-crud-gui-summary.json"
+runtime_evomaster_summary_json="$OUTPUT_DIR/runtime-evomaster-summary.json"
+runtime_start_epoch="$(now_epoch)"
 : > "$failure_summary_lines_file"
+: > "$runtime_status_lines_file"
+: > "$processed_artifacts_file"
+reference_picker_config_service_pid=""
+reference_picker_config_service_status=0
+should_start_reference_picker_config_service || reference_picker_config_service_status=$?
+if [[ "$reference_picker_config_service_status" == "2" ]]; then
+  exit 2
+fi
+if [[ "$reference_picker_config_service_status" == "0" ]]; then
+  start_reference_picker_config_service
+fi
+
+write_runtime_reports() {
+  local runtime_end_epoch
+  local form_crud_gui_status_files=()
+  local evomaster_status_files=()
+  runtime_end_epoch="$(now_epoch)"
+
+  while IFS= read -r artifact; do
+    [[ -z "$artifact" ]] && continue
+    if [[ -f "$OUTPUT_DIR/$artifact/form-crud-gui/form-crud-gui-summary.json" ]]; then
+      form_crud_gui_status_files+=("$OUTPUT_DIR/$artifact/form-crud-gui/form-crud-gui-summary.json")
+    elif [[ -f "$OUTPUT_DIR/$artifact/form-crud-gui/form-crud-gui-smoke.json" ]]; then
+      form_crud_gui_status_files+=("$OUTPUT_DIR/$artifact/form-crud-gui/form-crud-gui-smoke.json")
+    fi
+    if [[ -f "$OUTPUT_DIR/$artifact/evomaster/status.json" ]]; then
+      evomaster_status_files+=("$OUTPUT_DIR/$artifact/evomaster/status.json")
+    fi
+  done < "$processed_artifacts_file"
+
+  jq -s '.' "$runtime_status_lines_file" > "$runtime_status_json"
+  jq -s '.' "$failure_summary_lines_file" > "$failure_summary_json"
+
+  if [[ "${#form_crud_gui_status_files[@]}" -gt 0 ]]; then
+    jq -s '
+      def ratio($n; $d): if ($d // 0) == 0 then 0 else (($n // 0) / $d) end;
+      {
+        artifactCount: length,
+        passed: (map(select(.status == "passed")) | length),
+        failed: (map(select(.status != "passed")) | length),
+        totalDurationMs: (map(.durationMs // 0) | add // 0),
+        totalDiscoveredResources: (map(.coverage.discoveredResources // 0) | add // 0),
+        totalPlannedCreateResources: (map(.coverage.plannedCreateResources // 0) | add // 0),
+        totalSuccessfulCreateResources: (map(.coverage.successfulCreateResources // 0) | add // 0),
+        totalExercisedUpdateResources: (map(.coverage.exercisedUpdateResources // 0) | add // 0),
+        totalSuccessfulUpdateResources: (map(.coverage.successfulUpdateResources // 0) | add // 0),
+        totalExercisedDeleteResources: (map(.coverage.exercisedDeleteResources // 0) | add // 0),
+        totalSuccessfulDeleteResources: (map(.coverage.successfulDeleteResources // 0) | add // 0),
+        totalExercisedReferencePickerSaves: (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0),
+        totalSuccessfulReferencePickerSaves: (map(.coverage.successfulReferencePickerSaves // 0) | add // 0),
+        totalDeclaredOperations: (map(.coverage.declaredOperations // 0) | add // 0),
+        totalRenderedOperations: (map(.coverage.renderedOperations // 0) | add // 0),
+        totalSubmittedOperations: (map(.coverage.submittedOperations // 0) | add // 0),
+        totalSuccessfulOperations: (map(.coverage.successfulOperations // 0) | add // 0),
+        totalApiOperationsPageRenderedOperations: (map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0),
+        totalApiOperationsPageSubmittedOperations: (map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0),
+        totalApiOperationsPageSuccessfulOperations: (map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0),
+        totalApiOperationsPageDeclaredResponseOperations: (map(.coverage.apiOperationsPageDeclaredResponseOperations // 0) | add // 0),
+        totalApiOperationsPageContractCoveredOperations: (map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0),
+        totalApiOperationsPageAccountedOperations: (map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0),
+        totalApiOperationsPageUnexecutableOperations: (map(.coverage.apiOperationsPageUnexecutableOperations // 0) | add // 0),
+        totalApiOperationsPageFailedOperations: (map(.coverage.apiOperationsPageFailedOperations // 0) | add // 0),
+        totalApiOperationsPageRoundTripChecks: (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0),
+        totalApiOperationsPageSuccessfulRoundTripChecks: (map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0),
+        totalStructuredObjectOperations: (map(.coverage.structuredObjectOperations // 0) | add // 0),
+        totalStructuredArrayOperations: (map(.coverage.structuredArrayOperations // 0) | add // 0),
+        totalObjectStringControlFailures: (map(.coverage.objectStringControlFailures // 0) | add // 0),
+        totalResponsiveViewportsChecked: (map(.coverage.responsiveViewportsChecked // 0) | add // 0),
+        totalCombinedSourceLines: (map(.sourceCoverage.combined.lines.total // 0) | add // 0),
+        totalCoveredCombinedSourceLines: (map(.sourceCoverage.combined.lines.covered // 0) | add // 0),
+        totalCombinedSourceBranches: (map(.sourceCoverage.combined.branches.total // 0) | add // 0),
+        totalCoveredCombinedSourceBranches: (map(.sourceCoverage.combined.branches.covered // 0) | add // 0),
+        angularJestPassed: (map(select((.jest.status // "skipped") == "passed")) | length),
+        angularJestFailed: (map(select((.jest.status // "skipped") == "failed")) | length),
+        angularJestSkipped: (map(select((.jest.status // "skipped") == "skipped")) | length),
+        totalAngularJestDurationMs: (map(.jest.durationMs // 0) | add // 0),
+        createSuccessRatio: ratio((map(.coverage.successfulCreateResources // 0) | add // 0); (map(.coverage.plannedCreateResources // 0) | add // 0)),
+        updateSuccessRatio: ratio((map(.coverage.successfulUpdateResources // 0) | add // 0); (map(.coverage.exercisedUpdateResources // 0) | add // 0)),
+        deleteSuccessRatio: ratio((map(.coverage.successfulDeleteResources // 0) | add // 0); (map(.coverage.exercisedDeleteResources // 0) | add // 0)),
+        referencePickerSaveSuccessRatio: ratio((map(.coverage.successfulReferencePickerSaves // 0) | add // 0); (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0)),
+        operationRenderCoverageRatio: ratio((map(.coverage.renderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageRenderCoverageRatio: ratio((map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSuccessCoverageRatio: ratio((map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageContractCoverageRatio: ratio((map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageAccountedCoverageRatio: ratio((map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageRoundTripSuccessRatio: ratio((map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0); (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0)),
+        combinedSourceLineCoverageRatio: ratio((map(.sourceCoverage.combined.lines.covered // 0) | add // 0); (map(.sourceCoverage.combined.lines.total // 0) | add // 0)),
+        combinedSourceBranchCoverageRatio: ratio((map(.sourceCoverage.combined.branches.covered // 0) | add // 0); (map(.sourceCoverage.combined.branches.total // 0) | add // 0)),
+        artifacts: map({
+          artifact,
+          status,
+          durationMs,
+          resourceCount: (.resourceCount // .coverage.discoveredResources // 0),
+          coverage,
+          sourceCoverage,
+          angularJest: (.jest // null),
+          browserStatus: (.browser.status // .status),
+          screenshotCount: ((.screenshots // []) | length),
+          failedResponseCount: ((.failedResponses // []) | length),
+          pageErrorCount: ((.pageErrors // []) | length),
+          authenticatedConsoleErrorCount: ((.console // []) | map(select(.type == "error" and .authenticated == true)) | length),
+          error: (.error.message // "")
+        })
+      }
+    ' "${form_crud_gui_status_files[@]}" > "$runtime_form_crud_gui_summary_json"
+  else
+    printf '{"artifactCount":0,"artifacts":[]}\n' > "$runtime_form_crud_gui_summary_json"
+  fi
+
+  if [[ "${#evomaster_status_files[@]}" -gt 0 ]]; then
+    jq -s '
+      def ratio($n; $d): if ($d // 0) == 0 then 0 else (($n // 0) / $d) end;
+      {
+        artifactCount: length,
+        totalDeclaredEndpointCount: (map(.declaredEndpointCount // 0) | add // 0),
+        totalExercisedEndpointCount: (map(.exercisedEndpointCount // 0) | add // 0),
+        totalSuccessfulEndpointCount: (map(.successfulEndpointCount // 0) | add // 0),
+        totalFaultCount: (map(.faultCount // 0) | add // 0),
+        totalDurationSeconds: (map(.durationSeconds // 0) | add // 0),
+        coverageRatio: ratio((map(.successfulEndpointCount // 0) | add // 0); (map(.declaredEndpointCount // 0) | add // 0)),
+        artifacts: map({
+          artifact,
+          exitCode,
+          faultCount,
+          durationSeconds,
+          declaredEndpointCount,
+          exercisedEndpointCount,
+          successfulEndpointCount,
+          coverageRatio: ratio(.successfulEndpointCount; .declaredEndpointCount),
+          evomasterCoveredTargets,
+          evomasterEvaluatedTests,
+          evomasterEvaluatedActions,
+          coverageSweepRunCount,
+          coverageSweepGainCount,
+          coverageSweepStopReason
+        })
+      }
+    ' "${evomaster_status_files[@]}" > "$runtime_evomaster_summary_json"
+  else
+    printf '{"artifactCount":0,"artifacts":[]}\n' > "$runtime_evomaster_summary_json"
+  fi
+
+  jq -n \
+    --arg startEpoch "$runtime_start_epoch" \
+    --arg startIso "$(iso_from_epoch "$runtime_start_epoch")" \
+    --arg endEpoch "$runtime_end_epoch" \
+    --arg endIso "$(iso_from_epoch "$runtime_end_epoch")" \
+    --arg processedCount "$processed_count" \
+    --arg failureCount "$failure_count" \
+    --slurpfile artifacts "$runtime_status_json" \
+    --slurpfile failures "$failure_summary_json" \
+    --slurpfile formCrudGui "$runtime_form_crud_gui_summary_json" \
+    --slurpfile evomaster "$runtime_evomaster_summary_json" \
+    '($artifacts[0] // []) as $artifactResults |
+      ($failures[0] // []) as $failureResults |
+      {
+      startEpoch: ($startEpoch | tonumber),
+      startIso: $startIso,
+      endEpoch: ($endEpoch | tonumber),
+      endIso: $endIso,
+      durationSeconds: (($endEpoch | tonumber) - ($startEpoch | tonumber)),
+      processedCount: ($processedCount | tonumber),
+      failureCount: ($failureCount | tonumber),
+      artifactFailureCount: ($artifactResults | map(select(.exitCode != 0)) | length),
+      ok: (($failureCount | tonumber) == 0 and (($artifactResults | map(select(.exitCode != 0)) | length) == 0)),
+      failures: $failureResults,
+      artifacts: $artifactResults,
+      formCrudGui: ($formCrudGui[0] // {artifactCount: 0, artifacts: []}),
+      evomaster: ($evomaster[0] // {artifactCount: 0, artifacts: []})
+    }' > "$runtime_summary_json"
+
+  jq -r '
+    def esc:
+      tostring
+      | gsub("&"; "&amp;")
+      | gsub("<"; "&lt;")
+      | gsub(">"; "&gt;")
+      | gsub("\""; "&quot;");
+    "<testsuite name=\"oas-regression-runtime\" tests=\"\(.artifacts | length)\" failures=\"\(.artifactFailureCount)\" time=\"\(.durationSeconds)\">",
+    (.artifacts[] |
+      "  <testcase classname=\"\(.artifact | esc)\" name=\"\(.phase | esc)\" time=\"\(.durationSeconds // 0)\">" +
+      (if .exitCode == 0 then "" else "<failure message=\"exit \(.exitCode)\">\(.artifact | esc) \(.phase | esc)</failure>" end) +
+      "</testcase>"
+    ),
+    "</testsuite>"
+  ' "$runtime_summary_json" > "$runtime_junit_xml"
+}
 
 write_artifact_runtime_status() {
   local phase="${1:-runtime-loop}"
   local exit_code="${2:-0}"
   local artifact_end_epoch
+  local status_file
   artifact_end_epoch="$(now_epoch)"
+  status_file="$artifact_output_dir/harness/runtime-status.json"
   jq -n \
     --arg artifact "$name" \
     --arg phase "$phase" \
@@ -1665,16 +2246,23 @@ write_artifact_runtime_status() {
     --arg evomasterEnabled "$EVOMASTER_ENABLED" \
     --arg evomasterStatusFile "$artifact_output_dir/evomaster/status.json" \
     '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), startEpoch: ($startEpoch | tonumber), startIso: $startIso, endEpoch: ($endEpoch | tonumber), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber), evomasterEnabled: ($evomasterEnabled == "true"), evomasterStatusFile: $evomasterStatusFile}' \
-    > "$artifact_output_dir/harness/runtime-status.json"
+    > "$status_file"
+  jq -c . "$status_file" >> "$runtime_status_lines_file"
 }
 
 while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_name <&3; do
   if [[ -z "$name" ]]; then
     continue
   fi
+  if ! artifact_matches_name_filter "$name"; then
+    continue
+  fi
   processed_count=$((processed_count + 1))
   artifact_start_epoch="$(now_epoch)"
+  artifact_phase="runtime-loop"
+  artifact_exit_code=0
   artifact_output_dir="$OUTPUT_DIR/$name"
+  printf '%s\n' "$name" >> "$processed_artifacts_file"
   case "$artifact_output_dir" in
     "$OUTPUT_DIR"/*)
       mkdir -p "$artifact_output_dir"
@@ -1699,7 +2287,7 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   fi
   app_pid=""
   driver_pid=""
-  trap 'cleanup_driver "$driver_pid"; cleanup_app "$app_pid" "$app_dir"' EXIT
+  trap 'cleanup_driver "$driver_pid"; cleanup_app "$app_pid" "$app_dir"; cleanup_reference_picker_config_service "$reference_picker_config_service_pid"' EXIT
 
   timestamped_step "$name" "reset PostgreSQL"
   (cd "$app_dir" && docker compose -f src/main/docker/postgresql.yml down -v --remove-orphans < /dev/null)
@@ -1710,10 +2298,10 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   rm -f "$log_file"
   (
     cd "$app_dir"
-    LIQUIBASE_ANALYTICS_ENABLED=false SPRING_PROFILES_ACTIVE=dev,api-docs SPRING_DOCKER_COMPOSE_ENABLED=false SPRING_LIQUIBASE_CONTEXTS="$LIQUIBASE_CONTEXTS" ./mvnw "${MAVEN_ARGS[@]}" -P'!webapp' spring-boot:run -Dskip.npm=true -DskipTests=true -Dmaven.test.skip=true >"$log_file" 2>&1 < /dev/null
+    LIQUIBASE_ANALYTICS_ENABLED=false APPLICATION_LIQUIBASE_ASYNC_START="$LIQUIBASE_ASYNC_START" FORM_CRUD_REFERENCE_PICKER_CONFIG_URL="$FORM_CRUD_REFERENCE_PICKER_CONFIG_URL" FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN="$FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN" FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION="$FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION" SPRING_PROFILES_ACTIVE=dev,api-docs SPRING_DOCKER_COMPOSE_ENABLED=false SPRING_LIQUIBASE_CONTEXTS="$LIQUIBASE_CONTEXTS" ./mvnw "${MAVEN_ARGS[@]}" -P'!webapp' spring-boot:run -Dskip.npm=true -DskipTests=true -Dmaven.test.skip=true >"$log_file" 2>&1 < /dev/null
   ) &
   app_pid=$!
-  wait_for_app "$log_file"
+  wait_for_app "$log_file" "$app_pid"
 
   timestamped_step "$name" "authenticate"
   token=$(authenticate)
@@ -1743,6 +2331,7 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
     write_artifact_runtime_status "yaml-smoke" "$smoke_exit"
     trap - EXIT
     if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+      write_runtime_reports
       exit "$smoke_exit"
     fi
     echo "Continuing after YAML smoke failure for $name; recorded exit code $smoke_exit" >&2
@@ -1761,12 +2350,20 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
         --arg artifact "$name" \
         --arg phase "form-crud-gui" \
         --arg exitCode "$form_crud_gui_exit" \
-        --arg resultFile "$artifact_output_dir/form-crud-gui/form-crud-gui-smoke.json" \
+        --arg resultFile "$artifact_output_dir/form-crud-gui/form-crud-gui-summary.json" \
+        --arg browserResultFile "$artifact_output_dir/form-crud-gui/form-crud-gui-smoke.json" \
         --arg angularLog "$artifact_output_dir/form-crud-gui/angular.log" \
+        --arg angularJestLog "$artifact_output_dir/form-crud-gui/angular-jest.log" \
         --arg appLog "$log_file" \
-        '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), resultFile: $resultFile, angularLog: $angularLog, appLog: $appLog}' \
+        '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), resultFile: $resultFile, browserResultFile: $browserResultFile, angularLog: $angularLog, angularJestLog: $angularJestLog, appLog: $appLog}' \
         >> "$failure_summary_lines_file"
+      if [[ "$artifact_exit_code" == "0" ]]; then
+        artifact_phase="form-crud-gui"
+        artifact_exit_code="$form_crud_gui_exit"
+      fi
       if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+        write_artifact_runtime_status "form-crud-gui" "$form_crud_gui_exit"
+        write_runtime_reports
         exit "$form_crud_gui_exit"
       fi
       echo "Continuing after Form CRUD GUI failure for $name; recorded exit code $form_crud_gui_exit" >&2
@@ -1799,8 +2396,19 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
       --data @"$TMF_PAYLOAD" | tee "$OUTPUT_DIR/tmf683-partyinteraction-response.txt"
     status=$(awk 'NR==1 {print $2}' "$OUTPUT_DIR/tmf683-partyinteraction-response.txt")
     if [[ "$status" != "201" ]]; then
+      failure_count=$((failure_count + 1))
       echo "Expected TMF683 PartyInteraction POST to return 201, got $status" >&2
       tail -n 200 "$log_file" >&2
+      jq -n \
+        --arg artifact "$name" \
+        --arg phase "tmf683-deep-post" \
+        --arg exitCode "1" \
+        --arg responseFile "$OUTPUT_DIR/tmf683-partyinteraction-response.txt" \
+        --arg appLog "$log_file" \
+        '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), responseFile: $responseFile, appLog: $appLog}' \
+        >> "$failure_summary_lines_file"
+      write_artifact_runtime_status "tmf683-deep-post" "1"
+      write_runtime_reports
       exit 1
     fi
 
@@ -1837,6 +2445,7 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
       write_artifact_runtime_status "evomaster-db-seed-smoke" "$evomaster_db_seed_exit"
       trap - EXIT
       if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+        write_runtime_reports
         exit "$evomaster_db_seed_exit"
       fi
       echo "Continuing after EvoMaster DB seed smoke failure for $name; recorded exit code $evomaster_db_seed_exit" >&2
@@ -1902,7 +2511,13 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
         --arg appLog "$log_file" \
         '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), evomasterStatusFile: $evomasterStatusFile, appLog: $appLog}' \
         >> "$failure_summary_lines_file"
+      if [[ "$artifact_exit_code" == "0" ]]; then
+        artifact_phase="evomaster"
+        artifact_exit_code="$evomaster_exit"
+      fi
       if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+        write_artifact_runtime_status "evomaster" "$evomaster_exit"
+        write_runtime_reports
         exit "$evomaster_exit"
       fi
       echo "Continuing after EvoMaster failure for $name; recorded exit code $evomaster_exit" >&2
@@ -1912,7 +2527,7 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   fi
 
   cleanup_app "" "$app_dir"
-  write_artifact_runtime_status "runtime-loop" "0"
+  write_artifact_runtime_status "$artifact_phase" "$artifact_exit_code"
   trap - EXIT
 done 3< <(
   node "$SCRIPT_DIR/artifact-utils.mjs" list \
@@ -1924,16 +2539,35 @@ done 3< <(
 
 if [[ "$processed_count" == "0" ]]; then
   echo "No OpenAPI/JDL artifact pairs matched the configured filters." >&2
+  failure_count=1
+  no_artifact_end_epoch="$(now_epoch)"
+  jq -cn \
+    --arg artifact "harness" \
+    --arg phase "artifact-discovery" \
+    --arg exitCode "2" \
+    --arg message "No OpenAPI/JDL artifact pairs matched the configured filters." \
+    '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), message: $message}' \
+    >> "$failure_summary_lines_file"
+  jq -n \
+    --arg artifact "harness" \
+    --arg phase "artifact-discovery" \
+    --arg exitCode "2" \
+    --arg startEpoch "$runtime_start_epoch" \
+    --arg startIso "$(iso_from_epoch "$runtime_start_epoch")" \
+    --arg endEpoch "$no_artifact_end_epoch" \
+    --arg endIso "$(iso_from_epoch "$no_artifact_end_epoch")" \
+    --arg durationSeconds "$(duration_seconds "$runtime_start_epoch" "$no_artifact_end_epoch")" \
+    '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), startEpoch: ($startEpoch | tonumber), startIso: $startIso, endEpoch: ($endEpoch | tonumber), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber), evomasterEnabled: false, evomasterStatusFile: ""}' \
+    >> "$runtime_status_lines_file"
+  cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
+  write_runtime_reports
   exit 2
 fi
 
-jq -s \
-  --arg processedCount "$processed_count" \
-  --arg failureCount "$failure_count" \
-  '{processedCount: ($processedCount | tonumber), failureCount: ($failureCount | tonumber), failures: .}' \
-  "$failure_summary_lines_file" > "$OUTPUT_DIR/runtime-summary.json"
+cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
+write_runtime_reports
 
 if [[ "$failure_count" != "0" ]]; then
-  echo "Runtime loop completed with $failure_count artifact failure(s). See $OUTPUT_DIR/runtime-summary.json" >&2
+  echo "Runtime loop completed with $failure_count artifact failure(s). See $runtime_summary_json" >&2
   exit 1
 fi

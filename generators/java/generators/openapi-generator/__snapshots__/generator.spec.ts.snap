@@ -25,14 +25,20 @@ exports[`generator - java:openapi-generator gradle-addOpenapiGeneratorPlugin(fal
                         </goals>
                         <configuration>
                             <inputSpec>\${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>com.mycompany.myapp.web.api</apiPackage>
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
+
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
@@ -43,14 +49,12 @@ exports[`generator - java:openapi-generator gradle-addOpenapiGeneratorPlugin(fal
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
@@ -137,14 +141,20 @@ exports[`generator - java:openapi-generator gradle-addOpenapiGeneratorPlugin(tru
                         </goals>
                         <configuration>
                             <inputSpec>\${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>com.mycompany.myapp.web.api</apiPackage>
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
+
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
@@ -155,14 +165,12 @@ exports[`generator - java:openapi-generator gradle-addOpenapiGeneratorPlugin(tru
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
@@ -237,14 +245,20 @@ exports[`generator - java:openapi-generator maven-addOpenapiGeneratorPlugin(fals
                         </goals>
                         <configuration>
                             <inputSpec>\${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>com.mycompany.myapp.web.api</apiPackage>
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
+
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
@@ -255,14 +269,12 @@ exports[`generator - java:openapi-generator maven-addOpenapiGeneratorPlugin(fals
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
@@ -334,14 +346,20 @@ exports[`generator - java:openapi-generator maven-addOpenapiGeneratorPlugin(true
                         </goals>
                         <configuration>
                             <inputSpec>\${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>com.mycompany.myapp.web.api</apiPackage>
                             <modelPackage>com.mycompany.myapp.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
+
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
                                 <useSpringBoot3>true</useSpringBoot3>
                                 <useBeanValidation>true</useBeanValidation>
@@ -352,14 +370,12 @@ exports[`generator - java:openapi-generator maven-addOpenapiGeneratorPlugin(true
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
