@@ -33,7 +33,8 @@ export interface OpenAPIOperation {
   tags?: string[]; // e.g., ['Booking', 'Notifications']
   requestBodySchema?: string; // e.g., PartyInteractionFVO
   requestBodySchemaObject?: any; // Raw schema (may include $ref)
- requestBodyRequired?: boolean;
+  requestBodyIsArray?: boolean;
+  requestBodyRequired?: boolean;
   responseSchema?: string; // e.g., PartyInteraction or [PartyInteraction]
   responseIsArray?: boolean;
   responseSchemaObject?: any; // Raw schema (may include $ref)
@@ -226,6 +227,7 @@ export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpec
         if (requestBodySpec?.content?.['application/json']?.schema) {
           const requestSchema = requestBodySpec.content['application/json'].schema;
           openAPIOperation.requestBodySchemaObject = requestSchema;
+          openAPIOperation.requestBodyIsArray = Boolean(requestSchema?.type === 'array');
           const schemaName = getSchemaName(requestSchema);
           if (schemaName) {
             openAPIOperation.requestBodySchema = schemaName;
@@ -454,12 +456,82 @@ export function stripDtoSuffix(dtoName: string): string {
  * Optional overrides when a schema base name maps to a differently named domain entity.
  */
 const DOMAIN_NAME_OVERRIDES = new Map<string, string>();
+const DTO_NAME_OVERRIDES = new Map<string, string>();
+const OPENAPI_GENERATOR_MODEL_NAME_COLLISIONS = new Set([
+  'BigDecimal',
+  'BigInteger',
+  'Boolean',
+  'Byte',
+  'Character',
+  'Date',
+  'Double',
+  'Duration',
+  'File',
+  'Float',
+  'Instant',
+  'Integer',
+  'List',
+  'LocalDate',
+  'LocalDateTime',
+  'LocalTime',
+  'Long',
+  'Map',
+  'Object',
+  'OffsetDateTime',
+  'Optional',
+  'Problem',
+  'Set',
+  'Short',
+  'String',
+  'Time',
+  'Timestamp',
+  'URI',
+  'UUID',
+  'ZonedDateTime',
+]);
+
+export interface OpenApiModelNameMapping {
+  sourceName: string;
+  targetName: string;
+}
+
+/**
+ * Keep the OpenAPI contract's component keys intact while giving OpenAPI
+ * Generator a non-conflicting Java model name when a component collides with
+ * a built-in type.
+ */
+export function getOpenApiModelNameMappings(schemaNames: Iterable<string>): OpenApiModelNameMapping[] {
+  const normalizedNames = new Set(Array.from(schemaNames, normalizeDtoTypeName));
+  const mappings: OpenApiModelNameMapping[] = [];
+
+  for (const sourceName of schemaNames) {
+    const normalizedName = normalizeDtoTypeName(sourceName);
+    if (!OPENAPI_GENERATOR_MODEL_NAME_COLLISIONS.has(normalizedName)) {
+      continue;
+    }
+
+    let targetName = `${normalizedName}Model`;
+    let index = 2;
+    while (normalizedNames.has(targetName)) {
+      targetName = `${normalizedName}Model${index}`;
+      index += 1;
+    }
+    normalizedNames.add(targetName);
+    mappings.push({ sourceName, targetName });
+  }
+
+  return mappings;
+}
 
 /**
  * Clear previously registered domain name overrides.
  */
 export function clearDomainNameOverrides(): void {
   DOMAIN_NAME_OVERRIDES.clear();
+}
+
+export function clearDtoNameOverrides(): void {
+  DTO_NAME_OVERRIDES.clear();
 }
 
 /**
@@ -474,6 +546,15 @@ export function registerDomainNameOverride(schemaBaseName: string, domainEntityN
   DOMAIN_NAME_OVERRIDES.set(base, domain);
 }
 
+export function registerDtoNameOverride(schemaName: string, dtoName: string): void {
+  const schema = normalizeDtoTypeName(schemaName);
+  const dto = normalizeDtoTypeName(dtoName);
+  if (!schema || !dto) {
+    return;
+  }
+  DTO_NAME_OVERRIDES.set(schema, dto);
+}
+
 function resolveDomainTypeName(entityName: string): string {
   const normalized = normalizeTypeName(entityName);
   if (!normalized) {
@@ -486,7 +567,8 @@ function resolveDomainTypeName(entityName: string): string {
  * Build fully-qualified class name for DTO
  */
 export function buildDtoFqcn(dtoName: string, basePackage: string): string {
-  return `${basePackage}.service.api.dto.${normalizeDtoTypeName(dtoName)}`;
+  const normalized = normalizeDtoTypeName(dtoName);
+  return `${basePackage}.service.api.dto.${DTO_NAME_OVERRIDES.get(normalized) ?? normalized}`;
 }
 
 /**

@@ -1,0 +1,19 @@
+/* Keep large OpenAPI resource catalogs usable without pushing the active form below the fold. */
+.form-crud-resource-nav {
+  max-height: 18rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+@media (min-width: 1200px) {
+  .form-crud-resource-panel {
+    position: sticky;
+    top: 4.75rem;
+    align-self: flex-start;
+  }
+
+  .form-crud-resource-nav {
+    max-height: calc(100vh - 6rem);
+  }
+}

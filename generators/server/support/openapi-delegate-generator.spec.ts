@@ -390,6 +390,129 @@ describe('OpenAPI delegate generator', () => {
     }
   });
 
+  it('maps collection request bodies item-by-item for collection replacement operations', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-array-body-'));
+    try {
+      const swaggerDir = join(tempDir, 'src/main/resources/swagger');
+      mkdirSync(swaggerDir, { recursive: true });
+      writeFileSync(
+        join(swaggerDir, 'api.yml'),
+        `openapi: 3.0.1\n` +
+          `paths:\n` +
+          `  /pets:\n` +
+          `    post:\n` +
+          `      operationId: createPetBatch\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              type: array\n` +
+          `              items:\n` +
+          `                $ref: '#/components/schemas/Pet'\n` +
+          `      responses:\n` +
+          `        '201':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                $ref: '#/components/schemas/Pet'\n` +
+          `    put:\n` +
+          `      operationId: replacePets\n` +
+          `      requestBody:\n` +
+          `        required: true\n` +
+          `        content:\n` +
+          `          application/json:\n` +
+          `            schema:\n` +
+          `              type: array\n` +
+          `              items:\n` +
+          `                $ref: '#/components/schemas/Pet'\n` +
+          `      responses:\n` +
+          `        '200':\n` +
+          `          content:\n` +
+          `            application/json:\n` +
+          `              schema:\n` +
+          `                type: array\n` +
+          `                items:\n` +
+          `                  $ref: '#/components/schemas/Pet'\n` +
+          `components:\n` +
+          `  schemas:\n` +
+          `    Pet:\n` +
+          `      type: object\n` +
+          `      required:\n` +
+          `        - name\n` +
+          `      properties:\n` +
+          `        id:\n` +
+          `          type: integer\n` +
+          `          format: int64\n` +
+          `        name:\n` +
+          `          type: string\n`,
+      );
+
+      const writes = new Map<string, string>();
+      const currentDir = fileURLToPath(new URL('.', import.meta.url));
+      const rootDir = resolve(currentDir, '../../..');
+      const generator = {
+        log: {
+          debug: () => undefined,
+          warn: () => undefined,
+          ok: () => undefined,
+        },
+        destinationPath: (...paths: string[]) => resolve(tempDir, ...paths),
+        readDestination: (relativePath: string) => {
+          const absolute = join(tempDir, relativePath);
+          return existsSync(absolute) ? readFileSync(absolute) : undefined;
+        },
+        fetchFromInstalledJHipster: (relativePath: string) => join(rootDir, 'generators', relativePath),
+        fs: {
+          write: (filePath: string, contents: string) => {
+            writes.set(filePath, contents);
+          },
+          delete: () => undefined,
+        },
+        getExistingEntities: () => [
+          {
+            definition: {
+              name: 'Pet',
+              entityClass: 'Pet',
+              entityAbsoluteClass: 'com.example.domain.Pet',
+              entityInstance: 'pet',
+              entityInstancePlural: 'pets',
+              entityNameCapitalized: 'Pet',
+              entityNamePlural: 'Pets',
+              entityNameKebabCase: 'pet',
+            },
+          },
+        ],
+      };
+
+      await generateOpenApiDelegates(generator, {
+        enableSwaggerCodegen: true,
+        packageName: 'com.example',
+        packageNameWithSlashes: 'com/example',
+        javaPackageSrcDir: join(tempDir, 'src/main/java/com/example'),
+      } as any);
+
+      const output = [...writes.values()].find(value => value.includes('class PetsApiDelegateImpl')) ?? '';
+      expect(output).toContain('public ResponseEntity<List<Pet>> replacePets(List<Pet> pet)');
+      expect(output).toContain('validateRequiredProperties(pet, List.of(new RequiredPropertyRule("/*", "name", false)));');
+      expect(output).not.toContain('validateRequiredProperties(pet, List.of(new RequiredPropertyRule("", "name", false)));');
+      expect(output).toContain('List<com.example.domain.Pet> entities = pet.stream()');
+      expect(output).toContain('.map(item -> this.mapper.toPetEntity(item))');
+      expect(output).toContain('this.repository.deleteAll();');
+      expect(output).toContain('this.repository.flush();');
+      expect(output).toContain('saved = this.repository.saveAllAndFlush(entities);');
+      expect(output).toContain('List<Pet> responseBody = mapValidResponseBodies(responseEntities, this.mapper::toPetDto');
+      expect(output).toContain('return ResponseEntity.status(resolvedStatus).body(responseBody);');
+      expect(output).toContain('public ResponseEntity<Pet> createPetBatch(List<Pet> pet)');
+      expect(output).toContain('if (responseEntities.size() != 1)');
+      expect(output).toContain('final com.example.domain.Pet responseEntity = responseEntities.get(0);');
+      expect(output).toContain('Pet responseBody = mapResponseBody(() -> this.mapper.toPetDto(responseEntity));');
+      expect(output).not.toContain('ResponseEntity.status(resolvedStatus).body((Pet) null)');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('uses the persistence mapper when an operation response DTO differs from the persisted entity', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
     try {
@@ -852,9 +975,12 @@ describe('OpenAPI delegate generator', () => {
           `          type: string\n` +
           `    CreateBookingResponse:\n` +
           `      type: object\n` +
+          `      required:\n` +
+          `        - bookingReference\n` +
           `      properties:\n` +
-          `        carrierBookingRequestReference:\n` +
-          `          type: string\n`,
+          `        bookingReference:\n` +
+          `          type: string\n` +
+          `          example: fixed-documentation-example\n`,
       );
 
       const writes = new Map<string, string>();
@@ -925,6 +1051,8 @@ describe('OpenAPI delegate generator', () => {
       const signature = output.slice(signatureStart, output.indexOf(') {', signatureStart));
       expect(signature.indexOf('CreateBooking createBooking')).toBeLessThan(signature.indexOf('String apiVersion'));
       expect(output).toContain('validatePayload(createBooking);');
+      expect(output).toContain('entity.setBookingReference(java.util.UUID.randomUUID().toString());');
+      expect(output).not.toContain('entity.setBookingReference("fixed-documentation-example");');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

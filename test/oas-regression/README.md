@@ -36,8 +36,11 @@ ANGULAR_TEST_ENABLED=true test/oas-regression/generate_compile.sh
 
 When Angular validation is enabled, the script runs `npm run webapp:prod` after
 Java compile for builds and
-`npm run webapp:test -- --test-path-pattern=openapi-operations|form-crud` for
-focused OpenAPI UI tests. If `node_modules` is missing, it first runs
+`npm run jest -- --testPathPattern=openapi-operations|form-crud` for focused
+OpenAPI UI tests. This direct Jest invocation avoids the generated `pretest`
+full-tree lint because regression apps are intentionally generated with
+`--skip-prettier`; the separate production build remains the generated Angular
+compile gate. If `node_modules` is missing, the script first runs
 `npm install --no-audit --no-fund --offline`; override with
 `ANGULAR_NPM_INSTALL=skip` to require preinstalled dependencies or
 `ANGULAR_NPM_INSTALL=online` only in network-enabled CI. Use
@@ -87,21 +90,58 @@ and runs the deep TMF683
 present. After smoke tests pass it resets PostgreSQL again, starts the generated
 EvoMaster white-box driver, and runs EvoMaster against the generated API.
 
-The Form CRUD GUI regression starts the generated Angular app locally, logs in
-as `admin/admin`, opens the Form CRUD UI, verifies the resource panel behavior,
-loads list operations, opens detail forms, exercises accordion expansion,
-submits generated create forms, verifies delete flows for created rows where a
-delete operation exists, and opens configured reference pickers. Generated create
-forms and create responses are treated as real regression checks by default:
-invalid generated defaults or non-2xx create responses fail the GUI phase. It
-stores screenshots and
-`form-crud-gui-smoke.json` under the artifact output folder. Keep Playwright
-installed locally and set `FORM_CRUD_GUI_PLAYWRIGHT_ROOT` when it is not in the
-generated app's `node_modules`; no browser evidence is uploaded by the harness.
-`full_matrix.sh` also aggregates those Playwright reports into
+The Form CRUD GUI regression first runs the generated Angular Jest suite, then
+starts the generated Angular app locally, logs in as `admin/admin`, opens the
+Form CRUD UI, verifies the resource panel behavior, loads list operations, opens
+detail forms, exercises accordion expansion, submits generated create forms,
+verifies delete flows for created rows where a delete operation exists, and
+opens configured reference pickers. It also renders every declared OpenAPI
+operation through its generated Form CRUD route. The API Operations page then
+submits every declared operation in dependency order, reuses identifiers and
+resources created earlier in the browser run, and records render, submission,
+successful-response, unexecutable, failure, and persistence round-trip coverage
+separately. Generated create forms and API responses are treated as real
+regression checks by default: invalid generated defaults, failing generated
+Angular unit tests, unexpected HTTP responses, any 5xx response, or a failed
+request/response round trip fails the GUI phase. Declared non-2xx responses and
+operations blocked by a documented workflow precondition are reported
+separately from successful 2xx coverage and must still account for every
+declared operation. It stores screenshots,
+`angular-jest.log`, `angular-jest.json`,
+`form-crud-gui-smoke.json`, and the combined `form-crud-gui-summary.json` under
+the artifact output folder. With `FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED=true`,
+Chromium V8 coverage is collected in bounded route batches, source-mapped by a
+memory-limited worker to the generated executable Form CRUD TypeScript, and
+written under
+`form-crud-gui/source-coverage/{browser,combined}`. The harness looks for Playwright in
+`FORM_CRUD_GUI_PLAYWRIGHT_ROOT`, `PLAYWRIGHT_ROOT`, the app working directory,
+and `/tmp/playwright-tests`. By default it uses
+`FORM_CRUD_GUI_PLAYWRIGHT_ROOT=/tmp/playwright-tests` and will try an offline
+`npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" @playwright/test` if the
+runner is missing. Set `FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=online` only when a
+public npm download is allowed. Browser binaries are not downloaded unless
+`FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=online` is set; use
+`PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-browsers` to keep them outside the
+repo. No browser evidence is uploaded by the harness.
+When the current runtime invocation also runs Angular Jest coverage,
+`FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST` defaults to `true` and the bounded
+worker merges the scoped Jest/Istanbul data into `combined`. It defaults to
+`false` when Jest is skipped, so stale coverage from an older run is not
+reported. Large generated metadata such as `openapi-operations.model.ts` is
+excluded from executable source metrics. Set
+`FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=1` for the lowest peak
+memory use; the default of `3` batches adjacent route loads while remaining
+below the measured large-artifact heap limit.
+`full_matrix.sh` also aggregates those Angular Jest and Playwright reports into
 `full-matrix-form-crud-gui-status.json` and embeds the same data under
 `formCrudGui` in `full-matrix-summary.json`, including resource coverage,
-create/list exercise counts, failures, durations, and screenshot counts.
+operation rendering/submission counts, source line and branch coverage,
+create/list exercise counts, generated Angular Jest pass/fail counts, failures,
+durations, and screenshot counts. Operation-render coverage and source coverage
+are distinct metrics. The summaries also keep 2xx success, declared non-2xx,
+contract-covered, workflow-blocked, and fully accounted operation counts
+separate; a passing CRUD workflow is not reported as 100% 2xx, source-line, or
+branch coverage.
 
 By default, runtime evidence and generated request payloads are written to
 `/tmp/generator-jhipster-regression`. Set `OUTPUT_DIR` to change that location.
@@ -116,18 +156,47 @@ SKIP_OAS_TO_JDL=true
 REGRESSION_APP_ROOT=/path/to/generated/apps
 PORT=8081
 OUTPUT_DIR=/tmp/generator-jhipster-regression
+ANGULAR_NODE_MODULES_CACHE_ENABLED=true
+ANGULAR_NODE_MODULES_CACHE_DIR=/tmp/generator-jhipster-regression/npm-node-modules-cache
 TMF_PAYLOAD=/path/to/party-interaction-full.json
 ARTIFACT_INCLUDE=TMF683,oas3v1
 ARTIFACT_EXCLUDE=DCSA_EBL
 EVOMASTER_ENABLED=true
 FORM_CRUD_GUI_ENABLED=true
+FORM_CRUD_GUI_JEST_ENABLED=true
+FORM_CRUD_GUI_JEST_COMMAND="npx jest --runInBand --coverage --config jest.conf.js"
+FORM_CRUD_GUI_JEST_NODE_OPTIONS="--max-old-space-size=6144"
+FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS=900
+FORM_CRUD_GUI_NODE_OPTIONS="--max-old-space-size=6144"
+FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS=2400
+FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS=30
 FORM_CRUD_GUI_PLAYWRIGHT_ROOT=/tmp/playwright-tests
+FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=offline
+FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=skip
 FORM_CRUD_GUI_PORT=4201
 FORM_CRUD_GUI_MAX_LIST_RESOURCES=all
 FORM_CRUD_GUI_MAX_CREATE_RESOURCES=all
+FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS=all
+FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID=
+FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH=
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED=auto
+FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT=8085
+FORM_CRUD_REFERENCE_PICKER_CONFIG_URL=http://localhost:8085/api/form-crud-reference-pickers
+FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN=
+FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION=false
 FORM_CRUD_GUI_EXERCISE_CREATE=true
+FORM_CRUD_GUI_EXERCISE_UPDATE=true
 FORM_CRUD_GUI_EXERCISE_DELETE=true
+FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED=true
+FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX=false
+FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED=true
 FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS=true
+FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED=true
+FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=3
+FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES=67108864
+FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES=2097152
+FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB=1024
+FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST=true
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR=true
 FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM=true
 FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR=true
@@ -186,10 +255,93 @@ EVOMASTER_PACKAGES_TO_SKIP_INSTRUMENTATION=com.example.evomaster,org.example.opt
 EVOMASTER_JAVA_OPTS="-Xms512m -Xmx4g"
 ```
 
+Set `FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID` and
+`FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH` to run only matching reference-picker
+scenarios. The operation selector accepts either the OpenAPI `operationId` or the
+generated UI operation ID; the source path is an exact match. A requested selector
+that matches no discovered scenario fails with the available candidates.
+
+Fresh generated apps reuse an immutable local `node_modules` tree keyed by the
+normalized dependency sections in `package.json`. Disable that cache with
+`ANGULAR_NODE_MODULES_CACHE_ENABLED=false` or move it with
+`ANGULAR_NODE_MODULES_CACHE_DIR`; no cache content leaves the local machine.
+
 Runtime failures are collected across the matrix by default. Set
 `RUNTIME_FAIL_FAST=true` to stop at the first EvoMaster failure; otherwise the
 loop records failures in `$OUTPUT_DIR/runtime-summary.json` and exits nonzero
-after every matched artifact has been attempted.
+after every matched artifact has been attempted. Direct `runtime_loop.sh` runs
+also write `$OUTPUT_DIR/runtime-junit.xml`,
+`$OUTPUT_DIR/runtime-artifacts.json`, `$OUTPUT_DIR/runtime-failures.json`,
+`$OUTPUT_DIR/runtime-form-crud-gui-summary.json`, and
+`$OUTPUT_DIR/runtime-evomaster-summary.json` so CI can consume the same
+artifact-level evidence without requiring the full-matrix wrapper.
+When `full_matrix.sh` invokes `runtime_loop.sh`, those direct runtime reports
+are archived under `$OUTPUT_DIR/<artifact>/harness/` before the next artifact
+run so per-artifact evidence is not overwritten.
+
+The generic reference-picker configuration API is a normal OAS3 artifact at
+`/home/aruvic/development/oas-to-jdl/artifacts/form-crud-reference-picker-config-api.yaml`.
+Generate it like the other artifacts to create a standalone JHipster-backed
+configuration service. Generated business apps keep the compatibility endpoint
+`/api/form-crud-reference-pickers`; when `FORM_CRUD_REFERENCE_PICKER_CONFIG_URL`
+or `jhipster.form-crud.reference-picker.config-url` is set, that endpoint
+proxies GET/PUT configuration calls to the external service instead of using
+local temp-file storage. The generated Angular administration UI always calls
+this same-origin endpoint; it never sends the application token directly to a
+cross-origin configuration service. The UI keeps using a stable string `id`
+for local compatibility; the proxy maps that value to the external service's
+`pickerId` field and maps `pickerId` back to `id` on reads.
+The external API avoids a top-level `id` property because oas-to-jdl reserves
+that name for the database identifier.
+For a protected external service, configure
+`FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN` (or
+`jhipster.form-crud.reference-picker.config-bearer-token`). Alternatively,
+set `FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION=true` only when the
+business and configuration services deliberately share token trust. Caller
+authorization is not forwarded by default.
+For automated GUI runs, `runtime_loop.sh` defaults
+`FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED=auto`: when Form CRUD GUI
+testing is enabled and no `FORM_CRUD_REFERENCE_PICKER_CONFIG_URL` is supplied,
+the harness starts a local OAS-compatible reference-picker configuration service
+on `FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT` and stores its JSON data
+under `$OUTPUT_DIR/form-crud-reference-pickers.json`. Set
+`FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_ENABLED=false` to use each generated
+app's local temp-file fallback, or set `FORM_CRUD_REFERENCE_PICKER_CONFIG_URL`
+to point at a generated standalone config app or another compatible service.
+
+Run `test/oas-regression/reference_picker_external_integration.sh` after
+generating the config artifact and a consumer artifact to verify the production
+topology locally. The script starts separate PostgreSQL databases and generated
+Spring applications, confirms the services issue different JWTs, verifies the
+config API rejects unauthenticated access, saves through the consumer's
+same-origin proxy, then starts the generated consumer Angular application.
+Playwright logs in, edits and saves the mapping through the Administration UI,
+reloads it, and verifies the persisted value. The script finally reads through
+both services and checks the standalone configuration database. Set
+`GUI_ENABLED=false` only for a backend-only diagnostic run. Logs, redacted
+responses, screenshots, timestamps, and
+`status.json` are written under
+`/tmp/generator-jhipster-regression/reference-picker-external-integration` by
+default; processes and containers are removed on success or failure.
+
+The Playwright Form CRUD run renders every declared operation through both
+`/form-crud/:operationId` and `/openapi-operations`. With
+`FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED=true`, it submits every
+operation through the API Operations UI in dependency order: create requests
+seed identifiers for detail/update/delete requests, and DELETE is restricted to
+resources created by that browser sweep. With
+`FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED=true`, any operation that
+is neither submitted nor explicitly classified as workflow-blocked is fatal.
+Set `FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX=true` only for contracts whose
+workflows make every operation synchronously executable. Failed schema-aware
+persistence round trips remain fatal. The run combines
+Chromium V8 coverage with Angular Jest coverage for generated Form CRUD,
+reference-picker administration, and API Operations TypeScript. Per-artifact
+Istanbul JSON, LCOV, summaries, converted-script metadata, and conversion
+errors are written under
+`$OUTPUT_DIR/<artifact>/form-crud-gui/source-coverage/`. Operation rendering
+and execution ratios, round-trip ratios, and combined source line/branch ratios
+are aggregated into the runtime and full-matrix JSON summaries.
 
 EvoMaster evidence is stored under
 `$OUTPUT_DIR/<artifact>/evomaster/`, including the generated tests, WFC report,

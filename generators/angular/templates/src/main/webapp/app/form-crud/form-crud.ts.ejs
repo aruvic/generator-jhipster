@@ -206,7 +206,7 @@ class FormCrudAccordionWrapper extends FieldWrapper implements OnInit {
           >
             Select existing
           </button>
-          <button class="btn btn-outline-primary" type="button" (click)="add()" [disabled]="props.disabled">
+          <button class="btn btn-outline-primary" type="button" (click)="addItem()" [disabled]="props.disabled">
             Add
           </button>
           <button class="btn btn-outline-secondary" type="button" (click)="clear()" [disabled]="props.disabled || !field.fieldGroup?.length">
@@ -229,7 +229,7 @@ class FormCrudAccordionWrapper extends FieldWrapper implements OnInit {
             </button>
             <div class="btn-group btn-group-sm me-2">
               <button class="btn btn-outline-secondary" type="button" (click)="duplicate(index)" [disabled]="props.disabled">Duplicate</button>
-              <button class="btn btn-outline-danger" type="button" (click)="remove(index)" [disabled]="props.disabled">Remove</button>
+              <button class="btn btn-outline-danger" type="button" (click)="removeItem(index)" [disabled]="props.disabled">Remove</button>
             </div>
           </h5>
           <div class="accordion-collapse collapse" [class.show]="isItemOpen(index)">
@@ -247,25 +247,28 @@ class FormCrudAccordionWrapper extends FieldWrapper implements OnInit {
 class FormCrudRepeatType extends FieldArrayType<FormlyFieldConfig> {
   private readonly openItems = new Set<number>();
 
-  add(index?: number, initialModel?: unknown): void {
+  addItem(index?: number, initialModel?: unknown): void {
     super.add(index, initialModel === undefined ? this.cloneValue(this.itemDefaultValue()) : this.cloneValue(initialModel));
+    this.formControl.markAsDirty();
   }
 
   duplicate(index: number): void {
     const current = Array.isArray(this.model) ? this.model[index] : undefined;
-    this.add(index + 1, current);
+    this.addItem(index + 1, current);
   }
 
   clear(): void {
     for (let index = (this.field.fieldGroup?.length ?? 0) - 1; index >= 0; index--) {
-      this.remove(index);
+      super.remove(index);
     }
     this.openItems.clear();
+    this.formControl.markAsDirty();
   }
 
-  override remove(index: number): void {
+  removeItem(index: number): void {
     super.remove(index);
     this.openItems.delete(index);
+    this.formControl.markAsDirty();
   }
 
   isItemOpen(index: number): boolean {
@@ -281,6 +284,7 @@ class FormCrudRepeatType extends FieldArrayType<FormlyFieldConfig> {
   }
 
   private itemDefaultValue(): unknown {
+    if (this.props.itemDefaultValue !== undefined) return this.props.itemDefaultValue;
     const fieldArray = this.field.fieldArray;
     if (!fieldArray || Array.isArray(fieldArray) || typeof fieldArray === 'function') return undefined;
     return fieldArray.defaultValue;
@@ -296,6 +300,7 @@ class FormCrudRepeatType extends FieldArrayType<FormlyFieldConfig> {
 @Component({
   selector: '<%= jhiPrefixDashed %>-form-crud',
   templateUrl: './form-crud.html',
+  styleUrl: './form-crud.scss',
   imports: [SharedModule, ReactiveFormsModule, RouterLink, FormlyForm],
 })
 export default class FormCrud implements OnInit, OnDestroy {
@@ -331,6 +336,7 @@ export default class FormCrud implements OnInit, OnDestroy {
   fields: FormlyFieldConfig[] = [];
   responseDetailModel: Record<string, unknown> = {};
   responseDetailFields: FormlyFieldConfig[] = [];
+  private readonly detailReferencePickerDirtyPaths = new Set<string>();
 
   private readonly http = inject(HttpClient);
   private readonly route = inject(ActivatedRoute);
@@ -502,13 +508,15 @@ export default class FormCrud implements OnInit, OnDestroy {
       this.detailError.set('Unable to determine the item identifier for this operation.');
       return;
     }
+    const fields = this.detailSchemaFields(resource);
+    const originalBodySource = this.selectedResponseItem();
     const request = this.buildRequest(operation, {
       pathValues,
-      bodySource: this.responseDetailModel,
-      fields: this.detailSchemaFields(resource),
+      bodySource: this.sparseDetailBodySource(fields, this.responseDetailModel, originalBodySource, this.responseDetailForm),
+      fields,
       includeEmptyStructures: true,
       omitAbsentEmptyStructures: true,
-      originalBodySource: this.selectedResponseItem(),
+      originalBodySource,
     });
     const submittedBody = this.deepClone(request.body);
     this.isDetailSubmitting.set(true);
@@ -640,14 +648,12 @@ export default class FormCrud implements OnInit, OnDestroy {
     if (!state) return;
     const selectedValue = this.referencePickerSelectedValue(state.config, row.item, state.field);
     const currentValue = this.valueAtPath(state.targetModel, state.fieldPath);
-    if (Array.isArray(currentValue) || state.config.multiple !== false) {
-      this.setValueAtPath(state.targetModel, state.fieldPath, this.mergeReferencePickerArrayValue(currentValue, selectedValue, state.config, state.field));
-    } else {
-      this.setValueAtPath(state.targetModel, state.fieldPath, selectedValue);
-    }
-    state.targetForm.patchValue(state.formValue);
-    state.targetForm.markAsDirty();
-    state.targetForm.updateValueAndValidity({ emitEvent: true });
+    const nextValue =
+      Array.isArray(currentValue) || state.config.multiple !== false
+        ? this.mergeReferencePickerArrayValue(currentValue, selectedValue, state.config, state.field)
+        : selectedValue;
+    this.setValueAtPath(state.targetModel, state.fieldPath, nextValue);
+    if (state.targetForm === this.responseDetailForm) this.detailReferencePickerDirtyPaths.add(state.fieldPath);
     this.refreshReferencePickerTargetFields(state);
     this.closeReferencePicker();
     this.publishDebugHook();
@@ -656,6 +662,7 @@ export default class FormCrud implements OnInit, OnDestroy {
   loadDetailForm(item: unknown, resource: CrudResource | undefined): void {
     this.selectedResponseItem.set(item);
     this.responseDetailForm = new FormGroup({});
+    this.detailReferencePickerDirtyPaths.clear();
     const fields = this.detailSchemaFields(resource);
     this.responseDetailModel = this.detailModelForItem(item, fields);
     this.responseDetailFields = this.detailFieldsForItem(item, fields, !resource?.updateOperation);
@@ -674,6 +681,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       const fields = this.detailSchemaFields(this.currentResource());
       const readonly = !this.currentResource()?.updateOperation;
       const effectiveFields = fields.length ? fields : this.inferredFieldsFromItem(selectedItem);
+      this.responseDetailForm = new FormGroup({});
       this.responseDetailFields = [
         {
           wrappers: ['form-crud-accordion'],
@@ -686,6 +694,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       ];
       return;
     }
+    this.form = new FormGroup({});
     this.fields = this.fieldsForOperation(this.selectedOperation());
   }
 
@@ -766,13 +775,14 @@ export default class FormCrud implements OnInit, OnDestroy {
     }
 
     if (field.type === 'array') {
-      const itemField = this.arrayItemField(this.effectiveArrayItemField(field), readonly, depth + 1, field, targetModel, targetForm, formValue, operation);
+      const effectiveItemField = this.effectiveArrayItemField(field);
+      const itemField = this.arrayItemField(effectiveItemField, readonly, depth + 1, field, targetModel, targetForm, formValue, operation);
       const referencePicker = this.referencePickerForField(field, operation);
       return {
         key: field.name,
         type: 'form-crud-repeat',
         className: 'col-12',
-        defaultValue: this.deepClone(this.initialFieldValue(field)),
+        defaultValue: targetForm === this.responseDetailForm ? undefined : this.deepClone(this.initialFieldValue(field)),
         props: {
           label: this.fieldLabel(field),
           required: field.required,
@@ -781,6 +791,7 @@ export default class FormCrud implements OnInit, OnDestroy {
           itemLabel: this.singularLabel(this.fieldLabel(field)),
           minItems: field.minItems,
           maxItems: field.maxItems,
+          itemDefaultValue: this.deepClone(this.initialFieldValue(effectiveItemField)),
           referencePicker,
           openReferencePicker: disabled ? undefined : () => this.openReferencePicker(field, targetModel, targetForm, formValue, operation),
         },
@@ -789,17 +800,21 @@ export default class FormCrud implements OnInit, OnDestroy {
     }
 
     if (field.type === 'object') {
-      return this.objectJsonField(field, disabled);
+      return this.objectJsonField(field, disabled, true, targetForm !== this.responseDetailForm);
     }
 
     return {
       key: field.name,
       type: field.enumValues?.length ? 'select' : field.type === 'boolean' ? 'checkbox' : 'input',
       className: 'col-12 col-md-6',
-      defaultValue: this.isFileInputField(field, operation) ? '' : this.initialFieldValue(field),
+      defaultValue: this.isFileInputField(field, operation)
+        ? ''
+        : targetForm === this.responseDetailForm
+          ? undefined
+          : this.initialFieldValue(field),
       props: {
         label: this.fieldLabel(field),
-        required: this.formlyRequired(field),
+        required: targetForm === this.responseDetailForm && this.formlyRequired(field) ? false : this.formlyRequired(field),
         requiredIndicator: field.required,
         disabled,
         description: field.description,
@@ -812,6 +827,10 @@ export default class FormCrud implements OnInit, OnDestroy {
         pattern: field.pattern,
         options: field.enumValues?.map(value => ({ label: value, value })),
       },
+      expressions:
+        targetForm === this.responseDetailForm && this.formlyRequired(field)
+          ? { 'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig) }
+          : undefined,
     };
   }
 
@@ -888,7 +907,10 @@ export default class FormCrud implements OnInit, OnDestroy {
     const inferredItemFields = this.inferredArrayItemFields(field, arrayField);
     if (inferredItemFields.length && (field.type !== 'object' || !field.fields?.length)) {
       return {
-        defaultValue: this.deepClone(this.initialFieldValue({ ...field, type: 'object', fields: inferredItemFields })),
+        defaultValue:
+          targetForm === this.responseDetailForm
+            ? undefined
+            : this.deepClone(this.initialFieldValue({ ...field, type: 'object', fields: inferredItemFields })),
         fieldGroupClassName: 'row g-3',
         fieldGroup: this.schemaFieldGroup(inferredItemFields, readonly, depth + 1, targetModel, targetForm, formValue, operation),
       };
@@ -897,14 +919,15 @@ export default class FormCrud implements OnInit, OnDestroy {
       const itemFields = field.fields?.length ? field.fields : inferredItemFields;
       if (itemFields.length) {
         return {
-          defaultValue: this.deepClone(this.initialFieldValue({ ...field, fields: itemFields })),
+          defaultValue:
+            targetForm === this.responseDetailForm ? undefined : this.deepClone(this.initialFieldValue({ ...field, fields: itemFields })),
           fieldGroupClassName: 'row g-3',
           fieldGroup: this.schemaFieldGroup(itemFields, readonly, depth + 1, targetModel, targetForm, formValue, operation),
         };
       }
       return {
         ...this.objectJsonField(field, disabled, false),
-        defaultValue: this.structuredDefaultValue(field),
+        defaultValue: targetForm === this.responseDetailForm ? undefined : this.structuredDefaultValue(field),
       };
     }
     if (field.type === 'array') {
@@ -914,7 +937,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       type: field.enumValues?.length ? 'select' : field.type === 'boolean' ? 'checkbox' : 'input',
       props: {
         label: this.fieldLabel(field),
-        required: this.formlyRequired(field),
+        required: targetForm === this.responseDetailForm && this.formlyRequired(field) ? false : this.formlyRequired(field),
         requiredIndicator: field.required,
         disabled,
         description: field.description,
@@ -927,6 +950,10 @@ export default class FormCrud implements OnInit, OnDestroy {
         pattern: field.pattern,
         options: field.enumValues?.map(value => ({ label: value, value })),
       },
+      expressions:
+        targetForm === this.responseDetailForm && this.formlyRequired(field)
+          ? { 'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig) }
+          : undefined,
     };
   }
 
@@ -1086,11 +1113,11 @@ export default class FormCrud implements OnInit, OnDestroy {
     return JSON.stringify(value, null, 2);
   }
 
-  private objectJsonField(field: OpenApiSchemaField, readonly: boolean, includeKey = true): FormlyFieldConfig {
+  private objectJsonField(field: OpenApiSchemaField, readonly: boolean, includeKey = true, useDefaultValue = true): FormlyFieldConfig {
     const config: FormlyFieldConfig = {
       type: 'textarea',
       className: 'col-12',
-      defaultValue: this.structuredDefaultValue(field),
+      defaultValue: useDefaultValue ? this.structuredDefaultValue(field) : undefined,
       props: {
         label: this.fieldLabel(field),
         required: field.required,
@@ -1107,6 +1134,63 @@ export default class FormCrud implements OnInit, OnDestroy {
     };
     if (includeKey) config.key = field.name;
     return config;
+  }
+
+  private sparseDetailBodySource(
+    fields: readonly OpenApiSchemaField[],
+    source: unknown,
+    originalSource: unknown,
+    control: AbstractControl | null,
+    includeCurrentValues = false,
+  ): Record<string, unknown> {
+    const sourceObject = source && typeof source === 'object' && !Array.isArray(source) ? (source as Record<string, unknown>) : {};
+    const originalObject =
+      originalSource && typeof originalSource === 'object' && !Array.isArray(originalSource)
+        ? (originalSource as Record<string, unknown>)
+        : {};
+    const output: Record<string, unknown> = {};
+    for (const field of fields) {
+      const fieldControl = control?.get(field.name) ?? null;
+      const originalPresent = Object.prototype.hasOwnProperty.call(originalObject, field.name) && originalObject[field.name] !== undefined;
+      const fieldPath = this.normalizeFieldPath(field.path.length ? field.path.join('.') : field.name);
+      const pickerMutated = this.detailReferencePickerPathAffects(fieldPath);
+      if (!field.required && !originalPresent && fieldControl?.dirty !== true && !pickerMutated && !includeCurrentValues) continue;
+      output[field.name] = this.sparseDetailValue(
+        field,
+        sourceObject[field.name],
+        originalObject[field.name],
+        fieldControl,
+        includeCurrentValues || fieldControl?.dirty === true || pickerMutated,
+      );
+    }
+    return output;
+  }
+
+  private detailReferencePickerPathAffects(fieldPath: string): boolean {
+    return Array.from(this.detailReferencePickerDirtyPaths).some(
+      pickerPath => pickerPath === fieldPath || pickerPath.startsWith(`${fieldPath}.`) || fieldPath.startsWith(`${pickerPath}.`),
+    );
+  }
+
+  private sparseDetailValue(
+    field: OpenApiSchemaField,
+    value: unknown,
+    originalValue: unknown,
+    control: AbstractControl | null,
+    includeCurrentValues = false,
+  ): unknown {
+    if (field.type === 'object' && field.fields?.length && value && typeof value === 'object' && !Array.isArray(value)) {
+      return this.sparseDetailBodySource(field.fields, value, originalValue, control, includeCurrentValues);
+    }
+    if (field.type === 'array' && Array.isArray(value)) {
+      const itemField = this.effectiveArrayItemField(field, this.firstArrayValue(value));
+      if (!itemField) return value;
+      const originalItems = Array.isArray(originalValue) ? originalValue : [];
+      return value.map((item, index) =>
+        this.sparseDetailValue(itemField, item, originalItems[index], control?.get(String(index)) ?? null, includeCurrentValues),
+      );
+    }
+    return value;
   }
 
   private numericDefaultValue(field: OpenApiSchemaField): number {
@@ -1310,7 +1394,8 @@ export default class FormCrud implements OnInit, OnDestroy {
     const pathParameters = new Set(this.pathParameterNames(operation).map(parameter => this.normalizedName(parameter)));
     return fields
       .filter(field => this.isWritablePayloadField(operation, field, pathParameters))
-      .map(field => this.payloadFieldForOperation(operation, field, pathParameters));
+      .map(field => this.payloadFieldForOperation(operation, field, pathParameters))
+      .map(field => this.payloadFieldWithConfiguredReferencePickerFields(operation, field));
   }
 
   private payloadFieldForOperation(
@@ -1328,6 +1413,87 @@ export default class FormCrud implements OnInit, OnDestroy {
       next.items = this.payloadFieldForOperation(operation, field.items, pathParameters);
     }
     return next;
+  }
+
+  private payloadFieldWithConfiguredReferencePickerFields(
+    operation: OpenApiOperationDefinition,
+    field: OpenApiSchemaField,
+  ): OpenApiSchemaField {
+    const fieldPath = this.pathWithoutArrayIndexes(this.normalizeFieldPath(field.path.length ? field.path.join('.') : field.name));
+    if (!fieldPath) return field;
+    const configs = this.referencePickerConfigs().filter(
+      config =>
+        this.referencePickerMatchesOperation(config, operation) &&
+        this.pathWithoutArrayIndexes(this.normalizeFieldPath(config.sourcePath)) === fieldPath,
+    );
+    if (!configs.length) return field;
+    const targetField = this.findSchemaFieldByPath(operation.requestBodyFields ?? [], fieldPath);
+    let next: OpenApiSchemaField = { ...field, items: field.items ? { ...field.items } : field.items };
+    for (const config of configs) {
+      const targetPrefix = this.referencePickerTargetPrefix(targetField);
+      for (const mapping of this.effectiveReferencePickerMappings(config, config.copyFields ?? [], targetField)) {
+        const targetPath = this.normalizeFieldPath(mapping.target);
+        if (!targetPath || this.schemaFieldPathExists(next, targetPath)) continue;
+        if (!this.referencePickerPayloadTargetAllowed(targetPath, targetField, targetPrefix)) continue;
+        next = this.addSyntheticReferencePickerField(next, targetPath);
+      }
+    }
+    return next;
+  }
+
+  private addSyntheticReferencePickerField(field: OpenApiSchemaField, targetPath: string): OpenApiSchemaField {
+    const next: OpenApiSchemaField = { ...field, items: field.items ? { ...field.items } : field.items };
+    const target = next.type === 'array' ? next.items : next;
+    if (!target) return next;
+    const parts = targetPath.split('.').filter(Boolean);
+    this.addSyntheticReferencePickerFieldToTarget(target, parts, next.pointer || `/${next.name}`, next.path.length ? next.path : [next.name]);
+    return next;
+  }
+
+  private addSyntheticReferencePickerFieldToTarget(
+    target: OpenApiSchemaField,
+    parts: string[],
+    pointerPrefix: string,
+    pathPrefix: readonly string[],
+  ): void {
+    const [part, ...rest] = parts;
+    if (!part) return;
+    const fields = [...(target.fields ?? [])];
+    target.fields = fields;
+    let child = fields.find(candidate => this.normalizedName(candidate.name) === this.normalizedName(part));
+    if (!child) {
+      child = {
+        name: part,
+        pointer: `${pointerPrefix.replace(/\/+$/, '')}/${part}`,
+        path: [...pathPrefix, part],
+        required: false,
+        nullable: false,
+        type: 'string',
+        readOnly: false,
+        writeOnly: false,
+      };
+      fields.push(child);
+    }
+    if (rest.length) {
+      child.type = child.type === 'array' ? 'array' : 'object';
+      if (child.type === 'array') {
+        child.items ??= {
+          name: `${part} item`,
+          pointer: `${child.pointer}/0`,
+          path: [...child.path, '0'],
+          required: false,
+          nullable: false,
+          type: 'object',
+          readOnly: false,
+          writeOnly: false,
+          fields: [],
+        };
+        this.addSyntheticReferencePickerFieldToTarget(child.items, rest, child.items.pointer, child.items.path);
+      } else {
+        child.fields ??= [];
+        this.addSyntheticReferencePickerFieldToTarget(child, rest, child.pointer, child.path);
+      }
+    }
   }
 
   private isWritablePayloadField(
@@ -1352,10 +1518,20 @@ export default class FormCrud implements OnInit, OnDestroy {
         const targetPath = this.pathWithoutArrayIndexes(this.normalizeFieldPath(mapping.target));
         if (!targetPath) continue;
         const rootedTargetPath = targetPath === sourcePath || targetPath.startsWith(`${sourcePath}.`) ? targetPath : `${sourcePath}.${targetPath}`;
-        if (fieldPath === rootedTargetPath) return true;
+        if (fieldPath === rootedTargetPath && this.referencePickerPayloadTargetAllowed(targetPath, targetField)) return true;
       }
     }
     return false;
+  }
+
+  private referencePickerPayloadTargetAllowed(targetPath: string, targetField?: OpenApiSchemaField, targetPrefix = ''): boolean {
+    const path = this.normalizeFieldPath(targetPath);
+    const leaf = path.split('.').filter(Boolean).pop() ?? path;
+    if (!this.referencePickerIdentityFields().some(identity => this.normalizedName(identity) === this.normalizedName(leaf))) return true;
+    let relativePath = path;
+    if (targetPrefix && relativePath.startsWith(`${targetPrefix}.`)) relativePath = relativePath.slice(targetPrefix.length + 1);
+    const target = this.referencePickerCopyTargetField(targetField, targetPrefix);
+    return this.schemaFieldPathExists(target, relativePath) || this.isStructuredReferencePickerTarget(targetField, targetPrefix);
   }
 
   private objectFromFields(fields: readonly OpenApiSchemaField[], source: unknown, options: boolean | BodySerializationOptions = false): Record<string, unknown> {
@@ -1379,6 +1555,14 @@ export default class FormCrud implements OnInit, OnDestroy {
   private valueForField(field: OpenApiSchemaField, rawValue: unknown, options: boolean | BodySerializationOptions = false): unknown {
     const serializationOptions = this.bodySerializationOptions(options);
     if (field.type === 'object' && field.fields?.length) {
+      if (
+        serializationOptions.omitAbsentEmptyStructures &&
+        !field.required &&
+        (rawValue === undefined || rawValue === null) &&
+        !this.hasOriginalStructuredValue(serializationOptions.originalSource)
+      ) {
+        return undefined;
+      }
       const source = typeof rawValue === 'string' ? this.parseJsonValue(rawValue) : rawValue;
       const value = this.objectFromFields(field.fields, source, serializationOptions);
       if (!field.required && this.hasDirectPlaceholderType(value)) {
@@ -1780,6 +1964,35 @@ export default class FormCrud implements OnInit, OnDestroy {
     return field.required && field.type !== 'boolean';
   }
 
+  private detailRequiredFieldActive(field: FormlyFieldConfig): boolean {
+    let parent = field.parent;
+    while (parent) {
+      const branchValue = this.detailBranchValue(parent);
+      if (parent.key !== undefined && parent.key !== null && parent.props?.required !== true && !this.hasMeaningfulDetailValue(branchValue)) {
+        return false;
+      }
+      parent = parent.parent;
+    }
+    return true;
+  }
+
+  private detailBranchValue(field: FormlyFieldConfig): unknown {
+    const key = field.key;
+    const model = field.model;
+    if ((typeof key === 'string' || typeof key === 'number') && model !== null && typeof model === 'object') {
+      const container = model as Record<string | number, unknown>;
+      return container[key];
+    }
+    return field.formControl ? field.formControl.value : model;
+  }
+
+  private hasMeaningfulDetailValue(value: unknown): boolean {
+    if (value === undefined || value === null || value === '') return false;
+    if (Array.isArray(value)) return value.some(item => this.hasMeaningfulDetailValue(item));
+    if (typeof value === 'object') return Object.values(value as Record<string, unknown>).some(item => this.hasMeaningfulDetailValue(item));
+    return true;
+  }
+
   private fieldLabel(field: OpenApiSchemaField): string {
     return this.titleLabel(field.name);
   }
@@ -2150,12 +2363,44 @@ export default class FormCrud implements OnInit, OnDestroy {
     const copyFields = config.copyFields ?? [];
     if (!copyFields.length && config.mode !== 'reference') return JSON.parse(JSON.stringify(sourceObject));
     const output: Record<string, unknown> = {};
+    const targetPrefix = this.referencePickerTargetPrefix(targetField);
     const mappings = this.effectiveReferencePickerMappings(config, copyFields, targetField);
     for (const mapping of mappings) {
       const value = this.valueAtPath(sourceObject, this.normalizeFieldPath(mapping.source));
       if (value !== undefined) this.setValueAtPath(output, this.normalizeFieldPath(mapping.target), value);
     }
+    this.setReferencePickerSchemaDefaults(output, this.referencePickerCopyTargetField(targetField, targetPrefix), targetPrefix);
     return output;
+  }
+
+  private setReferencePickerSchemaDefaults(
+    output: Record<string, unknown>,
+    targetField: OpenApiSchemaField | undefined,
+    targetPrefix: string,
+  ): void {
+    if (!targetField?.fields?.length) return;
+    let targetValue = output;
+    if (targetPrefix) {
+      const existing = this.valueAtPath(output, targetPrefix);
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+        this.setValueAtPath(output, targetPrefix, {});
+      }
+      targetValue = this.valueAtPath(output, targetPrefix) as Record<string, unknown>;
+    }
+    for (const field of targetField.fields) {
+      if (field.required && !this.payloadValuePresent(field, targetValue[field.name]) && !field.readOnly) {
+        targetValue[field.name] = this.initialFieldValue(field);
+      }
+    }
+    for (const field of targetField.fields) {
+      if (!field.discriminatorValues?.length) continue;
+      const current = targetValue[field.name];
+      if (typeof current === 'string' && field.discriminatorValues.includes(current)) continue;
+      const defaultValue = typeof field.defaultValue === 'string' && field.discriminatorValues.includes(field.defaultValue)
+        ? field.defaultValue
+        : field.discriminatorValues[0];
+      targetValue[field.name] = defaultValue;
+    }
   }
 
   private mergeReferencePickerArrayValue(
@@ -2227,7 +2472,7 @@ export default class FormCrud implements OnInit, OnDestroy {
     const targetPrefix = this.referencePickerTargetPrefix(targetField);
     const mappings = configuredMappings
       .map(mapping => this.qualifiedReferencePickerMapping(mapping, targetPrefix, targetField))
-      .filter(mapping => this.referencePickerTargetPathAllowed(mapping.target, targetField, targetPrefix));
+      .filter(mapping => Boolean(this.normalizeFieldPath(mapping.source)) && Boolean(this.normalizeFieldPath(mapping.target)));
     if (config.mode === 'reference' || targetField) {
       for (const defaultMapping of this.defaultReferencePickerMappings(config, targetPrefix, targetField)) {
         const defaultTarget = this.normalizeFieldPath(defaultMapping.target);
@@ -2278,7 +2523,8 @@ export default class FormCrud implements OnInit, OnDestroy {
     const candidateFields = this.referencePickerCopyCandidateFields(field, targetPrefix);
     const names = field
       ? this.referencePickerIdentityFields().filter(identity =>
-          candidateFields.some(candidate => this.normalizedName(candidate.name) === this.normalizedName(identity)),
+          candidateFields.some(candidate => this.normalizedName(candidate.name) === this.normalizedName(identity)) ||
+          Boolean(targetPrefix || this.isStructuredReferencePickerTarget(field, targetPrefix)),
         )
       : [...this.referencePickerIdentityFields()];
     for (const candidate of candidateFields) {
@@ -2292,10 +2538,28 @@ export default class FormCrud implements OnInit, OnDestroy {
     return (target?.fields ?? []).filter(candidate => this.isReferencePickerCopyCandidateField(candidate));
   }
 
+  private explicitReferencePickerMappings(
+    config: FormCrudReferencePickerConfig,
+    targetPrefix = '',
+  ): { source: string; target: string }[] {
+    return (config.copyFields ?? [])
+      .filter(mapping => typeof mapping?.source === 'string' && typeof mapping?.target === 'string')
+      .map(mapping => this.qualifiedReferencePickerMapping(mapping, targetPrefix));
+  }
+
   private referencePickerCopyTargetField(field?: OpenApiSchemaField, targetPrefix = ''): OpenApiSchemaField | undefined {
     const target = field?.type === 'array' ? field.items : field;
     if (!targetPrefix) return target;
     return target?.fields?.find(candidate => this.normalizeFieldPath(candidate.name) === targetPrefix) ?? target;
+  }
+
+  private isStructuredReferencePickerTarget(field?: OpenApiSchemaField, targetPrefix = ''): boolean {
+    const target = this.referencePickerCopyTargetField(field, targetPrefix);
+    if (!target) return false;
+    const fields = (target.type === 'array' ? target.items?.fields : target.fields) ?? [];
+    if (!fields.length) return false;
+    const names = new Set(fields.map(candidate => this.normalizedName(candidate.name)));
+    return ['href', 'name', '@referredtype', '@type', '@basetype', '@schemalocation', 'version'].some(name => names.has(this.normalizedName(name)));
   }
 
   private isReferencePickerCopyCandidateField(field: OpenApiSchemaField): boolean {
@@ -2524,17 +2788,20 @@ export default class FormCrud implements OnInit, OnDestroy {
   }
 
   private detailValueForField(field: OpenApiSchemaField, value: unknown): unknown {
-    if (field.type === 'object' && field.fields?.length) return this.detailModelFromFields(field.fields, value);
+    if (field.type === 'object' && field.fields?.length) {
+      if (value === undefined || value === null) return value;
+      return this.detailModelFromFields(field.fields, value);
+    }
     if (field.type === 'array') {
       const itemField = this.effectiveArrayItemField(field);
       if (Array.isArray(value)) return itemField ? value.map(item => this.detailValueForField(itemField, item)) : value;
       return [];
     }
     if (field.type === 'object') {
-      return JSON.stringify(value ?? {}, null, 2);
+      return value === undefined || value === null ? value : JSON.stringify(value, null, 2);
     }
     if (field.type === 'string' && field.format === 'date-time') return this.dateTimeInputValue(value);
-    return value ?? '';
+    return value;
   }
 
   private inferredFieldsFromItem(item: unknown): OpenApiSchemaField[] {
@@ -2625,6 +2892,7 @@ export default class FormCrud implements OnInit, OnDestroy {
     view.__formsDebug ??= {};
     view.__formsDebug.formCrud = () => ({
       operationId: this.selectedOperation().id,
+      operations: this.operations,
       valid: this.form.valid,
       invalidControls: this.invalidControlSummaries(this.form),
       model: this.model,

@@ -58,7 +58,13 @@ export function linkEntityInheritance(entities: BaseApplicationEntity[], logger?
     if (!('childEntities' in entity) || !entity.childEntities) {
       entity.childEntities = [];
     }
-    applyInheritanceMetadata(entity, logger);
+    applyLocalInheritanceMetadata(entity);
+  }
+
+  // Descendants can be declared before their polymorphic root in JDL. Resolve
+  // root discriminator metadata for every entity before inspecting ancestors.
+  for (const entity of entities) {
+    applyInheritedMetadata(entity, logger);
   }
 }
 
@@ -72,7 +78,7 @@ function validateNoInheritanceCycle(entity: BaseApplicationEntity, parent: BaseA
   }
 }
 
-function applyInheritanceMetadata(entity: BaseApplicationEntity, logger?: Logger) {
+function applyLocalInheritanceMetadata(entity: BaseApplicationEntity) {
   if (entity.abstract !== undefined) {
     entity.abstractClass = Boolean(entity.abstract);
   }
@@ -84,7 +90,9 @@ function applyInheritanceMetadata(entity: BaseApplicationEntity, logger?: Logger
     entity.discriminatorColumn = discriminatorColumn;
     entity.polymorphicRoot = true;
   }
+}
 
+function applyInheritedMetadata(entity: BaseApplicationEntity, logger?: Logger) {
   if (entity.parentEntity) {
     const polymorphicAncestor = findPolymorphicAncestor(entity.parentEntity);
     if (!polymorphicAncestor) {

@@ -1,5 +1,5 @@
 <%#
- Copyright 2013-2026 the original author or authors from the JHipster project.
+ Copyright 2013-2025 the original author or authors from the JHipster project.
 
  This file is part of the JHipster project, see https://www.jhipster.tech/
  for more information.
@@ -22,24 +22,28 @@ plugins {
 
 openApiGenerate {
     generatorName = "spring"
-    inputSpec = "$rootDir/src/main/resources/swagger/api.yml".toString()
-    outputDir = layout.buildDirectory.dir("openapi").get().asFile.toString()
-    apiPackage = "<%- packageName %>.web.api"
-    modelPackage = "<%- packageName %>.service.api.dto"
+    inputSpec = "$rootDir/src/main/resources/swagger/<%= typeof openApiGeneratorInputFile === 'string' ? openApiGeneratorInputFile : 'api.yml' %>".toString()
+    templateDir = "$rootDir/src/main/openapi-templates".toString()
+    outputDir = "$buildDir/openapi".toString()
+    apiPackage = "<%= packageName %>.web.api"
+    modelPackage = "<%= packageName %>.service.api.dto"
     apiFilesConstrainedTo = [""]
     modelFilesConstrainedTo = [""]
     supportingFilesConstrainedTo = ["ApiUtil.java"]
-    configOptions = [delegatePattern: "true", title: "<%- dasherizedBaseName %>", useTags: "true"<%- reactive ? ', reactive: "true"' : '' %>, useSpringBoot3: "true", useBeanValidation: "true", performBeanValidation: "true"]
-    validateSpec = true
+    configOptions = [delegatePattern: "true", documentationProvider: "none", title: "<%= dasherizedBaseName %>", useTags: "true"<% if (reactive) { %>, reactive: "true"<% } %>, useSpringBoot3: "true", useBeanValidation: "true", performBeanValidation: "true", containerDefaultToNull: "true"]
+    validateSpec = false
+<% if (typeof openApiModelNameMappings !== 'undefined' && Array.isArray(openApiModelNameMappings) && openApiModelNameMappings.length > 0) { %>
+    modelNameMappings = [<% openApiModelNameMappings.forEach((mapping, index) => { %><%= mapping.sourceName %>: "<%= mapping.targetName %>"<%= index + 1 < openApiModelNameMappings.length ? ', ' : '' %><% }); %>]
+<% } %>
     importMappings = [Problem:"org.springframework.http.ProblemDetail"]
 }
 
 sourceSets {
     main {
         java {
-            srcDir(layout.buildDirectory.dir("openapi/src/main/java"))
+            srcDir(file("${project.buildDir.path}/openapi/src/main/java"))
         }
     }
 }
 
-tasks.named('compileJava').configure { dependsOn("openApiGenerate") }
+compileJava.dependsOn("openApiGenerate")

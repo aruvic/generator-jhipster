@@ -21,40 +21,72 @@ package <%= packageName %>.web.rest;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.env.Environment;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/form-crud-reference-pickers")
+@ConditionalOnProperty(
+    name = "form-crud.reference-picker.local-endpoint-enabled",
+    havingValue = "true",
+    matchIfMissing = true
+)
 public class FormCrudReferencePickerResource {
 
     private static final TypeReference<List<Map<String, Object>>> CONFIG_LIST = new TypeReference<>() {};
+    private static final ParameterizedTypeReference<List<Map<String, Object>>> CONFIG_LIST_RESPONSE = new ParameterizedTypeReference<>() {};
 
     private final ObjectMapper objectMapper;
+    private final RestClient restClient;
     private final Path storagePath;
+    private final URI externalConfigUri;
+    private final String externalAuthorization;
+    private final boolean forwardAuthorization;
 
     public FormCrudReferencePickerResource(ObjectMapper objectMapper, Environment environment) {
         this.objectMapper = objectMapper;
+        this.restClient = RestClient.create();
         String applicationName = environment.getProperty("spring.application.name", "jhipster");
         String safeApplicationName = applicationName.replaceAll("[^A-Za-z0-9_.-]", "_");
         this.storagePath = Path.of(System.getProperty("java.io.tmpdir"), safeApplicationName, "form-crud-reference-pickers.json");
+        this.externalConfigUri = externalConfigUri(environment);
+        this.externalAuthorization = configuredAuthorization(environment);
+        this.forwardAuthorization = Boolean.parseBoolean(
+            firstNonBlank(
+                environment.getProperty("jhipster.form-crud.reference-picker.forward-authorization"),
+                environment.getProperty("FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION"),
+                "false"
+            )
+        );
     }
 
     @GetMapping
-    public ResponseEntity<List<Map<String, Object>>> getReferencePickers() {
+    public ResponseEntity<List<Map<String, Object>>> getReferencePickers(
+        @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization
+    ) {
+        if (externalConfigUri != null) {
+            return ResponseEntity.ok(readExternalReferencePickers(authorization));
+        }
         if (!Files.exists(storagePath)) {
             return ResponseEntity.ok(List.of());
         }
@@ -66,8 +98,14 @@ public class FormCrudReferencePickerResource {
     }
 
     @PutMapping
-    public ResponseEntity<List<Map<String, Object>>> saveReferencePickers(@RequestBody List<Map<String, Object>> configs) {
+    public ResponseEntity<List<Map<String, Object>>> saveReferencePickers(
+        @RequestBody List<Map<String, Object>> configs,
+        @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String authorization
+    ) {
         List<Map<String, Object>> sanitized = sanitize(configs);
+        if (externalConfigUri != null) {
+            return ResponseEntity.ok(saveExternalReferencePickers(sanitized, authorization));
+        }
         try {
             Files.createDirectories(storagePath.getParent());
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(storagePath.toFile(), sanitized);
@@ -98,5 +136,123 @@ public class FormCrudReferencePickerResource {
 
     private boolean isBlank(Object value) {
         return value == null || value.toString().isBlank();
+    }
+
+    private List<Map<String, Object>> readExternalReferencePickers(String incomingAuthorization) {
+        try {
+            RestClient.RequestHeadersSpec<?> request = restClient.get().uri(externalConfigUri);
+            authorize(request, incomingAuthorization);
+            List<Map<String, Object>> configs = request.retrieve().body(CONFIG_LIST_RESPONSE);
+            return normalizeFromExternal(sanitize(configs));
+        } catch (RestClientResponseException ex) {
+            throw new ResponseStatusException(ex.getStatusCode(), remoteErrorMessage("read", ex), ex);
+        } catch (RuntimeException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Unable to read external Form CRUD reference picker configuration", ex);
+        }
+    }
+
+    private List<Map<String, Object>> saveExternalReferencePickers(
+        List<Map<String, Object>> configs,
+        String incomingAuthorization
+    ) {
+        try {
+            List<Map<String, Object>> externalConfigs = normalizeForExternal(configs);
+            RestClient.RequestBodySpec request = restClient.put().uri(externalConfigUri);
+            authorize(request, incomingAuthorization);
+            List<Map<String, Object>> saved = request.body(externalConfigs).retrieve().body(CONFIG_LIST_RESPONSE);
+            return normalizeFromExternal(sanitize(saved == null ? externalConfigs : saved));
+        } catch (RestClientResponseException ex) {
+            throw new ResponseStatusException(ex.getStatusCode(), remoteErrorMessage("save", ex), ex);
+        } catch (RuntimeException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Unable to save external Form CRUD reference picker configuration", ex);
+        }
+    }
+
+    private List<Map<String, Object>> normalizeForExternal(List<Map<String, Object>> configs) {
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Map<String, Object> config : configs) {
+            Map<String, Object> next = new LinkedHashMap<>(config);
+            Object pickerId = firstNonBlankObject(next.get("pickerId"), next.get("id"));
+            if (pickerId != null) {
+                next.put("pickerId", pickerId.toString());
+            }
+            next.remove("id");
+            normalized.add(next);
+        }
+        return normalized;
+    }
+
+    private List<Map<String, Object>> normalizeFromExternal(List<Map<String, Object>> configs) {
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        for (Map<String, Object> config : configs) {
+            Map<String, Object> next = new LinkedHashMap<>(config);
+            Object pickerId = firstNonBlankObject(next.get("id"), next.get("pickerId"));
+            if (pickerId != null) {
+                next.putIfAbsent("pickerId", pickerId.toString());
+                next.putIfAbsent("id", pickerId.toString());
+            }
+            normalized.add(next);
+        }
+        return normalized;
+    }
+
+    private URI externalConfigUri(Environment environment) {
+        String configured = firstNonBlank(
+            environment.getProperty("jhipster.form-crud.reference-picker.config-url"),
+            environment.getProperty("FORM_CRUD_REFERENCE_PICKER_CONFIG_URL")
+        );
+        if (configured == null) {
+            return null;
+        }
+        return URI.create(configured);
+    }
+
+    private String configuredAuthorization(Environment environment) {
+        String configured = firstNonBlank(
+            environment.getProperty("jhipster.form-crud.reference-picker.config-bearer-token"),
+            environment.getProperty("FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN")
+        );
+        if (configured == null) {
+            return null;
+        }
+        return configured.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())
+            ? configured
+            : "Bearer " + configured;
+    }
+
+    private void authorize(RestClient.RequestHeadersSpec<?> request, String incomingAuthorization) {
+        String authorization = externalAuthorization;
+        if (authorization == null && forwardAuthorization) {
+            authorization = firstNonBlank(incomingAuthorization);
+        }
+        if (authorization != null) {
+            request.header(HttpHeaders.AUTHORIZATION, authorization);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private Object firstNonBlankObject(Object... values) {
+        for (Object value : values) {
+            if (value != null && !value.toString().isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String remoteErrorMessage(String action, RestClientResponseException ex) {
+        String body = ex.getResponseBodyAsString();
+        if (body != null && !body.isBlank()) {
+            return "Unable to " + action + " external Form CRUD reference picker configuration: " + body;
+        }
+        return "Unable to " + action + " external Form CRUD reference picker configuration";
     }
 }

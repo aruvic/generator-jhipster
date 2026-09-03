@@ -16,6 +16,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import { existsSync, readFileSync } from 'node:fs';
+
+import { parse as parseYaml } from 'yaml';
+
 import { asWriteFilesSection } from '../base-application/support/task-type-inference.ts';
 import { addSectionsCondition, mergeSections } from '../base-core/support/index.ts';
 import { SERVER_MAIN_RES_DIR, SERVER_MAIN_SRC_DIR, SERVER_TEST_RES_DIR, SERVER_TEST_SRC_DIR } from '../generator-constants.ts';
@@ -27,6 +31,60 @@ import {
 } from '../java/support/index.ts';
 
 import type { Application as SpringBootApplication } from './types.ts';
+
+type OpenApiOperationMetadata = {
+  method?: unknown;
+  path?: unknown;
+};
+
+const FORM_CRUD_REFERENCE_PICKER_COLLECTION_PATH = '/form-crud-reference-pickers';
+
+function normalizedOpenApiPath(value: unknown): string {
+  const normalized = `/${String(value ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')}`;
+  return normalized.startsWith('/api/') ? normalized.slice('/api'.length) : normalized;
+}
+
+export function openApiOwnsFormCrudReferencePickerCollection(value: unknown): boolean {
+  const operations = (value as { openApiOperations?: OpenApiOperationMetadata[] } | undefined)?.openApiOperations;
+  return Boolean(
+    operations?.some(
+      operation =>
+        ['GET', 'PUT'].includes(String(operation.method ?? '').toUpperCase()) &&
+        normalizedOpenApiPath(operation.path) === FORM_CRUD_REFERENCE_PICKER_COLLECTION_PATH,
+    ),
+  );
+}
+
+export function openApiDocumentOwnsFormCrudReferencePickerCollection(value: unknown): boolean {
+  const paths = (value as { paths?: Record<string, Record<string, unknown>> } | undefined)?.paths;
+  if (!paths || typeof paths !== 'object') return false;
+  return Object.entries(paths).some(
+    ([operationPath, pathItem]) =>
+      normalizedOpenApiPath(operationPath) === FORM_CRUD_REFERENCE_PICKER_COLLECTION_PATH &&
+      Object.keys(pathItem ?? {}).some(method => ['GET', 'PUT'].includes(method.toUpperCase())),
+  );
+}
+
+function configuredOpenApiOwnsFormCrudReferencePickerCollection(
+  generator: { destinationPath(path: string): string },
+  application: SpringBootApplication,
+): boolean {
+  if (openApiOwnsFormCrudReferencePickerCollection(application)) return true;
+  const inputPaths = [
+    application.oas3Input ? generator.destinationPath(application.oas3Input) : undefined,
+    generator.destinationPath('src/main/resources/swagger/api.yml'),
+  ].filter((inputPath): inputPath is string => Boolean(inputPath && existsSync(inputPath)));
+  for (const inputPath of inputPaths) {
+    try {
+      if (openApiDocumentOwnsFormCrudReferencePickerCollection(parseYaml(readFileSync(inputPath, 'utf8')))) return true;
+    } catch {
+      // OpenAPI validation reports malformed input later with full context.
+    }
+  }
+  return false;
+}
 
 const imperativeConfigFiles = asWriteFilesSection<SpringBootApplication>({
   imperativeFiles: [
@@ -137,6 +195,11 @@ const userManagementFiles = asWriteFilesSection<SpringBootApplication>({
 
 const swaggerFiles = asWriteFilesSection<SpringBootApplication>({
   swagger: [
+    {
+      path: 'src/main/openapi-templates/',
+      transform: false,
+      templates: ['typeInfoAnnotation.mustache', 'oneof_interface.mustache'],
+    },
     {
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,
       renameTo: moveToJavaPackageSrcDir,
@@ -344,7 +407,13 @@ export const baseServerFiles = asWriteFilesSection<SpringBootApplication>({
   ],
   serverJavaWeb: [
     {
-      condition: generator => generator.clientFrameworkAngular && Boolean((generator as any).oas3Input || (generator as any).openApiOperations?.length),
+      condition: function (application) {
+        return (
+          application.clientFrameworkAngular &&
+          Boolean(application.oas3Input || (application as any).openApiOperations?.length) &&
+          !configuredOpenApiOwnsFormCrudReferencePickerCollection(this, application)
+        );
+      },
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,
       renameTo: moveToJavaPackageSrcDir,
       templates: ['web/rest/FormCrudReferencePickerResource.java'],

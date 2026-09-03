@@ -169,10 +169,158 @@ components:
 
     expect(discriminatorField?.discriminatorValues?.[0]).toBe('ConcreteResource');
     expect(discriminatorField?.example).toBe('ConcreteResource');
+    expect(operation?.requestBodyExample).toEqual(
+      expect.objectContaining({
+        '@type': 'ConcreteResource',
+        source: expect.objectContaining({ '@type': 'EntityRef' }),
+      }),
+    );
     expect(nestedUnionDiscriminator?.discriminatorValues?.[0]).toBe('PartyRef');
     expect(nestedUnionDiscriminator?.example).toBe('PartyRef');
     expect(implicitReferenceDiscriminator?.discriminatorValues?.[0]).toBe('EntityRef');
     expect(implicitReferenceDiscriminator?.example).toBe('EntityRef');
+    expect(operation?.responseStatusCodes).toEqual(['201']);
+  });
+
+  it('sanitizes explicit request examples against the concrete schema', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-operations-'));
+    const apiPath = join(dir, 'api.yml');
+    writeFileSync(
+      apiPath,
+      `
+openapi: 3.0.3
+info:
+  title: Explicit example validation regression
+  version: 1.0.0
+paths:
+  /events:
+    post:
+      operationId: createEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CorrectEvent'
+            example:
+              '@type': WrongEvent
+              title: Keep this title
+              event: {}
+      responses:
+        '204':
+          description: Accepted
+components:
+  schemas:
+    BaseEvent:
+      discriminator:
+        propertyName: '@type'
+        mapping:
+          WrongEvent: '#/components/schemas/WrongEvent'
+          CorrectEvent: '#/components/schemas/CorrectEvent'
+      required: ['@type']
+      type: object
+      properties:
+        '@type':
+          type: string
+        title:
+          type: string
+    WrongEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+    CorrectEvent:
+      allOf:
+        - $ref: '#/components/schemas/BaseEvent'
+        - type: object
+          required: [event]
+          properties:
+            event:
+              $ref: '#/components/schemas/CorrectPayload'
+    CorrectPayload:
+      required: [resource]
+      type: object
+      properties:
+        resource:
+          $ref: '#/components/schemas/ResourceFVO'
+    ResourceFVO:
+      discriminator:
+        propertyName: '@type'
+        mapping:
+          Resource: '#/components/schemas/ResourceFVO'
+      required: ['@type', name]
+      type: object
+      properties:
+        '@type':
+          type: string
+        name:
+          type: string
+`,
+    );
+
+    const operations = loadOpenApiOperations(
+      { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
+      angularApplication,
+    );
+
+    expect(operations.find(candidate => candidate.operationId === 'createEvent')?.requestBodyExample).toEqual({
+      '@type': 'CorrectEvent',
+      title: 'Keep this title',
+      event: {
+        resource: {
+          '@type': 'Resource',
+          name: 'string',
+        },
+      },
+    });
+  });
+
+  it('sanitizes retained items after applying an explicit example array limit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-operations-'));
+    const apiPath = join(dir, 'api.yml');
+    writeFileSync(
+      apiPath,
+      `
+openapi: 3.0.3
+info:
+  title: Bounded array example regression
+  version: 1.0.0
+paths:
+  /items:
+    post:
+      operationId: createItems
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              maxItems: 1
+              items:
+                type: object
+                required: [kind]
+                properties:
+                  id:
+                    type: string
+                    readOnly: true
+                  kind:
+                    type: string
+                    enum: [valid]
+            example:
+              - id: server-owned
+                kind: invalid
+              - id: discarded
+                kind: valid
+      responses:
+        '204':
+          description: Accepted
+`,
+    );
+
+    const operations = loadOpenApiOperations(
+      { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
+      angularApplication,
+    );
+
+    expect(operations.find(candidate => candidate.operationId === 'createItems')?.requestBodyExample).toEqual([{ kind: 'valid' }]);
   });
 
   it('merges concrete discriminator branch fields with parent-owned allOf properties for request forms', () => {

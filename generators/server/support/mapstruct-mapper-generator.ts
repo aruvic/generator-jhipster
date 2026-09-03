@@ -29,9 +29,12 @@ import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 import { generateHybridMappers } from './hybrid-mapper-generator.ts';
 import { OpenApiEntityMatcher } from './openapi-entity-matcher.ts';
 import {
+  clearDtoNameOverrides,
   clearDomainNameOverrides,
+  getOpenApiModelNameMappings,
   normalizeTypeName,
   parseOpenAPISpec,
+  registerDtoNameOverride,
   registerDomainNameOverride,
   stripDtoSuffix,
 } from './openapi-mapper-generator.ts';
@@ -40,6 +43,7 @@ import {
  * Generate MapStruct mappers from OpenAPI spec
  */
 export async function generateMapStructMappers(generator: any, application: SpringBootApplication): Promise<void> {
+  clearDtoNameOverrides();
   clearDomainNameOverrides();
   // Only generate if enableSwaggerCodegen is true
   if (!application.enableSwaggerCodegen) {
@@ -65,6 +69,9 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
   // Parse OpenAPI spec
   const spec = parseOpenAPISpec(swaggerContent, { isFilePath: false });
+  for (const mapping of getOpenApiModelNameMappings(Object.keys(spec.schemas ?? {}))) {
+    registerDtoNameOverride(mapping.sourceName, mapping.targetName);
+  }
 
   const entityMatcher = new OpenApiEntityMatcher(generator, application.packageName);
   const operationDescriptors = entityMatcher.describeOperations(spec);

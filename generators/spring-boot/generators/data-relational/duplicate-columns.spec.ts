@@ -56,11 +56,32 @@ const discriminatorColumnEntity = {
   relationships: [],
 };
 
+const booleanDiscriminatorEntity = {
+  name: 'UtilizedTransportEquipment',
+  changelogDate: '20240204000000',
+  entityTableName: 'utilized_transport_equipment',
+  dto: 'no',
+  service: 'no',
+  pagination: 'no',
+  applications: [applicationConfig.baseName],
+  abstract: true,
+  discriminator: {
+    column: 'isShipperOwned',
+    type: 'Boolean',
+    values: 'true->UtEquipment, false->UtEquipmentReference',
+  },
+  fields: [
+    { fieldName: 'isShipperOwned', fieldType: 'Boolean', fieldValidateRules: ['required'] },
+    { fieldName: 'description', fieldType: 'String' },
+  ],
+  relationships: [],
+};
+
 describe(`generator - ${GENERATOR} duplicate columns`, () => {
   before(async () => {
     await helpers
       .runJHipster(GENERATOR)
-      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any])
+      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any, booleanDiscriminatorEntity as any])
       .withMockedSource({ except: ['addTestSpringFactory'] });
   });
 
@@ -79,5 +100,13 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
       entityPath,
       /@Column\(\s+name = "at_type"[\s\S]+nullable = false[\s\S]+insertable = false[\s\S]+updatable = false[\s\S]+private String atType;/,
     );
+  });
+
+  it('keeps a declared field writable and relocates the discriminator column when the field cannot carry type tags', () => {
+    const entityPath = 'src/main/java/com/mycompany/myapp/domain/UtilizedTransportEquipment.java';
+    runResult.assertFileContent(entityPath, /@DiscriminatorColumn\(\s+name = "dtype"/);
+    runResult.assertNoFileContent(entityPath, /@DiscriminatorColumn\(\s+name = "is_shipper_owned"/);
+    runResult.assertNoFileContent(entityPath, /@Column\(\s+name = "is_shipper_owned"[\s\S]+insertable = false[\s\S]+private Boolean isShipperOwned;/);
+    runResult.assertFileContent(entityPath, /private Boolean isShipperOwned;/);
   });
 });

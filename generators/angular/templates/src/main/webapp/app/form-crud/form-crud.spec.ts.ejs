@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { FormArray, FormControl, FormGroup } from '@angular/forms';
 import { convertToParamMap, ActivatedRoute } from '@angular/router';
 import { FaIconLibrary } from '@fortawesome/angular-fontawesome';
 import { faEye, faList, faSave, faSync, faTimes, faTrashAlt } from '@fortawesome/free-solid-svg-icons';
@@ -138,7 +139,10 @@ describe('FormCrud', () => {
     detailSchemaFields(resource: unknown): readonly OpenApiSchemaField[];
     mergeSubmittedDetailWithResponse(submitted: unknown, response: unknown): unknown;
     referencePickerUrl(config: { targetBaseUrl?: string; collectionPath: string }): string;
+    payloadFieldsForOperation(operation: OpenApiOperationDefinition, fields: readonly OpenApiSchemaField[]): readonly OpenApiSchemaField[];
     invalidControlSummaries(control: unknown): { path: string; errors: Record<string, unknown> }[];
+    detailRequiredFieldActive(field: FormlyFieldConfig): boolean;
+    sparseDetailBodySource(fields: readonly OpenApiSchemaField[], source: unknown, originalSource: unknown, control: unknown): Record<string, unknown>;
   } {
     return component as unknown as {
       schemaField(
@@ -173,7 +177,10 @@ describe('FormCrud', () => {
       detailSchemaFields(resource: unknown): readonly OpenApiSchemaField[];
       mergeSubmittedDetailWithResponse(submitted: unknown, response: unknown): unknown;
       referencePickerUrl(config: { targetBaseUrl?: string; collectionPath: string }): string;
+      payloadFieldsForOperation(operation: OpenApiOperationDefinition, fields: readonly OpenApiSchemaField[]): readonly OpenApiSchemaField[];
       invalidControlSummaries(control: unknown): { path: string; errors: Record<string, unknown> }[];
+      detailRequiredFieldActive(field: FormlyFieldConfig): boolean;
+      sparseDetailBodySource(fields: readonly OpenApiSchemaField[], source: unknown, originalSource: unknown, control: unknown): Record<string, unknown>;
     };
   }
 
@@ -567,6 +574,12 @@ describe('FormCrud', () => {
       expect(flattenFieldKeys([arrayField])).toContain('validity');
       expect(flattenFieldKeys([arrayField])).toContain('startDateTime');
     }
+    const detailField = renderer.schemaField(objectArraySchema, false, 0, {}, comp.responseDetailForm);
+    const detailArrayField = detailField.fieldArray;
+    if (detailArrayField && !Array.isArray(detailArrayField) && typeof detailArrayField !== 'function') {
+      expect(detailArrayField.defaultValue).toBeUndefined();
+    }
+    expect((detailField.props as Record<string, unknown>).itemDefaultValue).toEqual(renderer.initialFieldValue(objectArraySchema.items!));
     expect(renderer.valueForField(objectArraySchema, initialValue)).toEqual([
       { code: 'A1', validity: { startDateTime: '2026-01-01T00:00:00Z' } },
     ]);
@@ -1134,6 +1147,331 @@ describe('FormCrud', () => {
         { includeEmptyStructures: true, omitAbsentEmptyStructures: true, originalSource: { intent: { '@type': 'IntentRef', href: '/intent/1' } } },
       ),
     ).toEqual({ name: 'Resource' });
+  });
+
+  it('should not fabricate absent optional object branches while building an edit model', () => {
+    const renderer = schemaRenderer(comp);
+    const intentField: OpenApiSchemaField = {
+      name: 'intent',
+      pointer: '/relationships/0/service/intent',
+      path: ['relationships', '0', 'service', 'intent'],
+      required: false,
+      nullable: false,
+      type: 'object',
+      fields: [
+        { name: '@type', pointer: '/relationships/0/service/intent/@type', path: ['relationships', '0', 'service', 'intent', '@type'], required: true, nullable: false, type: 'string', discriminatorValues: ['IntentRef'] },
+        { name: 'href', pointer: '/relationships/0/service/intent/href', path: ['relationships', '0', 'service', 'intent', 'href'], required: false, nullable: false, type: 'string' },
+      ],
+    };
+
+    expect(renderer.detailValueForField(intentField, undefined)).toBeUndefined();
+    expect(renderer.detailValueForField(intentField, null)).toBeNull();
+    expect(renderer.detailValueForField(intentField, { '@type': 'IntentRef', href: '/intent/1' })).toEqual({
+      '@type': 'IntentRef',
+      href: '/intent/1',
+    });
+
+    const requiredTypeField = renderer.schemaField(intentField.fields![0], false, 1, {}, comp.responseDetailForm);
+    expect(requiredTypeField.props?.required).toBe(false);
+    expect(
+      renderer.detailRequiredFieldActive({
+        ...requiredTypeField,
+        parent: {
+          key: 'intent',
+          props: { required: false },
+          model: { intent: null, relationshipType: 'dependsOn' },
+          formControl: { value: { intent: null, relationshipType: 'dependsOn' } } as FormlyFieldConfig['formControl'],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      renderer.detailRequiredFieldActive({
+        ...requiredTypeField,
+        parent: {
+          key: 'intent',
+          props: { required: false },
+          model: { intent: { '@type': 'IntentRef' } },
+          formControl: { value: { '@type': 'IntentRef' } } as FormlyFieldConfig['formControl'],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('should keep required children inactive when a deeply nested optional detail object is omitted', () => {
+    const renderer = schemaRenderer(comp);
+    const relationshipsField: OpenApiSchemaField = {
+      name: 'items',
+      pointer: '/items',
+      path: ['items'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'item',
+        pointer: '/items/0',
+        path: ['items', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: 'container',
+            pointer: '/items/0/container',
+            path: ['items', '0', 'container'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: 'relationships',
+                pointer: '/items/0/container/relationships',
+                path: ['items', '0', 'container', 'relationships'],
+                required: false,
+                nullable: false,
+                type: 'array',
+                items: {
+                  name: 'relationship',
+                  pointer: '/items/0/container/relationships/0',
+                  path: ['items', '0', 'container', 'relationships', '0'],
+                  required: false,
+                  nullable: false,
+                  type: 'object',
+                  fields: [
+                    {
+                      name: 'target',
+                      pointer: '/items/0/container/relationships/0/target',
+                      path: ['items', '0', 'container', 'relationships', '0', 'target'],
+                      required: false,
+                      nullable: false,
+                      type: 'object',
+                      fields: [
+                        {
+                          name: '@type',
+                          pointer: '/items/0/container/relationships/0/target/@type',
+                          path: ['items', '0', 'container', 'relationships', '0', 'target', '@type'],
+                          required: true,
+                          nullable: false,
+                          type: 'string',
+                          discriminatorValues: ['TargetRef'],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    comp.responseDetailForm = new FormGroup({});
+    comp.responseDetailModel = { items: [{ container: { relationships: [{ relationshipType: 'dependsOn', target: undefined }] } }] };
+    comp.responseDetailFields = [
+      renderer.schemaField(relationshipsField, false, 0, comp.responseDetailModel, comp.responseDetailForm, comp.responseDetailModel),
+    ];
+    comp.selectedResponseItem.set(comp.responseDetailModel);
+    fixture.detectChanges();
+
+    const requiredChild = comp.responseDetailForm.get('items.0.container.relationships.0.target.@type');
+    expect(requiredChild?.hasError('required') ?? false).toBe(false);
+    expect(comp.responseDetailForm.valid).toBe(true);
+    expect(comp.responseDetailModel).toStrictEqual({
+      items: [{ container: { relationships: [{ relationshipType: 'dependsOn', target: undefined }] } }],
+    });
+
+    const updateOperation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      method: 'PATCH',
+      path: '/resources/{id}',
+      requestBodyFields: [relationshipsField],
+    };
+    const serialized = renderer.bodyForOperation(updateOperation, comp.responseDetailModel, [relationshipsField], {
+      includeEmptyStructures: true,
+      omitAbsentEmptyStructures: true,
+      originalSource: { items: [{ container: { relationships: [{ relationshipType: 'dependsOn' }] } }] },
+    }) as { items: { container: { relationships: { target?: unknown }[] } }[] };
+    expect(serialized.items[0].container.relationships[0].target).toBeUndefined();
+  });
+
+  it('should omit pristine Formly defaults from optional nested PATCH branches while preserving explicit edits', () => {
+    const renderer = schemaRenderer(comp);
+    const relationshipsField: OpenApiSchemaField = {
+      name: 'items',
+      pointer: '/items',
+      path: ['items'],
+      required: true,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'item',
+        pointer: '/items/0',
+        path: ['items', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: 'relationshipType',
+            pointer: '/items/0/relationshipType',
+            path: ['items', '0', 'relationshipType'],
+            required: true,
+            nullable: false,
+            type: 'string',
+          },
+          {
+            name: 'service',
+            pointer: '/items/0/service',
+            path: ['items', '0', 'service'],
+            required: false,
+            nullable: false,
+            type: 'object',
+            fields: [
+              {
+                name: 'enabled',
+                pointer: '/items/0/service/enabled',
+                path: ['items', '0', 'service', 'enabled'],
+                required: false,
+                nullable: false,
+                type: 'boolean',
+                example: false,
+              },
+              {
+                name: 'state',
+                pointer: '/items/0/service/state',
+                path: ['items', '0', 'service', 'state'],
+                required: false,
+                nullable: false,
+                type: 'string',
+                enumValues: ['pending', 'active'],
+                example: 'pending',
+              },
+              {
+                name: 'specification',
+                pointer: '/items/0/service/specification',
+                path: ['items', '0', 'service', 'specification'],
+                required: false,
+                nullable: false,
+                type: 'object',
+                example: { '@type': 'SpecificationRef', href: '/specifications/1' },
+              },
+              {
+                name: 'name',
+                pointer: '/items/0/service/name',
+                path: ['items', '0', 'service', 'name'],
+                required: false,
+                nullable: false,
+                type: 'string',
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const original = { items: [{ relationshipType: 'dependsOn' }] };
+    comp.responseDetailForm = new FormGroup({});
+    comp.responseDetailModel = JSON.parse(JSON.stringify(original)) as Record<string, unknown>;
+    comp.responseDetailFields = [
+      renderer.schemaField(relationshipsField, false, 0, comp.responseDetailModel, comp.responseDetailForm, comp.responseDetailModel),
+    ];
+    fixture.detectChanges();
+
+    expect(renderer.sparseDetailBodySource([relationshipsField], comp.responseDetailModel, original, comp.responseDetailForm)).toEqual(original);
+
+    const editedModel = { items: [{ relationshipType: 'dependsOn', service: { name: 'Selected service' } }] };
+    const editedForm = new FormGroup({
+      items: new FormArray([
+        new FormGroup({
+          relationshipType: new FormControl('dependsOn'),
+          service: new FormGroup({ name: new FormControl('Selected service') }),
+        }),
+      ]),
+    });
+    editedForm.get('items.0.service.name')?.markAsDirty();
+    expect(renderer.sparseDetailBodySource([relationshipsField], editedModel, original, editedForm)).toEqual({
+      items: [{ relationshipType: 'dependsOn', service: { name: 'Selected service' } }],
+    });
+  });
+
+  it('should include populated fields from a newly selected reference array item', () => {
+    const renderer = schemaRenderer(comp);
+    const categoryField: OpenApiSchemaField = {
+      name: 'categorys',
+      pointer: '/categorys',
+      path: ['categorys'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'category',
+        pointer: '/categorys/0',
+        path: ['categorys', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: '@type', pointer: '/categorys/0/@type', path: ['categorys', '0', '@type'], required: true, nullable: false, type: 'string' },
+          { name: 'tmfId', pointer: '/categorys/0/tmfId', path: ['categorys', '0', 'tmfId'], required: true, nullable: false, type: 'string', readOnly: true },
+          { name: 'href', pointer: '/categorys/0/href', path: ['categorys', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/categorys/0/name', path: ['categorys', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const selected = {
+      '@type': 'CategoryRef',
+      tmfId: 'category-tmf-id',
+      href: '/api/category/1002',
+      name: 'Cloud Services',
+    };
+    const form = new FormGroup({
+      categorys: new FormArray([
+        new FormGroup({
+          '@type': new FormControl(selected['@type']),
+          tmfId: new FormControl(selected.tmfId),
+          href: new FormControl(selected.href),
+          name: new FormControl(selected.name),
+        }),
+      ]),
+    });
+    form.get('categorys')?.markAsDirty({ onlySelf: true });
+
+    expect(renderer.sparseDetailBodySource([categoryField], { categorys: [selected] }, { categorys: [] }, form)).toEqual({
+      categorys: [selected],
+    });
+  });
+
+  it('should retain an optional detail reference array selected through a picker after the detail form is rebuilt', () => {
+    const renderer = schemaRenderer(comp);
+    const relationshipsField: OpenApiSchemaField = {
+      name: 'relationships',
+      pointer: '/relationships',
+      path: ['relationships'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'relationship',
+        pointer: '/relationships/0',
+        path: ['relationships', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: '@type', pointer: '/relationships/0/@type', path: ['relationships', '0', '@type'], required: true, nullable: false, type: 'string' },
+          { name: 'tmfId', pointer: '/relationships/0/tmfId', path: ['relationships', '0', 'tmfId'], required: true, nullable: false, type: 'string', readOnly: true },
+          { name: 'href', pointer: '/relationships/0/href', path: ['relationships', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/relationships/0/name', path: ['relationships', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const selected = { '@type': 'RelationshipRef', tmfId: 'relationship-tmf-id', href: '/api/relationships/1', name: 'Relationship 1' };
+    comp.responseDetailModel = { relationships: [selected] };
+    comp.responseDetailForm = new FormGroup({});
+    (comp as unknown as { detailReferencePickerDirtyPaths: Set<string> }).detailReferencePickerDirtyPaths.add('relationships');
+
+    expect(renderer.sparseDetailBodySource([relationshipsField], comp.responseDetailModel, {}, comp.responseDetailForm)).toEqual({
+      relationships: [selected],
+    });
   });
 
   it('should omit optional polymorphic placeholder objects that only contain a discriminator and generated strings', () => {
@@ -1787,6 +2125,7 @@ describe('FormCrud', () => {
           href: '/api/targets/target-1',
           '@baseType': 'target-base',
           '@schemaLocation': 'https://example.invalid/schema',
+          '@type': 'Reference',
         },
       ],
     });
@@ -1876,8 +2215,158 @@ describe('FormCrud', () => {
           '@baseType': 'categoryBaseType',
           '@schemaLocation': 'categorySchemaLocation',
           '@referredType': 'Category',
+          '@type': 'CategoryRef',
         },
       ],
+    });
+  });
+
+  it('should synthesize nested reference identity fields for reference-mode picker payloads when the update schema omits them', () => {
+    const field: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: '@type', pointer: '/references/0/@type', path: ['references', '0', '@type'], required: false, nullable: false, type: 'string' },
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+          { name: 'version', pointer: '/references/0/version', path: ['references', '0', 'version'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const operation = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'patchUpdateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestBodyFields: [field],
+    } as OpenApiOperationDefinition;
+    const renderer = schemaRenderer(comp);
+
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          displayFields: ['id', 'tmfId', 'href', 'name'],
+          copyFields: [{ source: 'href', target: 'href' }],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+    comp.model.body = { references: [] };
+
+    comp.openReferencePicker(field, comp.model.body as Record<string, unknown>, comp.form, comp.model as unknown as Record<string, unknown>, operation);
+    const request = httpMock.expectOne('/api/targets');
+    request.flush([
+      {
+        id: 1051,
+        tmfId: 'target-tmf-id',
+        href: '/api/targets/1051',
+        name: 'Target 1051',
+        version: '2.1',
+      },
+    ]);
+    comp.selectReferencePickerItem(comp.referencePickerRows()[0]);
+
+    expect(comp.model.body).toEqual({
+      references: [
+        {
+          id: 1051,
+          tmfId: 'target-tmf-id',
+          href: '/api/targets/1051',
+          name: 'Target 1051',
+          version: '2.1',
+        },
+      ],
+    });
+    expect(renderer.bodyForOperation(operation, comp.model.body, renderer.payloadFieldsForOperation(operation, operation.requestBodyFields ?? []), true)).toEqual({
+      references: [
+        {
+          id: 1051,
+          tmfId: 'target-tmf-id',
+          href: '/api/targets/1051',
+          name: 'Target 1051',
+          version: '2.1',
+        },
+      ],
+    });
+  });
+
+  it('should seed a valid target discriminator for a selected reference so optional object arrays are retained in PATCH payloads', () => {
+    const field: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: '@type',
+            pointer: '/references/0/@type',
+            path: ['references', '0', '@type'],
+            required: true,
+            nullable: false,
+            type: 'string',
+            discriminatorValues: ['Reference'],
+          },
+          {
+            name: 'relationshipType',
+            pointer: '/references/0/relationshipType',
+            path: ['references', '0', 'relationshipType'],
+            required: true,
+            nullable: false,
+            type: 'string',
+          },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string' },
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const operation = { ...operationWithBody(), method: 'PATCH', requestBodyFields: [field] } as OpenApiOperationDefinition;
+    const renderer = schemaRenderer(comp);
+    const selected = (comp as any).referencePickerSelectedValue(
+      {
+        sourcePath: 'references',
+        collectionPath: '/targets',
+        copyFields: [
+          { source: 'tmfId', target: 'tmfId' },
+          { source: 'href', target: 'href' },
+          { source: 'name', target: 'name' },
+        ],
+        mode: 'reference',
+      },
+      { tmfId: 'target-id', href: '/api/targets/1', name: 'Target' },
+      field,
+    );
+
+    expect(selected).toEqual({ '@type': 'Reference', relationshipType: 'x', tmfId: 'target-id', href: '/api/targets/1', name: 'Target' });
+    expect(renderer.bodyForOperation(operation, { references: [selected] }, renderer.payloadFieldsForOperation(operation, [field]), true)).toEqual({
+      references: [{ '@type': 'Reference', relationshipType: 'x', tmfId: 'target-id', href: '/api/targets/1', name: 'Target' }],
     });
   });
 
@@ -2116,7 +2605,7 @@ describe('FormCrud', () => {
     });
   });
 
-  it('should omit selected reference identifiers when PATCH request schemas omit response identity fields', () => {
+  it('should keep selected reference identifiers when PATCH request schemas omit response identity fields', () => {
     const renderer = schemaRenderer(comp);
     const requestReferenceArray: OpenApiSchemaField = {
       name: 'references',
@@ -2181,8 +2670,148 @@ describe('FormCrud', () => {
         true,
       ),
     ).toEqual({
-      references: [{ href: '/api/targets/1051', name: 'Target 1' }],
+      references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }],
     });
+  });
+
+  it('should include explicitly configured stable reference identifiers when request metadata omits row id', () => {
+    const renderer = schemaRenderer(comp);
+    const requestReferenceArray: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          { name: 'href', pointer: '/references/0/href', path: ['references', '0', 'href'], required: false, nullable: false, type: 'string' },
+          { name: 'name', pointer: '/references/0/name', path: ['references', '0', 'name'], required: false, nullable: false, type: 'string' },
+        ],
+      },
+    };
+    const detailReferenceArray: OpenApiSchemaField = {
+      ...requestReferenceArray,
+      items: {
+        ...requestReferenceArray.items!,
+        fields: [
+          { name: 'id', pointer: '/references/0/id', path: ['references', '0', 'id'], required: false, nullable: false, type: 'integer', readOnly: true },
+          { name: 'tmfId', pointer: '/references/0/tmfId', path: ['references', '0', 'tmfId'], required: false, nullable: false, type: 'string', readOnly: true },
+          ...(requestReferenceArray.items?.fields ?? []),
+        ],
+      },
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'updateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'integer' }],
+      requestBodyFields: [requestReferenceArray],
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          formId: 'patch-update-resource',
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'tmfId', target: 'tmfId' },
+            { source: 'href', target: 'href' },
+            { source: 'name', target: 'name' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }] },
+        [detailReferenceArray],
+        true,
+      ),
+    ).toEqual({
+      references: [{ id: 1051, tmfId: 'target-tmf-id', href: '/api/targets/1051', name: 'Target 1' }],
+    });
+  });
+
+  it('should preserve string reference identifiers synthesized from picker mappings', () => {
+    const renderer = schemaRenderer(comp);
+    const references: OpenApiSchemaField = {
+      name: 'references',
+      pointer: '/references',
+      path: ['references'],
+      required: false,
+      nullable: false,
+      type: 'array',
+      items: {
+        name: 'reference',
+        pointer: '/references/0',
+        path: ['references', '0'],
+        required: false,
+        nullable: false,
+        type: 'object',
+        fields: [
+          {
+            name: 'href',
+            pointer: '/references/0/href',
+            path: ['references', '0', 'href'],
+            required: false,
+            nullable: false,
+            type: 'string',
+          },
+        ],
+      },
+    };
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'patch-update-resource',
+      operationId: 'updateResource',
+      method: 'PATCH',
+      path: '/resources/{id}',
+      parameters: [{ name: 'id', location: 'path', required: true, type: 'string' }],
+      requestBodyFields: [references],
+    };
+    localStorage.setItem(
+      FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'references',
+          formId: operation.id,
+          sourcePath: 'references',
+          collectionPath: '/targets',
+          copyFields: [
+            { source: 'id', target: 'id' },
+            { source: 'href', target: 'href' },
+          ],
+          mode: 'reference',
+          multiple: true,
+        },
+      ]),
+    );
+    const referenceId = '550e8400-e29b-41d4-a716-446655440000';
+
+    expect(
+      renderer.bodyForOperation(
+        operation,
+        { references: [{ id: referenceId, href: `/api/targets/${referenceId}` }] },
+        operation.requestBodyFields,
+        true,
+      ),
+    ).toEqual({ references: [{ id: referenceId, href: `/api/targets/${referenceId}` }] });
   });
 
   it('should seed free-form required nested objects from operation request examples', () => {

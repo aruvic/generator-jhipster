@@ -108,4 +108,12 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
     const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000000_added_entity_EntityRefOrValue.xml`;
     runResult.assertFileContent(changelogPath, /CHECK \(at_type IN \((?:'|&#39;)ConcreteRef(?:'|&#39;), (?:'|&#39;)ExternalRef(?:'|&#39;)\)\)/);
   });
+
+  it('writes a parent foreign key for joined-inheritance children without relationships', () => {
+    const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000100_added_entity_constraints_ConcreteRef.xml`;
+    runResult.assertFileContent(changelogPath, '<addForeignKeyConstraint baseColumnNames="id"');
+    runResult.assertFileContent(changelogPath, 'baseTableName="concrete_ref"');
+    runResult.assertFileContent(changelogPath, 'referencedTableName="entity_ref_or_value"');
+  });
+
 });

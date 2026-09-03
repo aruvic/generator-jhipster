@@ -256,6 +256,29 @@ function unknownRequiredPayload(property) {
   return /(?:^|[_-])id$/i.test(property) || /id$/i.test(property) ? 1 : 'sample';
 }
 
+function existingPayloadKey(output, requiredProperty, propertyKey, mode) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return undefined;
+  if (isRequestPayloadMode(mode) && output[requiredProperty] !== undefined) return requiredProperty;
+  if (output[propertyKey] !== undefined) return propertyKey;
+  return matchingPropertyName(requiredProperty, output) ?? matchingPropertyName(propertyKey, output);
+}
+
+function sanitizeExistingRequiredPayloadValue(output, requiredProperty, propertyKey, propertySchema, options = {}) {
+  const mode = options.mode ?? 'create';
+  const full = options.full ?? mode !== 'patch';
+  const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
+  const existingKey = existingPayloadKey(output, requiredProperty, propertyKey, mode);
+  if (existingKey === undefined) return false;
+  const sanitizedValue = sanitizePayloadForSchema(output[existingKey], propertySchema, { mode, full, seen, memo });
+  if (sanitizedValue === undefined) {
+    delete output[existingKey];
+    return false;
+  }
+  assignRequiredPayloadValue(output, requiredProperty, propertyKey, sanitizedValue, mode);
+  return true;
+}
+
 function backfillRequiredPayload(output, source, schema, options = {}) {
   const mode = options.mode ?? 'create';
   const full = options.full ?? mode !== 'patch';
@@ -264,10 +287,17 @@ function backfillRequiredPayload(output, source, schema, options = {}) {
   const properties = collectProperties(schema);
   const required = collectRequired(schema);
   for (const property of required) {
-    if (hasRequiredPayloadValue(output, property, properties, mode)) continue;
-
     const propertyKey = matchingPropertyName(property, properties) ?? property;
     const propertySchema = properties[propertyKey];
+    if (hasRequiredPayloadValue(output, property, properties, mode)) {
+      if (
+        propertySchema &&
+        !(isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly'))
+      ) {
+        sanitizeExistingRequiredPayloadValue(output, property, propertyKey, propertySchema, { mode, full, seen, memo });
+      }
+      continue;
+    }
 
     if (propertySchema) {
       if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
@@ -678,6 +708,27 @@ function primitivePayload(schema) {
   return undefined;
 }
 
+function sanitizeKnownObjectProperties(output, schema, options = {}) {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) return output;
+  const mode = options.mode ?? 'create';
+  const full = options.full ?? mode !== 'patch';
+  const seen = options.seen ?? new Set();
+  const memo = options.memo ?? new Map();
+  const properties = collectProperties(schema);
+  for (const [property, propertyValue] of Object.entries(output)) {
+    const propertyKey = matchingPropertyName(property, properties);
+    const propertySchema = propertyKey ? properties[propertyKey] : undefined;
+    if (!propertySchema) continue;
+    if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) {
+      delete output[property];
+      continue;
+    }
+    const sanitizedValue = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
+    if (sanitizedValue !== undefined) output[property] = sanitizedValue;
+  }
+  return output;
+}
+
 function payloadFor(schema, options = {}) {
   const mode = options.mode ?? 'create';
   const full = options.full ?? mode !== 'patch';
@@ -704,6 +755,7 @@ function payloadFor(schema, options = {}) {
         .map(part => payloadFor(part, { mode, full, seen, memo }))
         .filter(value => value !== undefined)
         .reduce(mergeObjects, {});
+      sanitizeKnownObjectProperties(output, schema, { mode, full, seen, memo });
       backfillRequiredPayload(output, {}, schema, { mode, full, seen, memo });
       backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen, memo });
       return remember(ensureDiscriminatorValue(output, schema, schemaName));
@@ -778,22 +830,7 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
         .map(part => sanitizePayloadForSchema(value, part, { mode, full, seen, memo }))
         .filter(part => part !== undefined)
         .reduce(mergeObjects, {});
-      const properties = collectProperties(schema);
-      const required = collectRequired(schema);
-      for (const [property, propertyValue] of Object.entries(output)) {
-        const propertyKey = matchingPropertyName(property, properties);
-        const propertySchema = propertyKey ? properties[propertyKey] : undefined;
-        if (!propertySchema) continue;
-        if (
-          isRequestPayloadMode(mode) &&
-          schemaHasBooleanFlag(propertySchema, 'readOnly')
-        ) {
-          delete output[property];
-          continue;
-        }
-        const sanitizedValue = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
-        if (sanitizedValue !== undefined) output[property] = sanitizedValue;
-      }
+      sanitizeKnownObjectProperties(output, schema, { mode, full, seen, memo });
       backfillRequiredPayload(output, value, schema, { mode, full, seen, memo });
       backfillSafeOptionalPayload(output, value, schema, { mode, full, seen, memo });
       return ensureDiscriminatorValue(output, schema, schemaName);

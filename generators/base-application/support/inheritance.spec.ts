@@ -59,5 +59,39 @@ describe('generator - base-application - support - inheritance', () => {
       expect(child.discriminatorValue).to.equal('party-ref');
       expect(logger.warn.callCount).to.equal(0);
     });
+
+    it('resolves a polymorphic ancestor declared after its descendants', () => {
+      const logger = { warn: sinon.spy() };
+      const root: any = {
+        name: 'PlaceRefOrValue',
+        fields: [],
+        relationships: [],
+        discriminator: {
+          column: 'kind',
+          type: 'String',
+          values: 'GeographicLocation->location',
+        },
+      };
+      const intermediate: any = {
+        name: 'GeographicLocationRefOrValue',
+        extends: root.name,
+        fields: [],
+        relationships: [],
+      };
+      const child: any = {
+        name: 'GeographicLocation',
+        extends: intermediate.name,
+        fields: [],
+        relationships: [],
+      };
+
+      linkEntityInheritance([intermediate, child, root], logger as any);
+
+      expect(root.polymorphicRoot).to.be.true;
+      expect(intermediate.polymorphicChild).to.be.true;
+      expect(child.polymorphicChild).to.be.true;
+      expect(child.discriminatorValue).to.equal('location');
+      expect(logger.warn.callCount).to.equal(0);
+    });
   });
 });

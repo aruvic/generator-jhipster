@@ -12,10 +12,12 @@ MAVEN_CLI_OPTS="${MAVEN_CLI_OPTS:-}"
 ANGULAR_BUILD_ENABLED="${ANGULAR_BUILD_ENABLED:-false}"
 ANGULAR_BUILD_COMMAND="${ANGULAR_BUILD_COMMAND:-npm run webapp:prod}"
 ANGULAR_TEST_ENABLED="${ANGULAR_TEST_ENABLED:-false}"
-ANGULAR_TEST_COMMAND="${ANGULAR_TEST_COMMAND:-npm run webapp:test -- --test-path-pattern=openapi-operations|form-crud}"
+ANGULAR_TEST_COMMAND="${ANGULAR_TEST_COMMAND:-npm run jest -- --testPathPattern=openapi-operations|form-crud}"
 ANGULAR_NPM_INSTALL="${ANGULAR_NPM_INSTALL:-offline}"
 NPM_INSTALL_COMMAND="${NPM_INSTALL_COMMAND:-npm install --no-audit --no-fund}"
 NPM_LOGS_DIR="${NPM_LOGS_DIR:-/tmp/generator-jhipster-regression/npm-logs}"
+ANGULAR_NODE_MODULES_CACHE_ENABLED="${ANGULAR_NODE_MODULES_CACHE_ENABLED:-true}"
+ANGULAR_NODE_MODULES_CACHE_DIR="${ANGULAR_NODE_MODULES_CACHE_DIR:-/tmp/generator-jhipster-regression/npm-node-modules-cache}"
 ARTIFACT_NAME_REGEX="${ARTIFACT_NAME_REGEX:-}"
 LOG_SKIPPED_ARTIFACTS="${LOG_SKIPPED_ARTIFACTS:-false}"
 
@@ -92,6 +94,32 @@ timestamped_step() {
   echo "=== [$name] $(iso_now) $message ==="
 }
 
+copy_node_modules_tree() {
+  local source_dir="$1"
+  local target_dir="$2"
+  local target_parent
+
+  target_parent="$(dirname "$target_dir")"
+  mkdir -p "$target_parent"
+  if [[ "$(stat -c %d "$source_dir")" == "$(stat -c %d "$target_parent")" ]]; then
+    if ! cp -al "$source_dir" "$target_dir" 2>/dev/null; then
+      # Some layered or bind-mounted filesystems report one device while still
+      # rejecting hard links. Remove the partial tree and use copy-on-write or
+      # a regular archive copy instead.
+      rm -rf "$target_dir"
+      cp -a --reflink=auto "$source_dir" "$target_dir"
+    fi
+  else
+    cp -a --reflink=auto "$source_dir" "$target_dir"
+  fi
+}
+
+angular_dependency_tree_valid() {
+  local tree="$1"
+
+  [[ -d "$tree" && -x "$tree/.bin/ng" && -x "$tree/.bin/rimraf" ]]
+}
+
 artifact_matches_name_filter() {
   local name="$1"
   local regex="${ARTIFACT_NAME_REGEX,,}"
@@ -106,20 +134,39 @@ artifact_matches_name_filter() {
 ensure_angular_dependencies() {
   local name="$1"
   local app_dir="$2"
-  local install_start install_end
+  local install_start install_end dependency_fingerprint cache_entry cache_tmp
 
   (
     cd "$app_dir"
     mkdir -p "$NPM_LOGS_DIR"
-    if [[ "$ANGULAR_NPM_INSTALL" != "skip" && ! -d node_modules ]]; then
+    if [[ "$ANGULAR_NODE_MODULES_CACHE_ENABLED" == "true" && ! -d node_modules ]]; then
+      dependency_fingerprint="$(jq -cS '{dependencies, devDependencies, optionalDependencies, peerDependencies, overrides, engines}' package.json | sha256sum | awk '{print $1}')"
+      cache_entry="$ANGULAR_NODE_MODULES_CACHE_DIR/$dependency_fingerprint"
+      if [[ -d "$cache_entry/node_modules" ]] && ! angular_dependency_tree_valid "$cache_entry/node_modules"; then
+        timestamped_step "$name" "discarding incomplete Angular dependency cache ($dependency_fingerprint)"
+        rm -Rf "$cache_entry"
+      fi
+      if angular_dependency_tree_valid "$cache_entry/node_modules"; then
+        install_start="$(now_epoch)"
+        timestamped_step "$name" "Angular dependency cache restore start ($dependency_fingerprint)"
+        copy_node_modules_tree "$cache_entry/node_modules" node_modules
+        install_end="$(now_epoch)"
+        timestamped_step "$name" "Angular dependency cache restore finished in $(duration_seconds "$install_start" "$install_end")s"
+      fi
+    fi
+    if [[ -d node_modules ]] && ! angular_dependency_tree_valid node_modules; then
+      timestamped_step "$name" "discarding incomplete Angular dependency tree"
+      rm -Rf node_modules
+    fi
+    if [[ "$ANGULAR_NPM_INSTALL" != "skip" ]] && ! angular_dependency_tree_valid node_modules; then
       install_start="$(now_epoch)"
       timestamped_step "$name" "Angular npm install start ($ANGULAR_NPM_INSTALL)"
       case "$ANGULAR_NPM_INSTALL" in
         offline)
-          env NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 npm_config_logs_dir="$NPM_LOGS_DIR" $NPM_INSTALL_COMMAND --offline < /dev/null
+          env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 npm_config_logs_dir="$NPM_LOGS_DIR" $NPM_INSTALL_COMMAND --offline < /dev/null
           ;;
         online)
-          env NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 npm_config_logs_dir="$NPM_LOGS_DIR" $NPM_INSTALL_COMMAND < /dev/null
+          env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 npm_config_logs_dir="$NPM_LOGS_DIR" $NPM_INSTALL_COMMAND < /dev/null
           ;;
         *)
           echo "Unsupported ANGULAR_NPM_INSTALL=$ANGULAR_NPM_INSTALL; use offline, online, or skip." >&2
@@ -128,6 +175,18 @@ ensure_angular_dependencies() {
       esac
       install_end="$(now_epoch)"
       timestamped_step "$name" "Angular npm install finished in $(duration_seconds "$install_start" "$install_end")s"
+
+      if [[ "$ANGULAR_NODE_MODULES_CACHE_ENABLED" == "true" ]]; then
+        dependency_fingerprint="${dependency_fingerprint:-$(jq -cS '{dependencies, devDependencies, optionalDependencies, peerDependencies, overrides, engines}' package.json | sha256sum | awk '{print $1}')}"
+        cache_entry="$ANGULAR_NODE_MODULES_CACHE_DIR/$dependency_fingerprint"
+        if [[ ! -d "$cache_entry/node_modules" ]]; then
+          mkdir -p "$ANGULAR_NODE_MODULES_CACHE_DIR"
+          cache_tmp="$(mktemp -d "$ANGULAR_NODE_MODULES_CACHE_DIR/.${dependency_fingerprint}.XXXXXX")"
+          copy_node_modules_tree node_modules "$cache_tmp/node_modules"
+          mv "$cache_tmp" "$cache_entry"
+          timestamped_step "$name" "Angular dependency cache saved ($dependency_fingerprint)"
+        fi
+      fi
     fi
   )
 }
@@ -144,7 +203,7 @@ run_angular_build() {
 
     build_start="$(now_epoch)"
     timestamped_step "$name" "Angular build start: $ANGULAR_BUILD_COMMAND"
-    env NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 $ANGULAR_BUILD_COMMAND < /dev/null
+    env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 $ANGULAR_BUILD_COMMAND < /dev/null
     build_end="$(now_epoch)"
     timestamped_step "$name" "Angular build finished in $(duration_seconds "$build_start" "$build_end")s"
   )
@@ -162,7 +221,7 @@ run_angular_test() {
 
     test_start="$(now_epoch)"
     timestamped_step "$name" "Angular test start: $ANGULAR_TEST_COMMAND"
-    env NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 $ANGULAR_TEST_COMMAND < /dev/null
+    env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}" NO_UPDATE_NOTIFIER=1 $ANGULAR_TEST_COMMAND < /dev/null
     test_end="$(now_epoch)"
     timestamped_step "$name" "Angular test finished in $(duration_seconds "$test_start" "$test_end")s"
   )
@@ -177,6 +236,8 @@ echo "=== [regression] $(iso_now) ARTIFACT_NAME_REGEX=${ARTIFACT_NAME_REGEX:-<no
 echo "=== [regression] $(iso_now) ANGULAR_BUILD_ENABLED=$ANGULAR_BUILD_ENABLED ==="
 echo "=== [regression] $(iso_now) ANGULAR_BUILD_COMMAND=$ANGULAR_BUILD_COMMAND ==="
 echo "=== [regression] $(iso_now) ANGULAR_NPM_INSTALL=$ANGULAR_NPM_INSTALL ==="
+echo "=== [regression] $(iso_now) ANGULAR_NODE_MODULES_CACHE_ENABLED=$ANGULAR_NODE_MODULES_CACHE_ENABLED ==="
+echo "=== [regression] $(iso_now) ANGULAR_NODE_MODULES_CACHE_DIR=$ANGULAR_NODE_MODULES_CACHE_DIR ==="
 
 while IFS=$'\t' read -r name app_dir jdl_file _yaml_file _db_user _db_name _base_name; do
   if [[ -z "$name" ]]; then

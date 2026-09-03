@@ -29,6 +29,7 @@ import { FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY } from 'app/openapi-operations/o
 import FormCrudReferencePickers from './form-crud-reference-pickers';
 
 describe('FormCrudReferencePickers', () => {
+  const resourceUrl = 'api/form-crud-reference-pickers';
   let fixture: ComponentFixture<FormCrudReferencePickers>;
   let comp: FormCrudReferencePickers;
   let httpMock: HttpTestingController;
@@ -44,7 +45,7 @@ describe('FormCrudReferencePickers', () => {
     fixture = TestBed.createComponent(FormCrudReferencePickers);
     comp = fixture.componentInstance;
     fixture.detectChanges();
-    httpMock.expectOne('api/form-crud-reference-pickers').flush([]);
+    httpMock.expectOne(resourceUrl).flush([]);
   });
 
   afterEach(() => {
@@ -60,9 +61,10 @@ describe('FormCrudReferencePickers', () => {
 
     comp.save();
 
-    const request = httpMock.expectOne('api/form-crud-reference-pickers');
+    const request = httpMock.expectOne(resourceUrl);
     expect(request.request.method).toBe('PUT');
     expect(request.request.body).toMatchObject([{ sourcePath: 'references', collectionPath: '/targets' }]);
+    expect(request.request.body[0].id).toBe(comp.configs()[0].id);
     request.flush(comp.configs());
 
     const stored = JSON.parse(localStorage.getItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY) ?? '[]') as unknown[];
@@ -76,6 +78,7 @@ describe('FormCrudReferencePickers', () => {
         { source: 'href', target: 'href' },
       ],
     });
+    expect(comp.configs()[0].id).toBeDefined();
     expect(comp.success()).toContain('saved');
   });
 
@@ -118,7 +121,7 @@ describe('FormCrudReferencePickers', () => {
 
     comp.deleteConfig(0);
 
-    const request = httpMock.expectOne('api/form-crud-reference-pickers');
+    const request = httpMock.expectOne(resourceUrl);
     expect(request.request.method).toBe('PUT');
     expect(request.request.body).toEqual([]);
     request.flush([]);

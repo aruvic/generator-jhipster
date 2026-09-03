@@ -73,6 +73,7 @@ export type OpenApiOperationDefinition = {
   requestContentType?: string;
   requestBodyExample?: unknown;
   requestBodyFields?: readonly OpenApiSchemaField[];
+  responseStatusCodes?: readonly string[];
   responseContentType?: string;
   responseBodyFields?: readonly OpenApiSchemaField[];
 };
