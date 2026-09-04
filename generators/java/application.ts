@@ -34,6 +34,9 @@ export type JavaAddedApplicationProperties = {
   useNpmWrapper: boolean;
   javaPackagingDestDir: string;
   oas3Input?: string;
+  openApiGeneratorInputFile?: string;
+  openApiModelNameMappings?: { sourceName: string; targetName: string }[];
+  preparedOpenApiSpec?: { specContents: string };
 };
 
 export const mutateApplicationPreparing = {
@@ -171,6 +174,6 @@ export const mutateRelationship = {
   __override__: false,
 
   propertyJavaBeanName: ({ propertyName }) => javaBeanCase(propertyName),
-  propertyConsumerName: ({ propertyJavaBeanName }) => `set${propertyJavaBeanName}`,
-  propertySupplierName: ({ propertyJavaBeanName }) => `get${propertyJavaBeanName}`,
+  propertyConsumerName: ({ propertyName }) => `set${upperFirst(propertyName)}`,
+  propertySupplierName: ({ propertyName }) => `get${upperFirst(propertyName)}`,
 } as const satisfies MutateDataPropertiesWithRequiredProperties<MutateDataParam<JavaRelationship>, JavaAddedRelationshipProperties>;

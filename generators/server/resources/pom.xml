@@ -12,7 +12,6 @@
         <blockhound-junit-platform.version>1.0.17.RELEASE</blockhound-junit-platform.version>
         <commons-beanutils.version>1.11.0</commons-beanutils.version>
         <gatling.version>3.15.1</gatling.version>
-        <jackson-databind-nullable.version>0.2.11</jackson-databind-nullable.version>
         <mapstruct.version>1.6.3</mapstruct.version>
         <micrometer-context-propagation.version>1.2.1</micrometer-context-propagation.version>
         <picocli.version>4.7.7</picocli.version>
@@ -70,11 +69,6 @@
               <groupId>info.picocli</groupId>
               <artifactId>picocli</artifactId>
               <version>${picocli.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.openapitools</groupId>
-                <artifactId>jackson-databind-nullable</artifactId>
-                <version>${jackson-databind-nullable.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

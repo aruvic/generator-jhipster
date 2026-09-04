@@ -18,7 +18,10 @@ function endpointParts(value) {
 }
 
 function normalizePathPart(value) {
-  return `/${String(value ?? '').split('/').filter(Boolean).join('/')}`;
+  return `/${String(value ?? '')
+    .split('/')
+    .filter(Boolean)
+    .join('/')}`;
 }
 
 function postmanItemPath(item) {
@@ -53,10 +56,10 @@ const collection = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
 let strippedBodies = 0;
 const items = (collection.item ?? [])
   .filter(item => {
-  const method = String(item?.request?.method ?? '').toUpperCase();
-  const itemPath = postmanItemPath(item);
-  return method === endpoint.method && itemPath && pathMatches(endpoint.path, itemPath);
-})
+    const method = String(item?.request?.method ?? '').toUpperCase();
+    const itemPath = postmanItemPath(item);
+    return method === endpoint.method && itemPath && pathMatches(endpoint.path, itemPath);
+  })
   .map(item => {
     if (!stripBodies) return item;
     const output = JSON.parse(JSON.stringify(item));

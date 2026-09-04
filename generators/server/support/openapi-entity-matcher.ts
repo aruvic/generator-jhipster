@@ -20,13 +20,13 @@
 import pluralize from 'pluralize';
 
 import {
+  type OpenAPIOperation,
+  type OpenAPIParameter,
+  type ParsedOpenAPISpec,
   extractSchemaRef,
   getOperationType,
   normalizeTypeName,
   stripDtoSuffix,
-  type OpenAPIOperation,
-  type OpenAPIParameter,
-  type ParsedOpenAPISpec,
 } from './openapi-mapper-generator.ts';
 
 interface EntitySummary {
@@ -99,7 +99,7 @@ export class OpenApiEntityMatcher {
 
   constructor(generator: any, basePackage?: string) {
     this.basePackage = basePackage;
-    const existingEntities: Array<{ name: string; definition: any }> | undefined = generator?.getExistingEntities?.();
+    const existingEntities: { name: string; definition: any }[] | undefined = generator?.getExistingEntities?.();
     if (!Array.isArray(existingEntities)) {
       return;
     }
@@ -165,7 +165,7 @@ export class OpenApiEntityMatcher {
     const responseEntityMatch = this.matchPreferredEntity(responseSchemaNames, matchedEntity, spec);
 
     let resourceName = matchedEntity?.name;
-    let resourceToken = matchedEntity ? undefined : this.derivePrimaryToken(operation);
+    const resourceToken = matchedEntity ? undefined : this.derivePrimaryToken(operation);
 
     if (!resourceName) {
       resourceName = this.fallbackResourceName(operation, requestSchemaNames, responseSchemaNames, resourceToken);
@@ -238,7 +238,12 @@ export class OpenApiEntityMatcher {
       }
     }
 
-    if (directMatch && fallback && directMatch.canonical !== fallback.canonical && this.isComposedAliasOfEntity(schemaNames[0], fallback, spec)) {
+    if (
+      directMatch &&
+      fallback &&
+      directMatch.canonical !== fallback.canonical &&
+      this.isComposedAliasOfEntity(schemaNames[0], fallback, spec)
+    ) {
       return fallback;
     }
 
@@ -275,7 +280,7 @@ export class OpenApiEntityMatcher {
   private registerEntityAliases(summary: EntitySummary, entity: any): void {
     const aliases = new Set<string>();
 
-    const candidates: Array<string | undefined> = [
+    const candidates: (string | undefined)[] = [
       entity.entityClass,
       entity.name,
       entity.entityNameCapitalized,
@@ -521,12 +526,7 @@ export class OpenApiEntityMatcher {
     return segments[segments.length - 1];
   }
 
-  private fallbackResourceName(
-    operation: OpenAPIOperation,
-    requestSchemas: string[],
-    responseSchemas: string[],
-    token?: string,
-  ): string {
+  private fallbackResourceName(operation: OpenAPIOperation, requestSchemas: string[], responseSchemas: string[], token?: string): string {
     if (token) {
       const singular = pluralize.singular(token);
       const candidate = normalizeTypeName(singular || token);
@@ -551,11 +551,7 @@ export class OpenApiEntityMatcher {
     return 'Resource';
   }
 
-  private collectSchemaNames(
-    schemaName?: string,
-    schemaObject?: any,
-    spec?: ParsedOpenAPISpec,
-  ): string[] {
+  private collectSchemaNames(schemaName?: string, schemaObject?: any, spec?: ParsedOpenAPISpec): string[] {
     const collected = new Set<string>();
     if (schemaName) {
       collected.add(schemaName);

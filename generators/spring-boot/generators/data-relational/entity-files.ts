@@ -18,6 +18,7 @@
  */
 import { asWriteFilesBlock, asWriteFilesSection, asWritingEntitiesTask } from '../../../base-application/support/task-type-inference.ts';
 import { javaMainPackageTemplatesBlock } from '../../../java/support/index.ts';
+
 import type { Application as SpringDataRelationalApplication, Entity as SpringDataRelationalEntity } from './types.ts';
 
 const domainFiles = asWriteFilesBlock([

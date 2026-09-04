@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+
 import { parse, stringify } from 'yaml';
 
 const [, , summaryPath, openApiPath, outputPath, basePath = '/api'] = process.argv;
@@ -16,7 +17,10 @@ function readJson(filePath) {
 }
 
 function normalizePathPart(value) {
-  return `/${String(value ?? '').split('/').filter(Boolean).join('/')}`;
+  return `/${String(value ?? '')
+    .split('/')
+    .filter(Boolean)
+    .join('/')}`;
 }
 
 function prefixedPath(rawPath) {
@@ -144,11 +148,20 @@ function uniqueArray(existing, incoming) {
 
 function refSchemaName(value) {
   const ref = String(value ?? '');
-  return ref.startsWith('#/components/schemas/') ? decodeURIComponent(ref.split('/').pop().replace(/~1/g, '/').replace(/~0/g, '~')) : undefined;
+  return ref.startsWith('#/components/schemas/') ?
+      decodeURIComponent(ref.split('/').pop().replace(/~1/g, '/').replace(/~0/g, '~'))
+    : undefined;
 }
 
 function mergePropertySchema(existingValue, incomingValue) {
-  if (existingValue && incomingValue && typeof existingValue === 'object' && typeof incomingValue === 'object' && !Array.isArray(existingValue) && !Array.isArray(incomingValue)) {
+  if (
+    existingValue &&
+    incomingValue &&
+    typeof existingValue === 'object' &&
+    typeof incomingValue === 'object' &&
+    !Array.isArray(existingValue) &&
+    !Array.isArray(incomingValue)
+  ) {
     const merged = deepCopy(existingValue);
     mergeSchema(merged, incomingValue);
     return merged;
@@ -283,7 +296,7 @@ function stripUnsupportedFormatsAndPatterns(node, stats, preservePatterns = fals
     delete node.format;
     stats.unsupportedFormatsStripped += 1;
   }
-  if (!preservePatterns && Object.prototype.hasOwnProperty.call(node, 'pattern')) {
+  if (!preservePatterns && Object.hasOwn(node, 'pattern')) {
     delete node.pattern;
     stats.schemaPatternsStripped += 1;
   }
@@ -301,7 +314,7 @@ function isFreeFormObjectSchema(schema) {
 }
 
 function replaceWithBoundedObjectSchema(schema) {
-  const description = schema.description;
+  const { description } = schema;
   Object.keys(schema).forEach(key => delete schema[key]);
   schema.type = 'object';
   if (description !== undefined) schema.description = description;
@@ -356,7 +369,10 @@ function compactSchemaFor(referenced, schemas = {}, seenRefs = new Set()) {
       return {
         type: 'array',
         maxItems: 1,
-        items: referenced.items && typeof referenced.items === 'object' ? compactSchemaFor(referenced.items, schemas, seenRefs) : { type: 'string' },
+        items:
+          referenced.items && typeof referenced.items === 'object' ?
+            compactSchemaFor(referenced.items, schemas, seenRefs)
+          : { type: 'string' },
       };
     }
     if (['string', 'integer', 'number', 'boolean'].includes(type)) {
@@ -519,7 +535,9 @@ function parameterContainers(pathItem, operation) {
 }
 
 function pathParameterSchemas(container, openApi) {
-  return ensureArray(container?.parameters).map(parameter => resolveOpenApiRefMap(parameter, openApi)).filter(Boolean);
+  return ensureArray(container?.parameters)
+    .map(parameter => resolveOpenApiRefMap(parameter, openApi))
+    .filter(Boolean);
 }
 
 function addParameterExamples(pathItem, operation, values, openApi) {
@@ -596,7 +614,7 @@ function addRequestExample(operation, result) {
   if (lockRequestExampleSchemas) {
     mediaType.schema = schemaFromExample(payload);
   } else {
-    const schema = mediaType.schema;
+    const { schema } = mediaType;
     if (schema && typeof schema === 'object') {
       schema.example = payload;
     }

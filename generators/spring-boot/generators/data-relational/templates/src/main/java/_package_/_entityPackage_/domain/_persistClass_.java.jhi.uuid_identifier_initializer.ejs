@@ -21,27 +21,27 @@
  EJS fragments will process % delimiter tags in the template and & delimiter tags during the merge process.
 -%>
 <&_ if (fragment.classAdditionalFieldsMethodsSection) { -&>
-<%_
-const isIdentifierFieldName = fieldName =>
-  fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName ?? '') || /(?:Id|ID)$/.test(fieldName ?? '');
-const generatedUuidFields = fields?.filter(
-  field =>
-    isIdentifierFieldName(field?.fieldName) &&
-    typeof field.fieldType === 'string' &&
-    field.fieldType.toLowerCase() === 'uuid' &&
-    Array.isArray(field.fieldValidateRules) &&
-    field.fieldValidateRules.includes('required')
-) ?? [];
-if (generatedUuidFields.length > 0) {
+<%_ const isIdentifierFieldName = fieldName =>
+      fieldName === 'id' || /(?:^|[_-])id$/i.test(fieldName ?? '') || /(?:Id|ID)$/.test(fieldName ?? '');
+      const generatedUuidFields = fields?.filter(
+        field =>
+          isIdentifierFieldName(field?.fieldName)
+            && typeof field.fieldType === 'string'
+            && field.fieldType.toLowerCase() === 'uuid'
+            && Array.isArray(field.fieldValidateRules)
+            && field.fieldValidateRules.includes('required'),
+        ) ?? [];
 _%>
+<%_ if (generatedUuidFields.length > 0) { _%>
 
     @PrePersist
+    @PreUpdate
     protected void ensureGeneratedUuidIdentifiers() {
-<%_ for (const field of generatedUuidFields) { _%>
-        if (this.get<%= field.fieldInJavaBeanMethod %>() == null) {
-            this.set<%= field.fieldInJavaBeanMethod %>(java.util.UUID.randomUUID());
+  <%_ for (const field of generatedUuidFields) { _%>
+        if (this.get<%- field.fieldInJavaBeanMethod %>() == null) {
+            this.set<%- field.fieldInJavaBeanMethod %>(java.util.UUID.randomUUID());
         }
-<%_ } _%>
+  <%_ } _%>
     }
 
 <%_ } _%>

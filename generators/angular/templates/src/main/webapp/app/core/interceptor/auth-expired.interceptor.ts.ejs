@@ -16,7 +16,7 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 -%>
-import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
+import { HttpContextToken, HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { tap } from 'rxjs';
@@ -27,6 +27,8 @@ import { AuthServerProvider, StateStorageService } from 'app/core/auth';
 import { StateStorageService } from 'app/core/auth';
 import { LoginService } from 'app/login/login.service';
 <%_ } _%>
+
+export const SKIP_AUTH_EXPIRED_LOGOUT = new HttpContextToken<boolean>(() => false);
 
 export const authExpiredInterceptor: HttpInterceptorFn = (req, next) => {
 <%_ if (authenticationTypeOauth2) { _%>
@@ -40,6 +42,9 @@ export const authExpiredInterceptor: HttpInterceptorFn = (req, next) => {
   return next(req).pipe(
     tap({
       error(err: HttpErrorResponse) {
+        if (req.context.get(SKIP_AUTH_EXPIRED_LOGOUT)) {
+          return;
+        }
         if (err.status === 401 && err.url && !err.url.includes('api/account')) {
 <%_ if (authenticationTypeSession) { _%>
         if (err.url.includes(loginService.logoutUrl())) {

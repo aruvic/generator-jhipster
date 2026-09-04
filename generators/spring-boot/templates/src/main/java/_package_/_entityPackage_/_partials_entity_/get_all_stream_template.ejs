@@ -48,7 +48,7 @@ _%>
       <%_ } else if (reactive) { _%>
             return <%- toResponseEntityPrefix %><%- entityInstance %>Repository
                 .findAll()
-                .filter(<%- entityInstance %> -> <%- entityInstance %>.get<%- relationship.relationshipNameCapitalized %>() == null)
+                .filter(<%- entityInstance %> -> <%- entityInstance %>.<%- relationship.propertySupplierName %>() == null)
         <%_ if (dtoMapstruct) { _%>
                 .map(<%- entityToDtoReference %>)
         <%_ } _%>
@@ -56,7 +56,7 @@ _%>
       <%_ } else { _%>
             return <%- toResponseEntityPrefix %>StreamSupport
                 .stream(<%- entityInstance %>Repository.findAll().spliterator(), false)
-                .filter(<%- entityInstance %> -> <%- entityInstance %>.get<%- relationship.relationshipNameCapitalized %>() == null)
+                .filter(<%- entityInstance %> -> <%- entityInstance %>.<%- relationship.propertySupplierName %>() == null)
         <%_ if (dtoMapstruct) { _%>
                 .map(<%- entityToDtoReference %>)
         <%_ } _%>

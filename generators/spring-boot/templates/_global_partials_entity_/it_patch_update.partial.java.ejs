@@ -19,11 +19,7 @@
 long databaseSizeBeforeUpdate = getRepositoryCount();
 
 // Update the <%- entityInstance %> using partial update
-<%_
-const partialInstantiationExpression = typeof instantiationExpression !== 'undefined'
-  ? instantiationExpression
-  : `new ${persistClass}()`;
-_%>
+<%_ const partialInstantiationExpression = typeof instantiationExpression === 'undefined' ? `new ${persistClass}()` : instantiationExpression; _%>
 <%- persistClass %> partialUpdated<%- persistClass %> = <%- partialInstantiationExpression %>;
 partialUpdated<%- persistClass %>.<%- primaryKey.propertyConsumerName %>(<%- persistInstance %>.<%- primaryKey.propertySupplierName %>());
 <%_ fieldsToUpdate = fields.filter(field => field.includeField); %>

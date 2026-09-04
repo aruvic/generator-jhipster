@@ -54,7 +54,7 @@ import static <%- packageName %>.web.rest.TestUtil.createUpdateProxyForBean;
     if (databaseTypeSql && !reactive) {
       transactionalAnnotation = '\n    @Transactional';
     }
-    const findFirstConcreteChildEntity = entities => {
+    const findFirstConcreteChildEntity = (entities) => {
       if (!Array.isArray(entities)) return undefined;
       for (const childEntity of entities) {
         if (childEntity && !childEntity.abstractClass) return childEntity;
@@ -69,8 +69,8 @@ import static <%- packageName %>.web.rest.TestUtil.createUpdateProxyForBean;
     const instantiationExpression = instantiationChildEntity
       ? `new ${instantiationChildEntity.persistClass}()`
       : abstractClass
-        ? `new ${persistClass}() {}`
-        : `new ${persistClass}()`;
+      ? `new ${persistClass}() {}`
+      : `new ${persistClass}()`;
     const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
 _%>
 <%_ if (entityAbsolutePackage !== packageName) { _%>

@@ -47,6 +47,18 @@ export function loadRequiredConfigDerivedProperties(entity: any) {
 export function preparePostEntityServerDerivedProperties(
   entity: SpringBootEntity<SpringBootField, RelationshipWithEntity<SpringBootRelationship, SpringBootEntity>>,
 ) {
+  const inheritedFieldNames = new Set<string>();
+  let ancestor = entity.parentEntity;
+  while (ancestor) {
+    ancestor.fields.forEach(field => inheritedFieldNames.add(field.fieldName));
+    ancestor = ancestor.parentEntity;
+  }
+  entity.fields.forEach(field => {
+    if (inheritedFieldNames.has(field.fieldName)) {
+      field.javaInherited = true;
+    }
+  });
+
   mutateData(entity, {
     uniqueEnums: ({ fields }) => [...new Set(fields.filter(field => field.fieldIsEnum))],
   });
@@ -67,7 +79,8 @@ export function preparePostEntityServerDerivedProperties(
   if (entity.databaseType === 'sql') {
     for (const relationship of entity.relationships) {
       if (!relationship.otherEntity.embedded) {
-        const relationshipColumnName = (relationship as DatabaseRelationship).columnName ?? hibernateSnakeCase(relationship.relationshipName);
+        const relationshipColumnName =
+          (relationship as DatabaseRelationship).columnName ?? hibernateSnakeCase(relationship.relationshipName);
         (relationship as DatabaseRelationship).joinColumnNames = relationship.otherEntity.primaryKey!.fields.map(
           otherField =>
             `${relationship.id && relationship.relationshipOneToOne ? '' : `${relationshipColumnName}_`}${(otherField as DatabaseField).columnName}`,
@@ -136,7 +149,7 @@ function collectDiscriminatorValues(
       values.add(stringValue);
     }
   };
-  for (const value of Object.keys(entity.discriminatorColumn?.values ?? {})) {
+  for (const value of Object.values(entity.discriminatorColumn?.values ?? {})) {
     addValue(value);
   }
   const addChildValues = (children: SpringBootEntity[] | undefined) => {
@@ -194,7 +207,7 @@ function relocateConflictingDiscriminatorColumn(
   entity: SpringBootEntity<SpringBootField, RelationshipWithEntity<SpringBootRelationship, SpringBootEntity>>,
   columns: Map<string, SpringBootField[]>,
 ): void {
-  const discriminatorColumn = entity.discriminatorColumn;
+  const { discriminatorColumn } = entity;
   if (!discriminatorColumn) {
     return;
   }

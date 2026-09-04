@@ -13,8 +13,9 @@ package <%- packageName %>;
 <%_ const hasInlineElementMappings = requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => field.useInlineElementMapping)); _%>
 <%_ const hasNamedHelperMethods = hasInlineElementMappings || hasResponseCollectionMappings; _%>
 <%_ const needsOpenApiPrimitiveMapperField = [...requestMappings, ...responseMappings].some(mapping =>
-      (mapping.annotations ?? []).some(annotation => annotation.includes('openApiPrimitiveMapper.'))
-    ); _%>
+      (mapping.annotations ?? []).some(annotation => annotation.includes('openApiPrimitiveMapper.')),
+    );
+_%>
 
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
@@ -67,15 +68,18 @@ import java.util.function.Function;
 @Mapper(
   componentModel = "spring",
   collectionMappingStrategy = CollectionMappingStrategy.TARGET_IMMUTABLE,
-  unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (usesMappers && usesMappers.length > 0) { _%>,
-  uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
+  unmappedTargetPolicy = ReportingPolicy.IGNORE
+<%_ if (usesMappers && usesMappers.length > 0) { _%>,
+  uses = { <%- usesMappers.map(mapper => `${mapper}.class`).join(', ') %> }
+<%_ } _%>
 )
 public abstract class <%- mapperName %> {
 
-<%_ if (needsMapperHelpers) { mergeMappersList.forEach(fqcn => { _%>
+<%_ if (needsMapperHelpers) { mergeMappersList.forEach((fqcn) => { _%>
     @Autowired
     protected <%- fqcn %> <%- fqcn.split('.').pop().charAt(0).toLowerCase() + fqcn.split('.').pop().slice(1) %>;
-<%_ }); } _%>
+  <%_ }); _%>
+<%_ } _%>
 <%_ if (needsOpenApiPrimitiveMapperField) { _%>
     @Autowired
     protected <%- packageName %>.OpenApiPrimitiveMapper openApiPrimitiveMapper;
@@ -96,14 +100,14 @@ public abstract class <%- mapperName %> {
     public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
   @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.SET_TO_NULL)
-<%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
-  <%_ for (const annotation of mapping.annotations) { _%>
+  <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
+    <%_ for (const annotation of mapping.annotations) { _%>
     <%- annotation %>
+    <%_ } _%>
   <%_ } _%>
-<%_ } _%>
-<%_ for (const field of mapping.generatedUuidFields ?? []) { _%>
+  <%_ for (const field of mapping.generatedUuidFields ?? []) { _%>
     @Mapping(target = "<%- field.fieldName %>", nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
-<%_ } _%>
+  <%_ } _%>
   <%_ if (!hasIdIgnore) { _%>
     @Mapping(target = "id", ignore = true)
   <%_ } _%>
@@ -123,7 +127,9 @@ public abstract class <%- mapperName %> {
         }
   <%_ } _%>
   <%_ for (const field of mapping.generatedDefaultFields ?? []) { _%>
-        if (target.get<%- field.accessor %>() == null<%_ if (field.presenceAccessor) { _%> && target.get<%- field.presenceAccessor %>() != null<%_ } _%>) {
+        if (target.get<%- field.accessor %>() == null
+    <%_ if (field.presenceAccessor) { _%> && target.get<%- field.presenceAccessor %>() != null
+    <%_ } _%>) {
             target.set<%- field.accessor %>(<%- field.valueExpression %>);
         }
   <%_ } _%>
@@ -143,16 +149,16 @@ public abstract class <%- mapperName %> {
 <%_ } _%>
 
 <%_ if (hasResponseCollectionMappings) { _%>
-<%_ const responseCollectionFieldsByMethod = new Map();
-    for (const mapping of responseMappings) {
-      for (const field of mapping.responseCollectionFields ?? []) {
-        if (field.responseListMapMethod && field.responseMapMethod) {
-          responseCollectionFieldsByMethod.set(`${field.responseListMapMethod}:${field.mapperFqcn}:${field.elementDomainType}:${field.elementDtoType}`, field);
+  <%_ const responseCollectionFieldsByMethod = new Map();
+      for (const mapping of responseMappings) {
+        for (const field of mapping.responseCollectionFields ?? []) {
+          if (field.responseListMapMethod && field.responseMapMethod) {
+            responseCollectionFieldsByMethod.set(`${field.responseListMapMethod}:${field.mapperFqcn}:${field.elementDomainType}:${field.elementDtoType}`, field);
+          }
         }
       }
-    }
-    const responseCollectionFields = Array.from(responseCollectionFieldsByMethod.values());
-_%>
+      const responseCollectionFields = Array.from(responseCollectionFieldsByMethod.values());
+  _%>
   <%_ for (const field of responseCollectionFields) { _%>
     @Named("<%- mapperName %>.<%- field.responseListMapMethod %>")
     protected <%- field.responseCollectionDtoType || `List<${field.elementDtoType}>` %> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
@@ -176,32 +182,32 @@ _%>
 <%_ } _%>
 
 <%_ if (hasCollectionMerges) { _%>
-<%_ const inlineCollectionFieldsByMethod = new Map();
-    for (const mapping of requestMappings) {
-      for (const field of mapping.collectionFields ?? []) {
-        if (field.useInlineElementMapping && field.inlineMapMethod && field.inlineUpdateMethod) {
-          inlineCollectionFieldsByMethod.set(`${field.inlineMapMethod}:${field.inlineUpdateMethod}`, field);
+  <%_ const inlineCollectionFieldsByMethod = new Map();
+      for (const mapping of requestMappings) {
+        for (const field of mapping.collectionFields ?? []) {
+          if (field.useInlineElementMapping && field.inlineMapMethod && field.inlineUpdateMethod) {
+            inlineCollectionFieldsByMethod.set(`${field.inlineMapMethod}:${field.inlineUpdateMethod}`, field);
+          }
         }
       }
-    }
-    const inlineCollectionFields = Array.from(inlineCollectionFieldsByMethod.values());
-_%>
+      const inlineCollectionFields = Array.from(inlineCollectionFieldsByMethod.values());
+  _%>
   <%_ for (const field of inlineCollectionFields) { _%>
-  <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
     <%- annotation %>
-  <%_ } _%>
+    <%_ } _%>
     @Named("<%- mapperName %>.<%- field.inlineMapMethod %>")
     protected abstract <%- field.elementDomainType %> <%- field.inlineMapMethod %>(<%- field.elementDtoType %> source);
 
-  <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
     <%- annotation %>
-  <%_ } _%>
+    <%_ } _%>
     @Named("<%- mapperName %>.<%- field.inlineUpdateMethod %>")
     protected abstract void <%- field.inlineUpdateMethod %>(@MappingTarget <%- field.elementDomainType %> target, <%- field.elementDtoType %> source);
 
   <%_ } _%>
-  <%_ for (const mapping of requestMappings) {
-        const collectionFields = mapping.collectionFields ?? [];
+  <%_ for (const mapping of requestMappings) { _%>
+    <%_ const collectionFields = mapping.collectionFields ?? [];
         if (collectionFields.length === 0) { continue; }
         const sourceSimple = mapping.sourceType.split('.').pop();
     _%>
@@ -282,9 +288,9 @@ _%>
                 if (incomingItem != null) {
                     <%- field.elementDomainType %> mappedItem = <% if (field.useInlineElementMapping) { %>this.<%- field.inlineMapMethod %>(incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.mapMethod %>(incomingItem)<% } %>;
                     if (mappedItem != null) {
-                      <%_ if (field.hasId && !field.preserveNewItemId) { _%>
+        <%_ if (field.hasId && !field.preserveNewItemId) { _%>
                         mappedItem.setId(null);
-                      <%_ } _%>
+        <%_ } _%>
                         replaced<%- field.targetGetter %>.add(mappedItem);
                     }
                 }
@@ -402,32 +408,32 @@ _%>
 <%_ } _%>
 
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
-<%_   for (const factory of objectFactories) { _%>
+  <%_ for (const factory of objectFactories) { _%>
 
   @ObjectFactory
   protected <%- factory.returnType %> <%- factory.methodName %>(<%- factory.sourceType %> source) {
     if (source == null) {
       return null;
     }
-<%_     if (factory.discriminatorAccessor) { _%>
+    <%_ if (factory.discriminatorAccessor) { _%>
     final Object rawDiscriminator = <%- factory.discriminatorAccessor %>;
     final String discriminator = rawDiscriminator != null ? rawDiscriminator.toString() : <%- factory.fallbackAccessor %>;
-<%_     } else { _%>
+    <%_ } else { _%>
     final String discriminator = <%- factory.fallbackAccessor %>;
-<%_     } _%>
+    <%_ } _%>
     if (discriminator == null) {
       return new <%- factory.defaultVariant.instantiationType %>();
     }
     switch (discriminator) {
-<%_     for (const variant of factory.variants) { _%>
+    <%_ for (const variant of factory.variants) { _%>
     case <%- variant.discriminatorLiteral %>:
       return new <%- variant.instantiationType %>();
-<%_     } _%>
+    <%_ } _%>
     default:
       return new <%- factory.defaultVariant.instantiationType %>();
     }
   }
-<%_   } _%>
+  <%_ } _%>
 <%_ } _%>
 
 }

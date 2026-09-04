@@ -18,25 +18,24 @@
 -%>
 package <%- entityAbsolutePackage %>.domain;
 
-<%_
-const findFirstConcreteChildEntity = entities => {
-  if (!Array.isArray(entities)) return undefined;
-  for (const childEntity of entities) {
-    if (childEntity && !childEntity.abstractClass) return childEntity;
-  }
-  for (const childEntity of entities) {
-    const found = findFirstConcreteChildEntity(childEntity?.childEntities);
-    if (found) return found;
-  }
-  return undefined;
-};
-const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
-const instantiationExpression = instantiationChildEntity
-  ? `new ${instantiationChildEntity.persistClass}()`
-  : abstractClass
-    ? `new ${persistClass}() {}`
-    : `new ${persistClass}()`;
-const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
+<%_ const findFirstConcreteChildEntity = (entities) => {
+      if (!Array.isArray(entities)) return undefined;
+      for (const childEntity of entities) {
+        if (childEntity && !childEntity.abstractClass) return childEntity;
+      }
+      for (const childEntity of entities) {
+        const found = findFirstConcreteChildEntity(childEntity?.childEntities);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
+    const instantiationExpression = instantiationChildEntity
+      ? `new ${instantiationChildEntity.persistClass}()`
+      : abstractClass
+      ? `new ${persistClass}() {}`
+      : `new ${persistClass}()`;
+    const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
 _%>
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;

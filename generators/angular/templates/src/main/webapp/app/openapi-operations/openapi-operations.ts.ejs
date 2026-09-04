@@ -20,18 +20,17 @@ import { DOCUMENT } from '@angular/common';
 import { HttpClient, HttpHeaders, HttpParams, HttpResponse } from '@angular/common/http';
 import { Component, inject, signal } from '@angular/core';
 import { AbstractControl, FormControl, FormGroup, ReactiveFormsModule, ValidatorFn, Validators } from '@angular/forms';
+import { FontAwesomeModule } from '@fortawesome/angular-fontawesome';
 import { finalize } from 'rxjs/operators';
-
-import SharedModule from 'app/shared/shared.module';
 
 import { OPENAPI_OPERATIONS, OpenApiOperationDefinition, OpenApiOperationParameter } from './openapi-operations.model';
 
 type OperationForm = FormGroup<Record<string, FormControl<string>>>;
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-openapi-operations',
+  selector: '<%- jhiPrefixDashed %>-openapi-operations',
   templateUrl: './openapi-operations.html',
-  imports: [SharedModule, ReactiveFormsModule],
+  imports: [ReactiveFormsModule, FontAwesomeModule],
 })
 export default class OpenApiOperations {
   readonly operations = OPENAPI_OPERATIONS;

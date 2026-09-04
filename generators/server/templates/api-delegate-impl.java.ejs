@@ -1,21 +1,14 @@
-package <%= packageName %>;
+package <%- packageName %>;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.MissingNode;
-import com.fasterxml.jackson.databind.node.NullNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.github.fge.jsonpatch.JsonPatch;
-import com.github.fge.jsonpatch.JsonPatchException;
-import com.github.fge.jsonpatch.mergepatch.JsonMergePatch;
-import com.jayway.jsonpath.Configuration;
-import com.jayway.jsonpath.JsonPath;
-import com.jayway.jsonpath.Option;
-import com.jayway.jsonpath.PathNotFoundException;
-import com.jayway.jsonpath.TypeRef;
-import com.jayway.jsonpath.spi.json.JacksonJsonNodeJsonProvider;
-import com.jayway.jsonpath.spi.mapper.JacksonMappingProvider;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.MissingNode;
+import tools.jackson.databind.node.NullNode;
+import tools.jackson.databind.node.ObjectNode;
+import java.beans.Introspector;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -54,16 +47,17 @@ import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
-<%_ if (imports?.length) { imports.forEach(fqcn => { _%>
-import <%= fqcn %>;
-<%_ }); } _%>
-import <%= basePackage %>.web.api.<%= interfaceName %>;
+<%_ if (imports?.length) { imports.forEach((fqcn) => { _%>
+import <%- fqcn %>;
+  <%_ }); _%>
+<%_ } _%>
+import <%- basePackage %>.web.api.<%- interfaceName %>;
 
 // Generated delegate implementation - do not edit manually.
 @Service
-public class <%= className %> implements <%= interfaceName %> {
+public class <%- className %> implements <%- interfaceName %> {
 
-    private static final Logger LOG = LoggerFactory.getLogger(<%= className %>.class);
+    private static final Logger LOG = LoggerFactory.getLogger(<%- className %>.class);
     private static final Pattern STRICT_OPENAPI_EMAIL_PATTERN = Pattern.compile(
         "^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*$"
     );
@@ -75,7 +69,7 @@ public class <%= className %> implements <%= interfaceName %> {
 <%_ const hasInjections = Array.isArray(injections) && injections.length > 0;
     const buildParamSignature = op => op.parameters.map(p => p.signatureFragment ?? `${p.fullType} ${p.varName}`).join(', ');
     const buildSuperArgs = op => op.parameters.map(p => p.varName).join(', ');
-    const maybeThrows = op => (op.throwsClause ? ` throws ${op.throwsClause}` : '');
+    const maybeThrows = op => op.throwsClause ? ` throws ${op.throwsClause}` : '';
     const getBodyParam = op => op.parameters.find(param => param.in === 'body');
     const getIdParam = op => op.parameters.find(param => param.in === 'path');
     const responseMapperField = op => op.responseMapperField ?? undefined;
@@ -83,298 +77,292 @@ public class <%= className %> implements <%= interfaceName %> {
     const repositoryField = op => op.persistenceRepositoryField ?? (repositories?.[0]?.fieldName ?? undefined);
     const requestMapperField = op => op.requestMapperField ?? undefined;
     const requestMapperMethod = op =>
-        op.requestMapperMethod ??
-        (op.requestBodyType && op.persistenceEntityName && op.requestBodyType === op.persistenceEntityName ? `to${op.persistenceEntityName}` : undefined);
-    const requestMapperUpdateMethod = op => op.requestMapperUpdateMethod ?? undefined;
-    const persistenceType = op => op.persistenceEntityFqcn ?? domainFqcn;
-    const resolvedResourceSlug = resourceSlug || resourceName?.toLowerCase() || 'resource';
-    const constructorArgs = hasInjections
-      ? `\n${injections.map(dep => `        ${dep.simpleName} ${dep.fieldName}`).join(',\n')}\n    `
-      : '';
+      op.requestMapperMethod
+        ?? (op.requestBodyType && op.persistenceEntityName && op.requestBodyType === op.persistenceEntityName ? `to${op.persistenceEntityName}` : undefined);
+      const requestMapperUpdateMethod = op => op.requestMapperUpdateMethod ?? undefined;
+      const persistenceType = op => op.persistenceEntityFqcn ?? domainFqcn;
+      const resolvedResourceSlug = resourceSlug || resourceName?.toLowerCase() || 'resource';
+      const constructorArgs = hasInjections
+        ? `\n${injections.map(dep => `        ${dep.simpleName} ${dep.fieldName}`).join(',\n')}\n    `
+        : '';
 _%>
-<%_ if (hasInjections) { injections.forEach(dep => { _%>
-    private final <%= dep.simpleName %> <%= dep.fieldName %>;
-<%_ }); } else { _%>
+<%_ if (hasInjections) { injections.forEach((dep) => { _%>
+    private final <%- dep.simpleName %> <%- dep.fieldName %>;
+  <%_ }); _%>
+<%_ } else { _%>
     // No dependencies required for this delegate.
 <%_ } _%>
-    private final Configuration jsonPathConfiguration;
-
-    public <%= className %>(<%- constructorArgs %>) {
-<%_ if (hasInjections) { injections.forEach(dep => { _%>
-        this.<%= dep.fieldName %> = <%= dep.fieldName %>;
-<%_ }); } _%>
-        this.jsonPathConfiguration =
-            Configuration.builder()
-                .jsonProvider(new JacksonJsonNodeJsonProvider(this.objectMapper))
-                .mappingProvider(new JacksonMappingProvider(this.objectMapper))
-                .options(Option.AS_PATH_LIST)
-                .build();
+    public <%- className %>(<%- constructorArgs %>) {
+<%_ if (hasInjections) { injections.forEach((dep) => { _%>
+        this.<%- dep.fieldName %> = <%- dep.fieldName %>;
+  <%_ }); _%>
+<%_ } _%>
     }
 
-<%_ operations.filter(op => op.kind === 'create').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
-    const bodyParam = getBodyParam(op);
-    const superArgs = buildSuperArgs(op);
-    const repoField = repositoryField(op);
-    const mapperField = requestMapperField(op);
-    const mapperMethod = requestMapperMethod(op);
-    const responseField = responseMapperField(op);
-    const responseMethod = responseMapperMethod(op);
-    const hasResponseBody = Boolean(op.responseType);
-    const canMapResponseBody = Boolean(responseField && responseMethod);
-    const persistenceTypeFqcn = persistenceType(op);
-    const requestBodyIsArray = Boolean(op.requestBodyIsArray || bodyParam?.resolvedType?.isList || op.requestBodyResolvedType?.isList);
-_%>
+<%_ operations.filter(op => op.kind === 'create').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
+      const bodyParam = getBodyParam(op);
+      const superArgs = buildSuperArgs(op);
+      const repoField = repositoryField(op);
+      const mapperField = requestMapperField(op);
+      const mapperMethod = requestMapperMethod(op);
+      const responseField = responseMapperField(op);
+      const responseMethod = responseMapperMethod(op);
+      const hasResponseBody = Boolean(op.responseType);
+      const canMapResponseBody = Boolean(responseField && responseMethod);
+      const persistenceTypeFqcn = persistenceType(op);
+      const requestBodyIsArray = Boolean(op.requestBodyIsArray || bodyParam?.resolvedType?.isList || op.requestBodyResolvedType?.isList);
+  _%>
     @Transactional
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!bodyParam || !repoField || !mapperField || !mapperMethod) { _%>
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
+  <%_ if (!bodyParam || !repoField || !mapperField || !mapperMethod) { _%>
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
-<%_ } else { _%>
+  <%_ } else { _%>
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.CREATED);
         final HttpStatus resolvedStatus = successStatus;
-        LOG.info("Creating <%= resolvedResourceSlug %>");
-        validatePayload(<%= bodyParam.varName %>);
-<%_ if (op.requestRequiredRulesExpression) { _%>
-        validateRequiredProperties(<%= bodyParam.varName %>, <%- op.requestRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
-        validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
-<%_ if (requestBodyIsArray) { _%>
-        List<<%= persistenceTypeFqcn %>> entities = <%= bodyParam.varName %>.stream()
-            .map(item -> this.<%= mapperField %>.<%= mapperMethod %>(item))
+        LOG.info("Creating <%- resolvedResourceSlug %>");
+        validatePayload(<%- bodyParam.varName %>);
+    <%_ if (op.requestRequiredRulesExpression) { _%>
+        validateRequiredProperties(<%- bodyParam.varName %>, <%- op.requestRequiredRulesExpression %>);
+    <%_ } _%>
+    <%_ if (op.requestDiscriminatorRulesExpression) { _%>
+        validatePayloadDiscriminators(<%- bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
+    <%_ } _%>
+    <%_ if (requestBodyIsArray) { _%>
+        List<<%- persistenceTypeFqcn %>> entities = <%- bodyParam.varName %>.stream()
+            .map(item -> this.<%- mapperField %>.<%- mapperMethod %>(item))
             .toList();
         if (entities.stream().anyMatch(java.util.Objects::isNull)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
         }
-        for (<%= persistenceTypeFqcn %> entity : entities) {
-  <%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
-            if (entity.get<%= field.accessor %>() == null) {
-                entity.set<%= field.accessor %>(java.util.UUID.randomUUID());
+        for (<%- persistenceTypeFqcn %> entity : entities) {
+      <%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
+            if (entity.get<%- field.accessor %>() == null) {
+                entity.set<%- field.accessor %>(java.util.UUID.randomUUID());
             }
-  <%_ } _%>
-  <%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
-            if (entity.get<%= field.accessor %>() == null) {
-                entity.set<%= field.accessor %>(<%- field.valueExpression %>);
+      <%_ } _%>
+      <%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
+            if (entity.get<%- field.accessor %>() == null) {
+                entity.set<%- field.accessor %>(<%- field.valueExpression %>);
             }
-  <%_ } _%>
+      <%_ } _%>
             validatePayload(entity);
         }
-        List<<%= persistenceTypeFqcn %>> saved;
+        List<<%- persistenceTypeFqcn %>> saved;
         try {
-  <%_ if (op.httpMethod === 'PUT') { _%>
-            this.<%= repoField %>.deleteAll();
-            this.<%= repoField %>.flush();
-  <%_ } _%>
-            saved = this.<%= repoField %>.saveAllAndFlush(entities);
+      <%_ if (op.httpMethod === 'PUT') { _%>
+            this.<%- repoField %>.deleteAll();
+            this.<%- repoField %>.flush();
+      <%_ } _%>
+            saved = this.<%- repoField %>.saveAllAndFlush(entities);
             boolean hrefChanged = false;
-            for (<%= persistenceTypeFqcn %> entity : saved) {
-                hrefChanged = populateGeneratedHref(entity, "<%= resolvedResourceSlug %>") || hrefChanged;
+            for (<%- persistenceTypeFqcn %> entity : saved) {
+                hrefChanged = populateGeneratedHref(entity, "<%- resolvedResourceSlug %>") || hrefChanged;
             }
             if (hrefChanged) {
-                saved = this.<%= repoField %>.saveAllAndFlush(saved);
+                saved = this.<%- repoField %>.saveAllAndFlush(saved);
             }
         } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
             throw persistenceViolation(ex);
         }
-        final List<<%= persistenceTypeFqcn %>> responseEntities = saved;
-        LOG.info("Created {} <%= resolvedResourceSlug %> item(s)", responseEntities.size());
-<%_ if (!hasResponseBody) { _%>
+        final List<<%- persistenceTypeFqcn %>> responseEntities = saved;
+        LOG.info("Created {} <%- resolvedResourceSlug %> item(s)", responseEntities.size());
+      <%_ if (!hasResponseBody) { _%>
         return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
-<%_ } else if (canMapResponseBody && op.responseIsArray) { _%>
-        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapValidResponseBodies(responseEntities, this.<%= responseField %>::<%= responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+      <%_ } else if (canMapResponseBody && op.responseIsArray) { _%>
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapValidResponseBodies(responseEntities, this.<%- responseField %>::<%- responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
+        <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
+        <%_ } _%>
         return ResponseEntity.status(resolvedStatus).body(responseBody);
-<%_ } else if (canMapResponseBody) { _%>
+      <%_ } else if (canMapResponseBody) { _%>
     if (responseEntities.size() != 1) {
         throw new ResponseStatusException(
         HttpStatus.NOT_IMPLEMENTED,
         "Bulk operation cannot map " + responseEntities.size() + " saved entities to a single response body"
         );
     }
-    final <%= persistenceTypeFqcn %> responseEntity = responseEntities.get(0);
-    <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
-<%_ if (op.responseRequiredRulesExpression) { _%>
+    final <%- persistenceTypeFqcn %> responseEntity = responseEntities.get(0);
+    <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%- responseField %>.<%- responseMethod %>(responseEntity));
+        <%_ if (op.responseRequiredRulesExpression) { _%>
     responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
     requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+        <%_ } _%>
+        <%_ if (op.responseDiscriminatorRulesExpression) { _%>
     requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
+        <%_ } _%>
     return ResponseEntity.status(resolvedStatus).body(responseBody);
-<%_ } else { _%>
+      <%_ } else { _%>
     throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Unable to map bulk operation response body");
-<%_ } _%>
-<%_ } else { _%>
-        <%= persistenceTypeFqcn %> entity = this.<%= mapperField %>.<%= mapperMethod %>(<%= bodyParam.varName %>);
+      <%_ } _%>
+    <%_ } else { _%>
+        <%- persistenceTypeFqcn %> entity = this.<%- mapperField %>.<%- mapperMethod %>(<%- bodyParam.varName %>);
         if (entity == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
         }
-<%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
-        if (entity.get<%= field.accessor %>() == null) {
-            entity.set<%= field.accessor %>(java.util.UUID.randomUUID());
+      <%_ for (const field of op.generatedUuidInitializers ?? []) { _%>
+        if (entity.get<%- field.accessor %>() == null) {
+            entity.set<%- field.accessor %>(java.util.UUID.randomUUID());
         }
-<%_ } _%>
-	<%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
-	        if (entity.get<%= field.accessor %>() == null) {
-	            entity.set<%= field.accessor %>(<%- field.valueExpression %>);
+      <%_ } _%>
+      <%_ for (const field of op.defaultFieldInitializers ?? []) { _%>
+	        if (entity.get<%- field.accessor %>() == null) {
+	            entity.set<%- field.accessor %>(<%- field.valueExpression %>);
 	        }
-	<%_ } _%>
+      <%_ } _%>
 	        validatePayload(entity);
-	        <%= persistenceTypeFqcn %> saved;
+	        <%- persistenceTypeFqcn %> saved;
         try {
-            saved = this.<%= repoField %>.saveAndFlush(entity);
-            if (populateGeneratedHref(saved, "<%= resolvedResourceSlug %>")) {
-                saved = this.<%= repoField %>.saveAndFlush(saved);
+            saved = this.<%- repoField %>.saveAndFlush(entity);
+            if (populateGeneratedHref(saved, "<%- resolvedResourceSlug %>")) {
+                saved = this.<%- repoField %>.saveAndFlush(saved);
             }
         } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
             throw persistenceViolation(ex);
         }
-        final <%= persistenceTypeFqcn %> responseEntity = saved;
+        final <%- persistenceTypeFqcn %> responseEntity = saved;
         LOG.info(
-            "Created <%= resolvedResourceSlug %> id={}",
+            "Created <%- resolvedResourceSlug %> id={}",
             responseEntity != null ? responseEntity.getId() : null
         );
-<%_ if (!hasResponseBody) { _%>
+      <%_ if (!hasResponseBody) { _%>
         if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).build();
         }
         return ResponseEntity.status(resolvedStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
-<%_ } else if (canMapResponseBody) { _%>
-        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
-<%_ if (op.responseRequiredRulesExpression) { _%>
+      <%_ } else if (canMapResponseBody) { _%>
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%- responseField %>.<%- responseMethod %>(responseEntity));
+        <%_ if (op.responseRequiredRulesExpression) { _%>
         responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
         requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+        <%_ } _%>
+        <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
+        <%_ } _%>
         if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(responseBody);
         }
         return ResponseEntity.status(resolvedStatus).body(responseBody);
-<%_ } else { _%>
+      <%_ } else { _%>
         if (resolvedStatus == HttpStatus.CREATED) {
             return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(null);
         }
         return ResponseEntity.status(resolvedStatus).body(null);
-<%_ } _%>
-<%_ } _%>
-<%_ } _%>
+      <%_ } _%>
+    <%_ } _%>
+  <%_ } _%>
     }
 
 <%_ }); _%>
 
-<%_ operations.filter(op => op.kind === 'list').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<List<Object>>';
-    const superArgs = buildSuperArgs(op);
-    const repoField = repositoryField(op);
-    const responseField = responseMapperField(op);
-    const responseMethod = responseMapperMethod(op);
-    const persistenceTypeFqcn = persistenceType(op);
-    const offsetParam = op.parameters.find(param => param.name?.toLowerCase() === 'offset');
-    const limitParam = op.parameters.find(param => param.name?.toLowerCase() === 'limit');
-    const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
-    const elementType = op.responseArrayElementResolvedType?.fullType ?? op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object';
-    const collectionWrapperType = op.responseCollectionWrapperType;
-_%>
+<%_ operations.filter(op => op.kind === 'list').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<List<Object>>';
+      const superArgs = buildSuperArgs(op);
+      const repoField = repositoryField(op);
+      const responseField = responseMapperField(op);
+      const responseMethod = responseMapperMethod(op);
+      const persistenceTypeFqcn = persistenceType(op);
+      const offsetParam = op.parameters.find(param => param.name?.toLowerCase() === 'offset');
+      const limitParam = op.parameters.find(param => param.name?.toLowerCase() === 'limit');
+      const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
+      const elementType = op.responseArrayElementResolvedType?.fullType ?? op.responseResolvedType?.componentType?.fullType ?? op.responseResolvedType?.fullType ?? 'Object';
+      const collectionWrapperType = op.responseCollectionWrapperType;
+  _%>
     @Transactional(readOnly = true)
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!repoField || !responseField || !responseMethod) { _%>
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
+  <%_ if (!repoField || !responseField || !responseMethod) { _%>
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
-<%_ } else { _%>
+  <%_ } else { _%>
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
         final int resolvedOffset = resolveOffset(<%- offsetParam?.varName ?? 'null' %>);
         final int resolvedLimit = resolveLimit(<%- limitParam?.varName ?? 'null' %>);
         Pageable pageable = PageRequest.of(resolvedLimit > 0 ? resolvedOffset / Math.max(resolvedLimit, 1) : 0, Math.max(resolvedLimit, 1));
-        Page<<%= persistenceTypeFqcn %>> page = this.<%= repoField %>.findAll(pageable);
-        List<<%= persistenceTypeFqcn %>> entities = page.getContent();
+        Page<<%- persistenceTypeFqcn %>> page = this.<%- repoField %>.findAll(pageable);
+        List<<%- persistenceTypeFqcn %>> entities = page.getContent();
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- collectionWrapperType ?? op.responseResolvedType?.fullType ?? 'Void' %>) null);
         }
-        List<<%- elementType %>> body = mapValidResponseBodies(entities, this.<%= responseField %>::<%= responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
-<%_ if (op.responseRequiredRulesExpression) { _%>
+        List<<%- elementType %>> body = mapValidResponseBodies(entities, this.<%- responseField %>::<%- responseMethod %>, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
+    <%_ if (op.responseRequiredRulesExpression) { _%>
         body = filterValidResponseRequiredProperties(body, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+    <%_ } _%>
+    <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         body = filterValidResponseDiscriminators(body, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
-<%_ if (fieldsParam) { _%>
+    <%_ } _%>
+    <%_ if (fieldsParam) { _%>
         if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
             List<<%- elementType %>> filtered = body
                 .stream()
                 .map(item -> filterFields(item, <%- fieldsParam.varName %>, <%- elementType %>.class, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>))
                 .toList();
-<%_ if (collectionWrapperType) { _%>
+      <%_ if (collectionWrapperType) { _%>
             <%- collectionWrapperType %> responseBody = new <%- collectionWrapperType %>();
             responseBody.addAll(filtered);
             return ResponseEntity.status(successStatus).body(responseBody);
-<%_ } else { _%>
+      <%_ } else { _%>
             return ResponseEntity.status(successStatus).body(filtered);
-<%_ } _%>
+      <%_ } _%>
         }
-<%_ } _%>
-<%_ if (collectionWrapperType) { _%>
+    <%_ } _%>
+    <%_ if (collectionWrapperType) { _%>
         <%- collectionWrapperType %> responseBody = new <%- collectionWrapperType %>();
         responseBody.addAll(body);
         return ResponseEntity.status(successStatus).body(responseBody);
-<%_ } else { _%>
+    <%_ } else { _%>
         return ResponseEntity.status(successStatus).body(body);
-<%_ } _%>
-<%_ } _%>
+    <%_ } _%>
+  <%_ } _%>
     }
 
 <%_ }); _%>
 
-<%_ operations.filter(op => op.kind === 'retrieve').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
-    const superArgs = buildSuperArgs(op);
-    const idParam = getIdParam(op);
-    const repoField = repositoryField(op);
-    const responseField = responseMapperField(op);
-    const responseMethod = responseMapperMethod(op);
-    const persistenceTypeFqcn = persistenceType(op);
-    const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
-_%>
+<%_ operations.filter(op => op.kind === 'retrieve').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
+      const superArgs = buildSuperArgs(op);
+      const idParam = getIdParam(op);
+      const repoField = repositoryField(op);
+      const responseField = responseMapperField(op);
+      const responseMethod = responseMapperMethod(op);
+      const persistenceTypeFqcn = persistenceType(op);
+      const fieldsParam = op.parameters.find(param => param.name?.toLowerCase() === 'fields');
+  _%>
     @Transactional(readOnly = true)
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!idParam || !repoField || !responseField || !responseMethod) { _%>
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
+  <%_ if (!idParam || !repoField || !responseField || !responseMethod) { _%>
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
-<%_ } else { _%>
-        if (isBlankIdentifier(<%= idParam.varName %>)) {
+  <%_ } else { _%>
+        if (isBlankIdentifier(<%- idParam.varName %>)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid resource identifier");
         }
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
-        return findByResourceIdentifier(this.<%= repoField %>, <%= idParam.varName %>, "<%= idParam.name %>", <%- persistenceTypeFqcn %>.class)
+        return findByResourceIdentifier(this.<%- repoField %>, <%- idParam.varName %>, "<%- idParam.name %>", <%- persistenceTypeFqcn %>.class)
             .map(found -> {
                 try {
                     if (successStatus == HttpStatus.NO_CONTENT) {
                         return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
                     }
-                    <%- op.responseResolvedType?.fullType ?? 'Object' %> body = this.<%= responseField %>.<%= responseMethod %>(found);
-<%_ if (op.responseRequiredRulesExpression) { _%>
+                    <%- op.responseResolvedType?.fullType ?? 'Object' %> body = this.<%- responseField %>.<%- responseMethod %>(found);
+    <%_ if (op.responseRequiredRulesExpression) { _%>
                     body = completeResponseRequiredProperties(body, found, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
+    <%_ } _%>
                     requireValidResponseBody(body);
-<%_ if (op.responseRequiredRulesExpression) { _%>
+    <%_ if (op.responseRequiredRulesExpression) { _%>
                     requireValidResponseRequiredProperties(body, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+    <%_ } _%>
+    <%_ if (op.responseDiscriminatorRulesExpression) { _%>
                     requireValidResponseDiscriminators(body, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
-<%_ if (fieldsParam) { _%>
+    <%_ } _%>
+    <%_ if (fieldsParam) { _%>
                     if (<%- fieldsParam.varName %> != null && !<%- fieldsParam.varName %>.toString().isBlank()) {
                         body = filterFields(body, <%- fieldsParam.varName %>, <%- op.responseResolvedType?.fullType ?? 'Object' %>.class, <%- op.responseRequiredRulesExpression ?? 'List.of()' %>);
                     }
-<%_ } _%>
+    <%_ } _%>
                     return ResponseEntity.status(successStatus).body(body);
                 } catch (ResponseStatusException ex) {
                     throw ex;
@@ -383,34 +371,34 @@ _%>
                 }
             })
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found"));
-<%_ } _%>
+  <%_ } _%>
     }
 
 <%_ }); _%>
 
-<%_ operations.filter(op => op.kind === 'delete').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
-    const superArgs = buildSuperArgs(op);
-    const idParam = getIdParam(op);
-    const repoField = repositoryField(op);
-    const persistenceTypeFqcn = persistenceType(op);
-_%>
+<%_ operations.filter(op => op.kind === 'delete').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
+      const superArgs = buildSuperArgs(op);
+      const idParam = getIdParam(op);
+      const repoField = repositoryField(op);
+      const persistenceTypeFqcn = persistenceType(op);
+  _%>
     @Transactional
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!idParam || !repoField) { _%>
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
+  <%_ if (!idParam || !repoField) { _%>
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
-<%_ } else { _%>
-        if (isBlankIdentifier(<%= idParam.varName %>)) {
+  <%_ } else { _%>
+        if (isBlankIdentifier(<%- idParam.varName %>)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid resource identifier");
         }
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.NO_CONTENT);
-        Optional<<%= persistenceTypeFqcn %>> maybeEntity = findByResourceIdentifier(this.<%= repoField %>, <%= idParam.varName %>, "<%= idParam.name %>", <%- persistenceTypeFqcn %>.class);
+        Optional<<%- persistenceTypeFqcn %>> maybeEntity = findByResourceIdentifier(this.<%- repoField %>, <%- idParam.varName %>, "<%- idParam.name %>", <%- persistenceTypeFqcn %>.class);
         if (maybeEntity.isPresent()) {
-            LOG.info("Deleting <%= resolvedResourceSlug %> identifier={}", <%= idParam.varName %>);
-            this.<%= repoField %>.delete(maybeEntity.orElseThrow());
-            this.<%= repoField %>.flush();
+            LOG.info("Deleting <%- resolvedResourceSlug %> identifier={}", <%- idParam.varName %>);
+            this.<%- repoField %>.delete(maybeEntity.orElseThrow());
+            this.<%- repoField %>.flush();
             if (successStatus == HttpStatus.ACCEPTED) {
                 return ResponseEntity.accepted().build();
             }
@@ -420,142 +408,143 @@ _%>
             return ResponseEntity.status(successStatus).build();
         }
         throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found");
-<%_ } _%>
+  <%_ } _%>
     }
 
 <%_ }); _%>
 
-<%_ operations.filter(op => op.kind === 'patch').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
-    const superArgs = buildSuperArgs(op);
-    const idParam = getIdParam(op);
-    const bodyParam = getBodyParam(op);
-    const repoField = repositoryField(op);
-    const mapperField = requestMapperField(op);
-    const mapperMethod = requestMapperMethod(op);
-    const updateMethod = requestMapperUpdateMethod(op);
-    const responseField = responseMapperField(op);
-    const responseMethod = responseMapperMethod(op);
-    const persistenceTypeFqcn = persistenceType(op);
-    const hasPatchMapping = Boolean(mapperField && (updateMethod || mapperMethod));
-    const canRespondWithBody = Boolean(responseField && responseMethod);
-    const existingJsonSource = canRespondWithBody ? `this.${responseField}.${responseMethod}(existing)` : 'existing';
-    const payloadType = op.requestBodyType ?? bodyParam?.javaType ?? 'Object';
-_%>
+<%_ operations.filter(op => op.kind === 'patch').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<Object>';
+      const superArgs = buildSuperArgs(op);
+      const idParam = getIdParam(op);
+      const bodyParam = getBodyParam(op);
+      const repoField = repositoryField(op);
+      const mapperField = requestMapperField(op);
+      const mapperMethod = requestMapperMethod(op);
+      const updateMethod = requestMapperUpdateMethod(op);
+      const responseField = responseMapperField(op);
+      const responseMethod = responseMapperMethod(op);
+      const persistenceTypeFqcn = persistenceType(op);
+      const hasPatchMapping = Boolean(mapperField && (updateMethod || mapperMethod));
+      const canRespondWithBody = Boolean(responseField && responseMethod);
+      const existingJsonSource = canRespondWithBody ? `this.${responseField}.${responseMethod}(existing)` : 'existing';
+      const payloadType = op.requestBodyType ?? bodyParam?.javaType ?? 'Object';
+  _%>
     @Transactional
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
-<%_ if (!idParam || !bodyParam || !repoField) { _%>
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
+  <%_ if (!idParam || !bodyParam || !repoField) { _%>
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
-<%_ } else { _%>
-        if (isBlankIdentifier(<%= idParam.varName %>)) {
+  <%_ } else { _%>
+        if (isBlankIdentifier(<%- idParam.varName %>)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid resource identifier");
         }
         final HttpStatus successStatus = resolveSuccessStatus(<%- op.successStatus ?? 'null' %>, HttpStatus.OK);
-        Optional<<%= persistenceTypeFqcn %>> maybeEntity = findByResourceIdentifier(this.<%= repoField %>, <%= idParam.varName %>, "<%= idParam.name %>", <%- persistenceTypeFqcn %>.class);
+        Optional<<%- persistenceTypeFqcn %>> maybeEntity = findByResourceIdentifier(this.<%- repoField %>, <%- idParam.varName %>, "<%- idParam.name %>", <%- persistenceTypeFqcn %>.class);
         if (maybeEntity.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Resource not found");
         }
-        <%= persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
+        <%- persistenceTypeFqcn %> existing = maybeEntity.orElseThrow();
         Map<String, Object> originalIdentifiers = snapshotIdentifierValues(existing);
-<%_ if (mapperField && updateMethod) { _%>
-        LOG.info("Patching <%= resolvedResourceSlug %> identifier={}", <%= idParam.varName %>);
-        validatePayload(<%= bodyParam.varName %>);
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
-        validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
+    <%_ if (mapperField && updateMethod) { _%>
+        LOG.info("Patching <%- resolvedResourceSlug %> identifier={}", <%- idParam.varName %>);
+        validatePayload(<%- bodyParam.varName %>);
+      <%_ if (op.requestDiscriminatorRulesExpression) { _%>
+        validatePayloadDiscriminators(<%- bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
+      <%_ } _%>
         JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> <%- existingJsonSource %>));
-        JsonNode patchNode = normalizePatchDiscriminators(readPatchNode(<%= bodyParam.varName %>));
+        JsonNode patchNode = normalizePatchDiscriminators(readPatchNode(<%- bodyParam.varName %>));
         PatchFormat patchFormat = resolvePatchFormat(resolveContentType(), patchNode);
         JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);
         enforceImmutableIdentifiers(baseNode, patchedNode);
-        convertAndValidate(patchedNode, <%- payloadType %>.class);
-        <%- payloadType %> mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), <%- payloadType %>.class);
+        JsonNode payloadNode = removePropertiesNotDeserializableBy(patchedNode, <%- payloadType %>.class);
+        convertAndValidate(payloadNode, <%- payloadType %>.class);
+        <%- payloadType %> mergedPayload = convertValue(pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat), <%- payloadType %>.class);
         validatePayload(mergedPayload);
-<%_ if (op.requestRequiredRulesExpression) { _%>
+      <%_ if (op.requestRequiredRulesExpression) { _%>
         validateRequiredProperties(mergedPayload, <%- op.requestRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
+      <%_ } _%>
+      <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(mergedPayload, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
+      <%_ } _%>
         try {
-            this.<%= mapperField %>.<%= updateMethod %>(existing, mergedPayload);
+            this.<%- mapperField %>.<%- updateMethod %>(existing, mergedPayload);
             restoreIdentifierValues(existing, originalIdentifiers);
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage(), ex);
         }
-<%_ } else if (mapperField && mapperMethod) { _%>
-        LOG.info("Replacing <%= resolvedResourceSlug %> identifier={}", <%= idParam.varName %>);
-        validatePayload(<%= bodyParam.varName %>);
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
-        validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
-        <%- payloadType %> replacementPayload = convertAndValidate(readPatchNode(<%= bodyParam.varName %>), <%- payloadType %>.class);
-<%_ if (op.requestRequiredRulesExpression) { _%>
+    <%_ } else if (mapperField && mapperMethod) { _%>
+        LOG.info("Replacing <%- resolvedResourceSlug %> identifier={}", <%- idParam.varName %>);
+        validatePayload(<%- bodyParam.varName %>);
+      <%_ if (op.requestDiscriminatorRulesExpression) { _%>
+        validatePayloadDiscriminators(<%- bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
+      <%_ } _%>
+        <%- payloadType %> replacementPayload = convertAndValidate(readPatchNode(<%- bodyParam.varName %>), <%- payloadType %>.class);
+      <%_ if (op.requestRequiredRulesExpression) { _%>
         validateRequiredProperties(replacementPayload, <%- op.requestRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
+      <%_ } _%>
+      <%_ if (op.requestDiscriminatorRulesExpression) { _%>
         validatePayloadDiscriminators(replacementPayload, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
+      <%_ } _%>
         enforceImmutableIdentifiers(toJsonObject(<%- existingJsonSource %>), toJsonObject(replacementPayload));
-        <%= persistenceTypeFqcn %> mapped = this.<%= mapperField %>.<%= mapperMethod %>(replacementPayload);
+        <%- persistenceTypeFqcn %> mapped = this.<%- mapperField %>.<%- mapperMethod %>(replacementPayload);
         if (mapped == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload");
         }
         mapped.setId(existing.getId());
         restoreIdentifierValues(mapped, originalIdentifiers);
         existing = mapped;
-<%_ } else { _%>
-        validatePayload(<%= bodyParam.varName %>);
-<%_ if (op.requestDiscriminatorRulesExpression) { _%>
-        validatePayloadDiscriminators(<%= bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
-<%_ } _%>
+    <%_ } else { _%>
+        validatePayload(<%- bodyParam.varName %>);
+      <%_ if (op.requestDiscriminatorRulesExpression) { _%>
+        validatePayloadDiscriminators(<%- bodyParam.varName %>, <%- op.requestDiscriminatorRulesExpression %>);
+      <%_ } _%>
         return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
-<%_ } _%>
-	<%_ if (hasPatchMapping) { _%>
-	        populateGeneratedHref(existing, "<%= resolvedResourceSlug %>");
+    <%_ } _%>
+    <%_ if (hasPatchMapping) { _%>
+	        populateGeneratedHref(existing, "<%- resolvedResourceSlug %>");
 	        validatePayload(existing);
-	        <%= persistenceTypeFqcn %> saved;
+	        <%- persistenceTypeFqcn %> saved;
         try {
-            saved = this.<%= repoField %>.saveAndFlush(existing);
+            saved = this.<%- repoField %>.saveAndFlush(existing);
         } catch (DataAccessException | PersistenceException | TransactionSystemException ex) {
             throw persistenceViolation(ex);
         }
-        final <%= persistenceTypeFqcn %> responseEntity = saved;
+        final <%- persistenceTypeFqcn %> responseEntity = saved;
         LOG.info(
-            "Patched <%= resolvedResourceSlug %> id={}",
+            "Patched <%- resolvedResourceSlug %> id={}",
             responseEntity != null ? responseEntity.getId() : null
         );
-<%_ if (canRespondWithBody) { _%>
+      <%_ if (canRespondWithBody) { _%>
         if (successStatus == HttpStatus.NO_CONTENT) {
             return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
         }
-        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%= responseField %>.<%= responseMethod %>(responseEntity));
-<%_ if (op.responseRequiredRulesExpression) { _%>
+        <%- op.responseResolvedType?.fullType ?? 'Object' %> responseBody = mapResponseBody(() -> this.<%- responseField %>.<%- responseMethod %>(responseEntity));
+        <%_ if (op.responseRequiredRulesExpression) { _%>
         responseBody = completeResponseRequiredProperties(responseBody, responseEntity, <%- op.responseRequiredRulesExpression %>);
         requireValidResponseRequiredProperties(responseBody, <%- op.responseRequiredRulesExpression %>);
-<%_ } _%>
-<%_ if (op.responseDiscriminatorRulesExpression) { _%>
+        <%_ } _%>
+        <%_ if (op.responseDiscriminatorRulesExpression) { _%>
         requireValidResponseDiscriminators(responseBody, <%- op.responseDiscriminatorRulesExpression %>);
-<%_ } _%>
+        <%_ } _%>
         return ResponseEntity.status(successStatus).body(responseBody);
-<%_ } else { _%>
+      <%_ } else { _%>
         return ResponseEntity.status(successStatus).body((<%- op.responseResolvedType?.fullType ?? 'Void' %>) null);
-<%_ } _%>
-<%_ } _%>
-<%_ } _%>
+      <%_ } _%>
+    <%_ } _%>
+  <%_ } _%>
     }
 
 <%_ }); _%>
 
-<%_ operations.filter(op => op.kind === 'other').forEach(op => { 
-    const paramSig = buildParamSignature(op);
-    const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
-    const superArgs = buildSuperArgs(op);
-_%>
+<%_ operations.filter(op => op.kind === 'other').forEach((op) => { _%>
+  <%_ const paramSig = buildParamSignature(op);
+      const methodReturnType = op.returnType ?? 'ResponseEntity<Void>';
+      const superArgs = buildSuperArgs(op);
+  _%>
     @Override
-    public <%- methodReturnType %> <%= op.methodName %>(<%- paramSig %>)<%= maybeThrows(op) %> {
+    public <%- methodReturnType %> <%- op.methodName %>(<%- paramSig %>)<%- maybeThrows(op) %> {
         // Generated stub: no delegate logic inferred for this operation.
         throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Operation not implemented");
     }
@@ -906,7 +895,7 @@ _%>
                     objectNode.put("@type", normalizedType);
                 }
             }
-            Iterator<JsonNode> children = objectNode.elements();
+            Iterator<JsonNode> children = objectNode.values().iterator();
             while (children.hasNext()) {
                 normalizePatchDiscriminators(children.next());
             }
@@ -965,7 +954,7 @@ _%>
         Set<String> patchedFields = topLevelPatchedFields(patchNode, format);
         ObjectNode mappingNode = patchedObject.deepCopy();
         List<String> fieldsToRemove = new ArrayList<>();
-        Iterator<Map.Entry<String, JsonNode>> fields = mappingNode.fields();
+        Iterator<Map.Entry<String, JsonNode>> fields = mappingNode.properties().iterator();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> entry = fields.next();
             if (!patchedFields.contains(entry.getKey()) && isComplexPatchField(entry.getValue())) {
@@ -981,7 +970,7 @@ _%>
             return patchedNode;
         }
         ObjectNode merged = patchedObject.deepCopy();
-        Iterator<String> patchedFields = patchObject.fieldNames();
+        Iterator<String> patchedFields = patchObject.propertyNames().iterator();
         while (patchedFields.hasNext()) {
             String fieldName = patchedFields.next();
             JsonNode baseChild = baseNode.get(fieldName);
@@ -1009,7 +998,7 @@ _%>
         }
         if (baseNode instanceof ObjectNode baseObject && patchedNode instanceof ObjectNode patchedObject && patchNode instanceof ObjectNode patchObject) {
             ObjectNode mergedObject = patchedObject.deepCopy();
-            Iterator<String> fields = patchObject.fieldNames();
+            Iterator<String> fields = patchObject.propertyNames().iterator();
             while (fields.hasNext()) {
                 String fieldName = fields.next();
                 JsonNode baseChild = baseObject.get(fieldName);
@@ -1029,7 +1018,7 @@ _%>
             return patchedNode;
         }
         ObjectNode mergedObject = patchedObject.deepCopy();
-        Iterator<Map.Entry<String, JsonNode>> baseFields = baseObject.fields();
+        Iterator<Map.Entry<String, JsonNode>> baseFields = baseObject.properties().iterator();
         while (baseFields.hasNext()) {
             Map.Entry<String, JsonNode> baseField = baseFields.next();
             if (!mergedObject.has(baseField.getKey())) {
@@ -1037,7 +1026,7 @@ _%>
             }
         }
         if (patchNode instanceof ObjectNode patchObject) {
-            Iterator<String> fields = patchObject.fieldNames();
+            Iterator<String> fields = patchObject.propertyNames().iterator();
             while (fields.hasNext()) {
                 String fieldName = fields.next();
                 JsonNode baseChild = baseObject.get(fieldName);
@@ -1053,7 +1042,7 @@ _%>
 
     private JsonNode matchingArrayItem(ArrayNode baseArray, JsonNode patchedItem, int fallbackIndex) {
         if (patchedItem != null && patchedItem.isObject()) {
-            Iterator<String> fields = patchedItem.fieldNames();
+            Iterator<String> fields = patchedItem.propertyNames().iterator();
             while (fields.hasNext()) {
                 String identifierField = fields.next();
                 if (isIdentifierField(identifierField)) {
@@ -1096,7 +1085,7 @@ _%>
         Set<String> fields = new LinkedHashSet<>();
         if (format == PatchFormat.MERGE_PATCH) {
             if (patchNode instanceof ObjectNode patchObject) {
-                patchObject.fieldNames().forEachRemaining(fields::add);
+                patchObject.propertyNames().forEach(fields::add);
             }
             return fields;
         }
@@ -1128,24 +1117,159 @@ _%>
     }
 
     private JsonNode applyMergePatch(JsonNode baseNode, JsonNode patchNode) {
-        try {
-            JsonMergePatch mergePatch = JsonMergePatch.fromJson(patchNode != null ? patchNode : NullNode.instance);
-            JsonNode target = baseNode != null ? baseNode : this.objectMapper.createObjectNode();
-            return mergePatch.apply(target);
-        } catch (Exception ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to apply merge patch", ex);
+        if (!(patchNode instanceof ObjectNode patchObject)) {
+            return patchNode == null ? NullNode.getInstance() : patchNode.deepCopy();
         }
+        ObjectNode result = baseNode instanceof ObjectNode baseObject ? baseObject.deepCopy() : this.objectMapper.createObjectNode();
+        for (Map.Entry<String, JsonNode> entry : patchObject.properties()) {
+            JsonNode patchValue = entry.getValue();
+            if (patchValue == null || patchValue.isNull()) {
+                result.remove(entry.getKey());
+            } else {
+                result.set(entry.getKey(), applyMergePatch(result.get(entry.getKey()), patchValue));
+            }
+        }
+        return result;
     }
 
     private JsonNode applyStandardJsonPatch(JsonNode baseNode, ArrayNode patchNode) {
         try {
-            JsonPatch jsonPatch = JsonPatch.fromJson(patchNode);
-            JsonNode target = baseNode != null ? baseNode : this.objectMapper.createObjectNode();
-            return jsonPatch.apply(target);
-        } catch (JsonPatchException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to apply JSON Patch", ex);
+            JsonNode result = baseNode != null ? baseNode.deepCopy() : this.objectMapper.createObjectNode();
+            for (JsonNode operation : patchNode) {
+                if (!(operation instanceof ObjectNode operationObject)) {
+                    throw new IllegalArgumentException("JSON Patch operation must be an object");
+                }
+                String op = requiredPatchText(operationObject, "op");
+                String path = requiredPatchText(operationObject, "path");
+                result = switch (op) {
+                    case "add" -> addPatchValue(result, path, requiredPatchValue(operationObject));
+                    case "remove" -> removePatchValue(result, path);
+                    case "replace" -> replacePatchValue(result, path, requiredPatchValue(operationObject));
+                    case "move" -> {
+                        String from = requiredPatchText(operationObject, "from");
+                        JsonNode value = requiredNodeAt(result, from).deepCopy();
+                        yield addPatchValue(removePatchValue(result, from), path, value);
+                    }
+                    case "copy" -> addPatchValue(result, path, requiredNodeAt(result, requiredPatchText(operationObject, "from")).deepCopy());
+                    case "test" -> {
+                        if (!requiredNodeAt(result, path).equals(requiredPatchValue(operationObject))) {
+                            throw new IllegalArgumentException("JSON Patch test operation failed at " + path);
+                        }
+                        yield result;
+                    }
+                    default -> throw new IllegalArgumentException("Unsupported JSON Patch operation: " + op);
+                };
+            }
+            return result;
         } catch (Exception ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSON Patch payload", ex);
+        }
+    }
+
+    private String requiredPatchText(ObjectNode operation, String property) {
+        JsonNode value = operation.get(property);
+        if (value == null || !value.isTextual()) {
+            throw new IllegalArgumentException("JSON Patch operation requires textual '" + property + "'");
+        }
+        return value.asText();
+    }
+
+    private JsonNode requiredPatchValue(ObjectNode operation) {
+        if (!operation.has("value")) {
+            throw new IllegalArgumentException("JSON Patch operation requires 'value'");
+        }
+        JsonNode value = operation.get("value");
+        return value == null ? NullNode.getInstance() : value.deepCopy();
+    }
+
+    private JsonNode requiredNodeAt(JsonNode document, String pointer) {
+        if (pointer.isEmpty()) {
+            return document;
+        }
+        JsonNode value = document.at(pointer);
+        if (value == null || value.isMissingNode()) {
+            throw new IllegalArgumentException("JSON Patch path does not exist: " + pointer);
+        }
+        return value;
+    }
+
+    private JsonNode addPatchValue(JsonNode document, String pointer, JsonNode value) {
+        if (pointer.isEmpty()) {
+            return value;
+        }
+        JsonNode parent = patchParent(document, pointer);
+        String segment = decodeJsonPointerSegment(pointer.substring(pointer.lastIndexOf('/') + 1));
+        if (parent instanceof ObjectNode objectNode) {
+            objectNode.set(segment, value);
+            return document;
+        }
+        if (parent instanceof ArrayNode arrayNode) {
+            if ("-".equals(segment)) {
+                arrayNode.add(value);
+                return document;
+            }
+            int index = parsePatchArrayIndex(segment, arrayNode.size(), true);
+            arrayNode.insert(index, value);
+            return document;
+        }
+        throw new IllegalArgumentException("JSON Patch parent is not a container: " + pointer);
+    }
+
+    private JsonNode replacePatchValue(JsonNode document, String pointer, JsonNode value) {
+        if (pointer.isEmpty()) {
+            return value;
+        }
+        requiredNodeAt(document, pointer);
+        JsonNode parent = patchParent(document, pointer);
+        String segment = decodeJsonPointerSegment(pointer.substring(pointer.lastIndexOf('/') + 1));
+        if (parent instanceof ObjectNode objectNode) {
+            objectNode.set(segment, value);
+            return document;
+        }
+        if (parent instanceof ArrayNode arrayNode) {
+            arrayNode.set(parsePatchArrayIndex(segment, arrayNode.size(), false), value);
+            return document;
+        }
+        throw new IllegalArgumentException("JSON Patch parent is not a container: " + pointer);
+    }
+
+    private JsonNode removePatchValue(JsonNode document, String pointer) {
+        if (pointer.isEmpty()) {
+            return NullNode.getInstance();
+        }
+        requiredNodeAt(document, pointer);
+        JsonNode parent = patchParent(document, pointer);
+        String segment = decodeJsonPointerSegment(pointer.substring(pointer.lastIndexOf('/') + 1));
+        if (parent instanceof ObjectNode objectNode) {
+            objectNode.remove(segment);
+            return document;
+        }
+        if (parent instanceof ArrayNode arrayNode) {
+            arrayNode.remove(parsePatchArrayIndex(segment, arrayNode.size(), false));
+            return document;
+        }
+        throw new IllegalArgumentException("JSON Patch parent is not a container: " + pointer);
+    }
+
+    private JsonNode patchParent(JsonNode document, String pointer) {
+        if (!pointer.startsWith("/")) {
+            throw new IllegalArgumentException("JSON Patch path must be a JSON Pointer: " + pointer);
+        }
+        int separator = pointer.lastIndexOf('/');
+        String parentPointer = pointer.substring(0, separator);
+        return parentPointer.isEmpty() ? document : requiredNodeAt(document, parentPointer);
+    }
+
+    private int parsePatchArrayIndex(String segment, int size, boolean allowEnd) {
+        try {
+            int index = Integer.parseInt(segment);
+            int maximum = allowEnd ? size : size - 1;
+            if (index < 0 || index > maximum) {
+                throw new IllegalArgumentException("JSON Patch array index is out of bounds: " + segment);
+            }
+            return index;
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid JSON Patch array index: " + segment, ex);
         }
     }
 
@@ -1200,103 +1324,59 @@ _%>
     }
 
     private List<String> evaluateJsonPath(String expression, JsonNode baseNode) {
-        try {
-            String normalizedExpression = normalizeJsonPathExpression(expression);
-            List<String> paths = JsonPath
-                .using(this.jsonPathConfiguration)
-                .parse(baseNode)
-                .read(normalizedExpression, new TypeRef<List<String>>() {});
-            if (paths == null || paths.isEmpty()) {
-                return List.of();
-            }
-            List<String> pointers = new ArrayList<>();
-            for (String path : paths) {
-                String pointer = convertJsonPathToPointer(path);
-                if (pointer != null && !pointer.isBlank()) {
-                    pointers.add(pointer);
-                }
-            }
-            return pointers;
-        } catch (PathNotFoundException ex) {
-            return List.of();
-        } catch (Exception ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSONPath expression", ex);
+        if (expression == null || !expression.startsWith("$")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSONPath expression");
         }
-    }
-
-    private String normalizeJsonPathExpression(String expression) {
-        if (expression == null) {
-            return "";
-        }
-        Matcher matcher = Pattern.compile("(==\\s*)([^'\"\\s\\]]+)").matcher(expression);
-        StringBuilder buffer = new StringBuilder();
+        Pattern tokenPattern = Pattern.compile(
+            "\\.([A-Za-z0-9_@-]+)|\\[['\"]([^'\"]+)['\"]\\]|\\[(\\d+)\\]|\\[\\?\\(@\\.([A-Za-z0-9_@-]+)\\s*==\\s*['\"]?([^'\"\\]]+)['\"]?\\)\\]"
+        );
+        List<JsonNodeLocation> matches = List.of(new JsonNodeLocation(baseNode, ""));
+        Matcher matcher = tokenPattern.matcher(expression.substring(1));
+        int offset = 0;
         while (matcher.find()) {
-            String value = matcher.group(2);
-            matcher.appendReplacement(buffer, matcher.group(1) + "'" + value + "'");
-        }
-        matcher.appendTail(buffer);
-        return buffer.toString();
-    }
-
-    private String convertJsonPathToPointer(String jsonPath) {
-        if (jsonPath == null || jsonPath.isBlank()) {
-            return null;
-        }
-        final String trimmed = jsonPath.trim();
-        if ("$".equals(trimmed)) {
-            return "/";
-        }
-        final String normalized = trimmed.startsWith("$") ? trimmed.substring(1) : trimmed;
-        List<String> segments = new ArrayList<>();
-        int index = 0;
-        while (index < normalized.length()) {
-            char current = normalized.charAt(index);
-            if (current == '.') {
-                index++;
-                int start = index;
-                while (index < normalized.length() && normalized.charAt(index) != '.' && normalized.charAt(index) != '[') {
-                    index++;
+            if (matcher.start() != offset) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSONPath expression");
+            }
+            List<JsonNodeLocation> next = new ArrayList<>();
+            String property = matcher.group(1) != null ? matcher.group(1) : matcher.group(2);
+            if (property != null) {
+                for (JsonNodeLocation match : matches) {
+                    JsonNode value = match.node().get(property);
+                    if (value != null) {
+                        next.add(new JsonNodeLocation(value, match.pointer() + "/" + escapePointerSegment(property)));
+                    }
                 }
-                if (index > start) {
-                    segments.add(normalized.substring(start, index));
-                }
-            } else if (current == '[') {
-                index++;
-                if (index < normalized.length() && (normalized.charAt(index) == '\'' || normalized.charAt(index) == '\"')) {
-                    char quote = normalized.charAt(index++);
-                    int start = index;
-                    while (index < normalized.length() && normalized.charAt(index) != quote) {
-                        index++;
-                    }
-                    if (index > start) {
-                        segments.add(normalized.substring(start, index));
-                    }
-                    while (index < normalized.length() && normalized.charAt(index) != ']') {
-                        index++;
-                    }
-                    index++;
-                } else {
-                    int start = index;
-                    while (index < normalized.length() && normalized.charAt(index) != ']') {
-                        index++;
-                    }
-                    if (index > start) {
-                        segments.add(normalized.substring(start, index));
-                    }
-                    if (index < normalized.length()) {
-                        index++;
+            } else if (matcher.group(3) != null) {
+                int index = Integer.parseInt(matcher.group(3));
+                for (JsonNodeLocation match : matches) {
+                    JsonNode value = match.node().get(index);
+                    if (value != null) {
+                        next.add(new JsonNodeLocation(value, match.pointer() + "/" + index));
                     }
                 }
             } else {
-                index++;
+                String filterProperty = matcher.group(4);
+                String filterValue = matcher.group(5).trim();
+                for (JsonNodeLocation match : matches) {
+                    if (!match.node().isArray()) {
+                        continue;
+                    }
+                    for (int index = 0; index < match.node().size(); index++) {
+                        JsonNode candidate = match.node().get(index);
+                        JsonNode candidateValue = candidate == null ? null : candidate.get(filterProperty);
+                        if (candidateValue != null && filterValue.equals(candidateValue.asText())) {
+                            next.add(new JsonNodeLocation(candidate, match.pointer() + "/" + index));
+                        }
+                    }
+                }
             }
+            matches = next;
+            offset = matcher.end();
         }
-        if (segments.isEmpty()) {
-            return null;
+        if (offset != expression.length() - 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid JSONPath expression");
         }
-        StringBuilder pointer = new StringBuilder();
-        segments.forEach(segment -> pointer.append('/').append(escapePointerSegment(segment)));
-        return pointer.length() == 0 ? "/" : pointer.toString();
+        return matches.stream().map(JsonNodeLocation::pointer).toList();
     }
 
     private String escapePointerSegment(String segment) {
@@ -1341,6 +1421,42 @@ _%>
         } catch (IllegalArgumentException ex) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to map payload", ex);
         }
+    }
+
+    private JsonNode removePropertiesNotDeserializableBy(JsonNode node, Class<?> targetType) {
+        if (node == null || !node.isObject() || targetType == null) {
+            return node;
+        }
+        Set<String> propertyNames = new LinkedHashSet<>();
+        for (Class<?> type = targetType; type != null && type != Object.class; type = type.getSuperclass()) {
+            for (Field field : type.getDeclaredFields()) {
+                propertyNames.add(jsonPropertyName(field.getAnnotation(JsonProperty.class), field.getName()));
+            }
+        }
+        for (Method method : targetType.getMethods()) {
+            JsonProperty jsonProperty = method.getAnnotation(JsonProperty.class);
+            if (jsonProperty != null) {
+                propertyNames.add(jsonPropertyName(jsonProperty, method.getName()));
+            } else if (method.getParameterCount() == 1 && method.getName().startsWith("set") && method.getName().length() > 3) {
+                propertyNames.add(Introspector.decapitalize(method.getName().substring(3)));
+            }
+        }
+        if (propertyNames.isEmpty()) {
+            return node;
+        }
+        ObjectNode copy = ((ObjectNode) node).deepCopy();
+        List<String> unknownFields = new ArrayList<>();
+        copy.propertyNames().forEach(field -> {
+            if (!propertyNames.contains(field)) {
+                unknownFields.add(field);
+            }
+        });
+        copy.remove(unknownFields);
+        return copy;
+    }
+
+    private String jsonPropertyName(JsonProperty annotation, String fallback) {
+        return annotation == null || annotation.value().isBlank() ? fallback : annotation.value();
     }
 
     private <T> T convertAndValidate(JsonNode node, Class<T> payloadType) {
@@ -1551,7 +1667,7 @@ _%>
             }
             return ServletUriComponentsBuilder.fromUriString(base).pathSegment(identifierText).build().normalize().toUriString();
         } catch (IllegalStateException ex) {
-            return String.format("/api/%s/%s", resourceSlug, identifier);
+            return "/api/%s/%s".formatted(resourceSlug, identifier);
         }
     }
 
@@ -1584,7 +1700,7 @@ _%>
             if (identifier != null) {
                 return identifier;
             }
-            Iterator<Map.Entry<String, JsonNode>> fields = objectNode.fields();
+            Iterator<Map.Entry<String, JsonNode>> fields = objectNode.properties().iterator();
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> field = fields.next();
                 if (field.getKey() != null && field.getKey().toLowerCase(java.util.Locale.ROOT).endsWith("id")) {
@@ -1606,7 +1722,7 @@ _%>
 
     private Object jsonIdentifierValue(ObjectNode objectNode, String fieldName) {
         JsonNode value = objectNode.get(fieldName);
-        if (value == null || value.isMissingNode() || value.isNull() || value.isContainerNode()) {
+        if (value == null || value.isMissingNode() || value.isNull() || value.isContainer()) {
             return null;
         }
         return value.asText();
@@ -1753,7 +1869,7 @@ _%>
                             nextPointers.add(candidatePointer + "/" + childIndex);
                         }
                     } else if (candidate.isObject()) {
-                        Iterator<Map.Entry<String, JsonNode>> fields = candidate.fields();
+                        Iterator<Map.Entry<String, JsonNode>> fields = candidate.properties().iterator();
                         while (fields.hasNext()) {
                             Map.Entry<String, JsonNode> field = fields.next();
                             next.add(field.getValue());
@@ -1831,7 +1947,7 @@ _%>
     }
 
     private boolean hasStrictOpenApiEmailViolation(Object value, Set<Object> visited) {
-        Object unwrapped = unwrapJsonNullable(value);
+        Object unwrapped = value;
         if (unwrapped == null) {
             return false;
         }
@@ -1869,7 +1985,7 @@ _%>
                 continue;
             }
             Object nested = invokeGetter(unwrapped, method);
-            Object nestedValue = unwrapJsonNullable(nested);
+            Object nestedValue = nested;
             if (hasEmailAnnotation(method) && isInvalidOpenApiEmailValue(nestedValue)) {
                 return true;
             }
@@ -1886,7 +2002,7 @@ _%>
             return false;
         }
         String packageName = typePackage.getName();
-        return packageName.startsWith("<%= basePackage %>.service.api.dto");
+        return packageName.startsWith("<%- basePackage %>.service.api.dto");
     }
 
     private boolean isBeanGetter(Method method) {
@@ -1924,22 +2040,6 @@ _%>
         return value instanceof CharSequence text && !STRICT_OPENAPI_EMAIL_PATTERN.matcher(text).matches();
     }
 
-    private Object unwrapJsonNullable(Object value) {
-        if (value == null || !"org.openapitools.jackson.nullable.JsonNullable".equals(value.getClass().getName())) {
-            return value;
-        }
-        try {
-            Method isPresent = value.getClass().getMethod("isPresent");
-            if (!Boolean.TRUE.equals(isPresent.invoke(value))) {
-                return null;
-            }
-            return value.getClass().getMethod("get").invoke(value);
-        } catch (ReflectiveOperationException | RuntimeException ex) {
-            LOG.debug("Unable to inspect JsonNullable value for validation", ex);
-            return null;
-        }
-    }
-
     private <T> String buildValidationMessage(Set<ConstraintViolation<T>> violations) {
         StringBuilder builder = new StringBuilder("Validation failed: ");
         boolean first = true;
@@ -1962,7 +2062,7 @@ _%>
 
     private void enforceImmutableRecursive(JsonNode original, JsonNode patched, boolean isRoot) {
         if (original.isObject() && patched.isObject()) {
-            original.fieldNames().forEachRemaining(field -> {
+            original.propertyNames().forEach(field -> {
                 JsonNode originalChild = original.get(field);
                 JsonNode patchedChild = patched.get(field);
                 if (isIdentifierField(field)) {
@@ -2006,7 +2106,7 @@ _%>
                 return identifierKey(preferred, value);
             }
         }
-        Iterator<String> fields = node.fieldNames();
+        Iterator<String> fields = node.propertyNames().iterator();
         while (fields.hasNext()) {
             String field = fields.next();
             if (isIdentifierField(field)) {
@@ -2093,9 +2193,9 @@ _%>
             return builder.pathSegment(idValue.toString()).build().normalize().toUri();
         } catch (IllegalStateException ignored) {
             if (idValue == null || idValue.toString().isBlank()) {
-                return URI.create(String.format("/%s", "<%= resolvedResourceSlug %>"));
+                return URI.create("/%s".formatted("<%- resolvedResourceSlug %>"));
             }
-            return URI.create(String.format("/%s/%s", "<%= resolvedResourceSlug %>", idValue));
+            return URI.create("/%s/%s".formatted("<%- resolvedResourceSlug %>", idValue));
         }
     }
 

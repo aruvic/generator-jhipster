@@ -17,8 +17,8 @@
  * limitations under the License.
  */
 
-import type { ParsedOpenAPISpec } from './openapi-mapper-generator.ts';
 import {
+  type ParsedOpenAPISpec,
   buildDomainFqcn,
   buildDtoFqcn,
   extractSchemaRef,
@@ -98,9 +98,7 @@ function isPolymorphic(schema: any): boolean {
  */
 function extractSubtypes(schema: any): string[] {
   const refs = schema.oneOf || schema.anyOf || [];
-  return refs
-    .map((ref: any) => extractSchemaRef(ref))
-    .filter((name: string | undefined): name is string => !!name);
+  return refs.map((ref: any) => extractSchemaRef(ref)).filter((name: string | undefined): name is string => !!name);
 }
 
 /**
@@ -118,21 +116,20 @@ function buildPolymorphicHierarchy(
 
   const baseName = stripDtoSuffix(baseSchemaName);
   const subtypeNames = extractSubtypes(schema);
-  
+
   if (subtypeNames.length === 0) {
     return null;
   }
 
-  const subtypes: SubtypeMapping[] = subtypeNames
-    .map(subtypeName => {
-      const subtypeBaseName = stripDtoSuffix(subtypeName);
-      return {
-        dtoType: buildDtoFqcn(subtypeName, basePackage),
-        domainType: buildDomainFqcn(subtypeBaseName, basePackage),
-        dtoSimpleName: subtypeName.split('_')[0], // Remove _FVO suffix
-        domainSimpleName: subtypeBaseName,
-      };
-    });
+  const subtypes: SubtypeMapping[] = subtypeNames.map(subtypeName => {
+    const subtypeBaseName = stripDtoSuffix(subtypeName);
+    return {
+      dtoType: buildDtoFqcn(subtypeName, basePackage),
+      domainType: buildDomainFqcn(subtypeBaseName, basePackage),
+      dtoSimpleName: subtypeName.split('_')[0], // Remove _FVO suffix
+      domainSimpleName: subtypeBaseName,
+    };
+  });
 
   return {
     baseType: baseName,
@@ -147,7 +144,7 @@ function buildPolymorphicHierarchy(
  * Generate unified mappers (RequestMapper and ResponseMapper)
  */
 export function generateUnifiedMappers(spec: ParsedOpenAPISpec, basePackage: string): UnifiedMapperContext[] {
-  const schemas = spec.schemas;
+  const { schemas } = spec;
   const requestMappings: UnifiedMapping[] = [];
   const responseMappings: UnifiedMapping[] = [];
   const polymorphicMappings: PolymorphicMapping[] = [];
@@ -159,7 +156,7 @@ export function generateUnifiedMappers(spec: ParsedOpenAPISpec, basePackage: str
     }
 
     const baseName = stripDtoSuffix(schemaName);
-    
+
     // Skip abstract schemas
     if (ABSTRACT_SCHEMAS.has(baseName)) {
       continue;
@@ -169,12 +166,12 @@ export function generateUnifiedMappers(spec: ParsedOpenAPISpec, basePackage: str
     if (isPolymorphic(schema)) {
       const requestPoly = buildPolymorphicHierarchy(schemaName, schema, basePackage, 'request');
       const responsePoly = buildPolymorphicHierarchy(schemaName, schema, basePackage, 'response');
-      
+
       if (requestPoly) {
         polymorphicMappings.push(requestPoly);
       }
       if (responsePoly) {
-        polymorphicMappings.push({ ...responsePoly!, direction: 'response' });
+        polymorphicMappings.push({ ...responsePoly, direction: 'response' });
       }
     }
 
@@ -183,7 +180,7 @@ export function generateUnifiedMappers(spec: ParsedOpenAPISpec, basePackage: str
     const domainType = buildDomainFqcn(baseName, basePackage);
 
     const annotations: string[] = [];
-    
+
     // Always ignore ID for request mappings (create/update)
     if (schemaName.endsWith('FVO')) {
       annotations.push('@Mapping(target = "id", ignore = true)');

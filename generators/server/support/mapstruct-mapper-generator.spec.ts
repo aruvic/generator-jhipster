@@ -17,19 +17,29 @@
  * limitations under the License.
  */
 
+import { describe, expect, it } from 'esmocha';
 import { readFileSync } from 'node:fs';
 
 import ejs from 'ejs';
-import { describe, expect, it } from 'esmocha';
 
 describe('MapStruct mapper generator', () => {
-  it('registers OpenAPI oneOf Jackson support as an additive module bean', () => {
+  it('registers OpenAPI oneOf support as a native Jackson 3 module bean', () => {
     const template = readFileSync(new URL('../templates/openapi-oneof-deserializer-configuration.java.ejs', import.meta.url), 'utf-8');
     const rendered = ejs.render(template, { packageName: 'com.example' });
 
-    expect(rendered).toContain('public Module openApiOneOfDeserializersModule()');
+    expect(rendered).toContain('public JacksonModule openApiOneOfDeserializersModule()');
+    expect(rendered).toContain('import tools.jackson.databind.ValueDeserializer;');
     expect(rendered).toContain('return module;');
-    expect(rendered).not.toContain('Jackson2ObjectMapperBuilderCustomizer');
-    expect(rendered).not.toContain('modulesToInstall');
+    expect(rendered).not.toContain('com.fasterxml.jackson.databind');
+  });
+
+  it('renders primitive mappings without the Jackson 2 nullable bridge', () => {
+    const template = readFileSync(new URL('../templates/openapi-primitive-mapper.java.ejs', import.meta.url), 'utf-8');
+    const rendered = ejs.render(template, { packageName: 'com.example.web.api.mapper' });
+
+    expect(rendered).toContain('import tools.jackson.databind.ObjectMapper;');
+    expect(rendered).toContain('import tools.jackson.core.JacksonException;');
+    expect(rendered).not.toContain('com.fasterxml.jackson.databind');
+    expect(rendered).not.toContain('JsonNullable');
   });
 });

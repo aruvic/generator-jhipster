@@ -131,14 +131,14 @@
                 <configuration>
                     <inputSpec>${project.basedir}/src/main/resources/swagger/api.yml</inputSpec>
                     <generatorName>spring</generatorName>
-                    <apiPackage><%= packageName %>.web.api</apiPackage>
-                    <modelPackage><%= packageName %>.service.api.dto</modelPackage>
+                    <apiPackage><%- packageName %>.web.api</apiPackage>
+                    <modelPackage><%- packageName %>.service.api.dto</modelPackage>
                     <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
                     <skipValidateSpec>false</skipValidateSpec>
                     <generateAliasAsModel>true</generateAliasAsModel>
                     <configOptions>
                         <delegatePattern>true</delegatePattern>
-                        <title><%= dasherizedBaseName %></title>
+                        <title><%- dasherizedBaseName %></title>
                         <useTags>true</useTags>
                         <useSpringBoot3>true</useSpringBoot3>
                     </configOptions>

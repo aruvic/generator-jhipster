@@ -44,10 +44,10 @@ export function linkEntityInheritance(entities: BaseApplicationEntity[], logger?
       throw new Error(`Entity ${entity.name} cannot extend itself`);
     }
     validateNoInheritanceCycle(entity, parentEntity);
-    entity.parentEntity = parentEntity as typeof entity;
+    entity.parentEntity = parentEntity;
     parentEntity.childEntities = parentEntity.childEntities ?? [];
-    if (!parentEntity.childEntities.includes(entity as typeof parentEntity)) {
-      parentEntity.childEntities.push(entity as typeof parentEntity);
+    if (!parentEntity.childEntities.includes(entity)) {
+      parentEntity.childEntities.push(entity);
     }
   }
 

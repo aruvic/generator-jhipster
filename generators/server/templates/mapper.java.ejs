@@ -17,62 +17,66 @@
  * limitations under the License.
  */
 
-package <%= packageName %>;
+package <%- packageName %>;
 
 <%_ const imports = importsSet || []; _%>
 <%_ for (const importStmt of imports) { _%>
-import <%= importStmt %>;
+import <%- importStmt %>;
 <%_ } _%>
 
 /**
- * MapStruct mapper interface for <%= mapperName %>.
+ * MapStruct mapper interface for <%- mapperName %>.
  * Automatically generated from OpenAPI specification to handle DTO ↔ Domain mappings.
  */
 @Lazy
 @Mapper(
     componentModel = "spring",
-    unmappedTargetPolicy = ReportingPolicy.IGNORE<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
-    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR<%_ } _%><%_ if (usesMappers && usesMappers.length > 0) { _%>,
-    uses = { <%- usesMappers.map(mapper => mapper + '.class').join(', ') %> }<%_ } _%>
+    unmappedTargetPolicy = ReportingPolicy.IGNORE
+<%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>,
+    subclassExhaustiveStrategy = SubclassExhaustiveStrategy.COMPILE_ERROR
+<%_ } _%>
+<%_ if (usesMappers && usesMappers.length > 0) { _%>,
+    uses = { <%- usesMappers.map(mapper => `${mapper}.class`).join(', ') %> }
+<%_ } _%>
 )
-public interface <%= mapperName %> {
+public interface <%- mapperName %> {
 
-    <%= mapperName %> INSTANCE = Mappers.getMapper(<%= mapperName %>.class);
+    <%- mapperName %> INSTANCE = Mappers.getMapper(<%- mapperName %>.class);
 
 <%_ for (const method of methods) { _%>
     /**
-     * Maps <%= method.sourceType.split('.').pop() %> to <%= method.targetType.split('.').pop() %>.
+     * Maps <%- method.sourceType.split('.').pop() %> to <%- method.targetType.split('.').pop() %>.
      */
-<%_ if (method.annotations && method.annotations.length > 0) { _%>
-<%_ for (const annotation of method.annotations) { _%>
+  <%_ if (method.annotations && method.annotations.length > 0) { _%>
+    <%_ for (const annotation of method.annotations) { _%>
     <%- annotation %>
-<%_ } _%>
-<%_ } _%>
-    <%# Use fully-qualified name if type is in .dto package (not imported), otherwise use simple name _%>
-    <%_ const sourceTypeName = method.sourceType.includes('.dto.') ? method.sourceType : method.sourceType.split('.').pop() _%>
-    <%_ const targetTypeName = method.targetType.includes('.dto.') ? method.targetType : method.targetType.split('.').pop() _%>
-    <%= targetTypeName %> <%= method.methodName %>(<%= sourceTypeName %> source);
+    <%_ } _%>
+  <%_ } _%>
+    <%# Use fully-qualified name if type is in .dto package (not imported), otherwise use simple name -%>
+  <%_ const sourceTypeName = method.sourceType.includes('.dto.') ? method.sourceType : method.sourceType.split('.').pop(); _%>
+  <%_ const targetTypeName = method.targetType.includes('.dto.') ? method.targetType : method.targetType.split('.').pop(); _%>
+    <%- targetTypeName %> <%- method.methodName %>(<%- sourceTypeName %> source);
 
 <%_ } _%>
 
 <%_ if (polymorphicTypes && polymorphicTypes.length > 0) { _%>
     // Polymorphic type mappings
-<%_ for (const polymorphic of polymorphicTypes) { _%>
+  <%_ for (const polymorphic of polymorphicTypes) { _%>
 
     /**
-     * Polymorphic mapper for <%= polymorphic.baseType.split('.').pop() %>.
+     * Polymorphic mapper for <%- polymorphic.baseType.split('.').pop() %>.
      */
-<%_ for (const subtype of polymorphic.subtypes) { _%>
-    <%# Use fully-qualified names for DTOs in @SubclassMapping _%>
-    <%_ const subtypeSourceName = subtype.sourceType.includes('.dto.') ? subtype.sourceType : subtype.sourceType.split('.').pop() _%>
-    <%_ const subtypeTargetName = subtype.targetType.includes('.dto.') ? subtype.targetType : subtype.targetType.split('.').pop() _%>
-    @SubclassMapping(source = <%= subtypeSourceName %>.class, target = <%= subtypeTargetName %>.class)
-<%_ } _%>
-    <%# Use fully-qualified name for base type if it's a DTO _%>
-    <%_ const polymorphicBaseTypeName = polymorphic.baseType.includes('.dto.') ? polymorphic.baseType : polymorphic.baseType.split('.').pop() _%>
-    <%= polymorphicBaseTypeName %> mapPolymorphic(<%= polymorphicBaseTypeName %> source);
+    <%_ for (const subtype of polymorphic.subtypes) { _%>
+    <%# Use fully-qualified names for DTOs in @SubclassMapping -%>
+      <%_ const subtypeSourceName = subtype.sourceType.includes('.dto.') ? subtype.sourceType : subtype.sourceType.split('.').pop(); _%>
+      <%_ const subtypeTargetName = subtype.targetType.includes('.dto.') ? subtype.targetType : subtype.targetType.split('.').pop(); _%>
+    @SubclassMapping(source = <%- subtypeSourceName %>.class, target = <%- subtypeTargetName %>.class)
+    <%_ } _%>
+    <%# Use fully-qualified name for base type if it's a DTO -%>
+    <%_ const polymorphicBaseTypeName = polymorphic.baseType.includes('.dto.') ? polymorphic.baseType : polymorphic.baseType.split('.').pop(); _%>
+    <%- polymorphicBaseTypeName %> mapPolymorphic(<%- polymorphicBaseTypeName %> source);
 
-<%_ } _%>
+  <%_ } _%>
 <%_ } _%>
 
 }

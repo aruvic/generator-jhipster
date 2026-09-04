@@ -20,8 +20,8 @@ import { DOCUMENT } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { FontAwesomeModule } from '@fortawesome/angular-fontawesome';
 
-import SharedModule from 'app/shared/shared.module';
 import {
   FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
   FormCrudReferencePickerConfig,
@@ -44,9 +44,9 @@ type RegisteredRestApi = {
 };
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-form-crud-reference-pickers',
+  selector: '<%- jhiPrefixDashed %>-form-crud-reference-pickers',
   templateUrl: './form-crud-reference-pickers.html',
-  imports: [SharedModule, FormsModule],
+  imports: [FormsModule, FontAwesomeModule],
 })
 export default class FormCrudReferencePickers implements OnInit {
   readonly registeredForms = this.formRegistrations();

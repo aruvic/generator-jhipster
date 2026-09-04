@@ -1,8 +1,10 @@
 import { before, describe, it } from 'esmocha';
 
-import { defaultHelpers as helpers, runResult } from '../../lib/testing/index.ts';
+import type { ConfigAll } from '../../../../lib/types/command-all.d.ts';
 
-const GENERATOR = 'jhipster:spring-data-relational';
+import { defaultHelpers as helpers, runResult } from '#testing';
+
+const GENERATOR = 'jhipster:spring-boot:data-relational';
 
 const applicationConfig = {
   baseName: 'duplicates',
@@ -18,7 +20,7 @@ const applicationConfig = {
   packageFolder: 'com/mycompany/myapp',
   nativeLanguage: 'en',
   languages: ['en'],
-};
+} satisfies Partial<ConfigAll>;
 
 const duplicateColumnEntity = {
   name: 'TypeCarrier',
@@ -81,7 +83,11 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
   before(async () => {
     await helpers
       .runJHipster(GENERATOR)
-      .withJHipsterConfig(applicationConfig, [duplicateColumnEntity as any, discriminatorColumnEntity as any, booleanDiscriminatorEntity as any])
+      .withJHipsterConfig(applicationConfig, [
+        duplicateColumnEntity as any,
+        discriminatorColumnEntity as any,
+        booleanDiscriminatorEntity as any,
+      ])
       .withMockedSource({ except: ['addTestSpringFactory'] });
   });
 
@@ -106,7 +112,10 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
     const entityPath = 'src/main/java/com/mycompany/myapp/domain/UtilizedTransportEquipment.java';
     runResult.assertFileContent(entityPath, /@DiscriminatorColumn\(\s+name = "dtype"/);
     runResult.assertNoFileContent(entityPath, /@DiscriminatorColumn\(\s+name = "is_shipper_owned"/);
-    runResult.assertNoFileContent(entityPath, /@Column\(\s+name = "is_shipper_owned"[\s\S]+insertable = false[\s\S]+private Boolean isShipperOwned;/);
+    runResult.assertNoFileContent(
+      entityPath,
+      /@Column\(\s+name = "is_shipper_owned"[\s\S]+insertable = false[\s\S]+private Boolean isShipperOwned;/,
+    );
     runResult.assertFileContent(entityPath, /private Boolean isShipperOwned;/);
   });
 });

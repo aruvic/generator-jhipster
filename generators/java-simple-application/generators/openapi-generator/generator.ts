@@ -18,9 +18,12 @@
  */
 import { readFile } from 'node:fs/promises';
 
+import { parse as parseYaml } from 'yaml';
+
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.ts';
 import { JavaApplicationGenerator } from '../../../java/generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../../java/support/files.ts';
+import { getOpenApiModelNameMappings } from '../../../server/support/openapi-mapper-generator.ts';
 
 export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator {
   async beforeQueue() {
@@ -42,6 +45,10 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
         });
       },
       async writing({ application }) {
+        if (application.oas3Input) {
+          await this.prepareProvidedOpenApiSpec(application);
+        }
+
         await this.writeFiles({
           blocks: [
             { templates: ['README.md.jhi.openapi-generator'] },
@@ -69,76 +76,82 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
     return this.asPostWritingTaskGroup({
       addDependencies({ source, application }) {
         const { addOpenapiGeneratorPlugin, buildToolGradle, javaDependencies } = application;
-        source.addJavaDefinitions!(
-          {
-            dependencies: [
+        const modelNameMappings = application.openApiModelNameMappings
+          ?.map(
+            mapping => `                                <modelNameMapping>${mapping.sourceName}=${mapping.targetName}</modelNameMapping>`,
+          )
+          .join('\n');
+        source.addJavaDefinitions!({
+          condition: addOpenapiGeneratorPlugin,
+          mavenDefinition: {
+            properties: [{ property: 'openapi-generator-maven-plugin.version', value: javaDependencies['openapi-generator-maven-plugin'] }],
+            plugins: [{ groupId: 'org.openapitools', artifactId: 'openapi-generator-maven-plugin' }],
+            pluginManagement: [
               {
                 groupId: 'org.openapitools',
-                artifactId: 'jackson-databind-nullable',
-                version: javaDependencies['jackson-databind-nullable'],
-              },
-            ],
-          },
-          {
-            condition: addOpenapiGeneratorPlugin,
-            mavenDefinition: {
-              properties: [
-                { property: 'openapi-generator-maven-plugin.version', value: javaDependencies['openapi-generator-maven-plugin'] },
-              ],
-              plugins: [{ groupId: 'org.openapitools', artifactId: 'openapi-generator-maven-plugin' }],
-              pluginManagement: [
-                {
-                  groupId: 'org.openapitools',
-                  artifactId: 'openapi-generator-maven-plugin',
-                  // eslint-disable-next-line no-template-curly-in-string
-                  version: '${openapi-generator-maven-plugin.version}',
-                  additionalContent: `                <executions>
+                artifactId: 'openapi-generator-maven-plugin',
+                // eslint-disable-next-line no-template-curly-in-string
+                version: '${openapi-generator-maven-plugin.version}',
+                additionalContent: `                <executions>
                     <execution>
                         <goals>
                             <goal>generate</goal>
                         </goals>
                         <configuration>
-                            <inputSpec>\${project.basedir}/${application.srcMainResources}swagger/api.yml</inputSpec>
+                            <inputSpec>\${project.basedir}/${application.srcMainResources}swagger/${application.openApiGeneratorInputFile ?? 'api.yml'}</inputSpec>
+                            <templateDirectory>\${project.basedir}/src/main/openapi-templates</templateDirectory>
                             <generatorName>spring</generatorName>
                             <apiPackage>${application.packageName}.web.api</apiPackage>
                             <modelPackage>${application.packageName}.service.api.dto</modelPackage>
                             <supportingFilesToGenerate>ApiUtil.java</supportingFilesToGenerate>
-                            <skipValidateSpec>false</skipValidateSpec>
-                            <configOptions>${
-                              application.reactive ?
-                                `
+                            <!-- The source OpenAPI document is copied verbatim. OpenAPI Generator's
+                                 component-name convention is stricter than OAS and must not cause the
+                                 generator to rewrite or reject an otherwise usable contract. -->
+                            <skipValidateSpec>true</skipValidateSpec>
+                            <generateAliasAsModel>true</generateAliasAsModel>
+${
+  modelNameMappings ?
+    `                            <modelNameMappings>
+${modelNameMappings}
+                            </modelNameMappings>
+`
+  : ''
+}                            <configOptions>${
+                  application.reactive ?
+                    `
                                 <reactive>true</reactive>
 `
-                              : ''
-                            }
+                  : ''
+                }
                                 <delegatePattern>true</delegatePattern>
+                                <documentationProvider>none</documentationProvider>
                                 <title>${application.dasherizedBaseName}</title>
-                                <useSpringBoot3>true</useSpringBoot3>
-                                <useBeanValidation>false</useBeanValidation>
-                                <performBeanValidation>false</performBeanValidation>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <openApiNullable>false</openApiNullable>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <containerDefaultToNull>true</containerDefaultToNull>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>
                                 <typeMapping>DateTime=Instant</typeMapping>
                                 <typeMapping>Time=LocalTime</typeMapping>
-                                <typeMapping>Duration=Duration</typeMapping>
                             </typeMappings>
                             <importMappings>
                                 <importMapping>Instant=java.time.Instant</importMapping>
                                 <importMapping>ZonedDateTime=java.time.ZonedDateTime</importMapping>
                                 <importMapping>LocalDate=java.time.LocalDate</importMapping>
                                 <importMapping>LocalTime=java.time.LocalTime</importMapping>
-                                <importMapping>Duration=java.time.Duration</importMapping>
                             </importMappings>
                         </configuration>
                     </execution>
                 </executions>
 `,
-                },
-              ],
-            },
+              },
+            ],
           },
-        );
+        });
 
         if (addOpenapiGeneratorPlugin && buildToolGradle) {
           source.addGradleBuildSrcDependencyCatalogLibraries?.([
@@ -159,19 +172,39 @@ export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator 
     return this.delegateTasksToBlueprint(() => this.postWriting);
   }
 
-  async copyProvidedOpenApiSpec(application: { oas3Input: string; srcMainResources: string }) {
+  async copyProvidedOpenApiSpec(application: {
+    oas3Input?: string;
+    srcMainResources: string;
+    preparedOpenApiSpec?: { specContents: string };
+  }) {
+    const preparedSpec = await this.prepareProvidedOpenApiSpec(application);
+    if (!preparedSpec) return;
+    this.writeDestination(
+      `${application.srcMainResources}swagger/api.yml`,
+      preparedSpec.specContents.endsWith('\n') ? preparedSpec.specContents : `${preparedSpec.specContents}\n`,
+    );
+  }
+
+  async prepareProvidedOpenApiSpec(application: {
+    oas3Input?: string;
+    preparedOpenApiSpec?: { specContents: string };
+    openApiGeneratorInputFile?: string;
+    openApiModelNameMappings?: { sourceName: string; targetName: string }[];
+  }): Promise<{ specContents: string } | undefined> {
+    if (!application.oas3Input) return undefined;
+    if (application.preparedOpenApiSpec) return application.preparedOpenApiSpec;
     const resolvedInputPath = this.destinationPath(application.oas3Input);
     const candidatePaths = this.buildOpenApiSourceCandidates(resolvedInputPath);
     const failures: string[] = [];
     for (const candidate of candidatePaths) {
       try {
         const contents = await readFile(candidate, 'utf-8');
-        this.writeDestination(
-          `${application.srcMainResources}swagger/api.yml`,
-          contents.endsWith('\n') ? contents : `${contents}\n`,
-        );
         if (candidate !== resolvedInputPath) this.log.info(`Using OpenAPI specification at ${candidate}`);
-        return;
+        const parsed = parseYaml(contents) as { components?: { schemas?: Record<string, unknown> } };
+        application.openApiModelNameMappings = getOpenApiModelNameMappings(Object.keys(parsed?.components?.schemas ?? {}));
+        application.openApiGeneratorInputFile = 'api.yml';
+        application.preparedOpenApiSpec = { specContents: contents };
+        return application.preparedOpenApiSpec;
       } catch (error) {
         failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);
       }

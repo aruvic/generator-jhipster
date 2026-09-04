@@ -407,7 +407,7 @@ export const baseServerFiles = asWriteFilesSection<SpringBootApplication>({
   ],
   serverJavaWeb: [
     {
-      condition: function (application) {
+      condition(application) {
         return (
           application.clientFrameworkAngular &&
           Boolean(application.oas3Input || (application as any).openApiOperations?.length) &&

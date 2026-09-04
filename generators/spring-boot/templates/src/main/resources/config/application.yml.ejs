@@ -45,7 +45,7 @@ springdoc:
 
 <%_ if (addOpenapiGeneratorPlugin) { _%>
 openapi:
-  <%= dasherizedBaseName %>:
+  <%- dasherizedBaseName %>:
     base-path: /api
 <%_ } _%>
 <%_ if (serviceDiscoveryEureka) { _%>

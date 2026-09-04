@@ -57,6 +57,7 @@ export type Field = BaseApplicationField &
 
     columnInsertable?: boolean;
     columnUpdatable?: boolean;
+    javaInherited?: boolean;
   };
 
 export interface Relationship extends BaseApplicationRelationship, JavaAddedRelationshipProperties, Property {

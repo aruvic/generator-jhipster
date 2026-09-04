@@ -26,6 +26,6 @@ import org.junit.jupiter.api.condition.EnabledIf;
 
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
-@EnabledIf("<%= packageName %>.config.SqlTestContainersSpringContextCustomizerFactory#isEmbeddedSqlEnabled")
+@EnabledIf("<%- packageName %>.config.SqlTestContainersSpringContextCustomizerFactory#isEmbeddedSqlEnabled")
 public @interface EmbeddedSQL {
 }

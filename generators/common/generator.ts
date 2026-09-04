@@ -242,7 +242,7 @@ export default class CommonGenerator extends BaseApplicationGenerator<
       addJHipsterDependencies({ application }) {
         if (application.skipJhipsterDependencies) return;
 
-        const jhipsterVersion = application.jhipsterVersion;
+        const { jhipsterVersion } = application;
         if (typeof jhipsterVersion === 'string' && /-(alpha|beta|rc)/i.test(jhipsterVersion)) {
           // Avoid adding devDependency pointing to an unpublished prerelease.
           return;

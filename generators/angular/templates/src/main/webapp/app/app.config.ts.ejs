@@ -25,6 +25,10 @@ import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { registerRemotes } from '@module-federation/enhanced/runtime';
 <%_ } _%>
 import { NgbDateAdapter } from '@ng-bootstrap/ng-bootstrap/datepicker';
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations.length) { _%>
+import { withFormlyBootstrap } from '@ngx-formly/bootstrap';
+import { provideFormlyCore } from '@ngx-formly/core';
+<%_ } _%>
 <%_ if (authenticationTypeJwt) { _%>
 import { authInterceptor } from 'app/core/interceptor/auth.interceptor';
 <%_ } _%>
@@ -89,6 +93,9 @@ export const appConfig: ApplicationConfig = {
         notificationInterceptor
       ])
     ),
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations.length) { _%>
+    provideFormlyCore(withFormlyBootstrap()),
+<%_ } _%>
     Title,
     { provide: LOCALE_ID, useValue: '<%- angularLocaleId %>' },
     { provide: NgbDateAdapter, useClass: NgbDateDayjsAdapter },

@@ -16,8 +16,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { describe, it } from 'esmocha';
-import { expect } from 'chai';
+import { describe, expect, it } from 'esmocha';
 
 import { resolveJavaType } from './type-utils.ts';
 
@@ -85,15 +84,15 @@ const schemas = {
 describe('resolveJavaType', () => {
   it('resolves composed entity to the referenced model name', () => {
     const resolved = resolveJavaType({ $ref: '#/components/schemas/Hub' }, { schemas }, { dtoPackage });
-    expect(resolved.baseType).to.equal('Hub');
-    expect(resolved.fullType).to.equal('Hub');
-    expect(resolved.imports.has(`${dtoPackage}.Hub`)).to.be.true;
+    expect(resolved.baseType).toBe('Hub');
+    expect(resolved.fullType).toBe('Hub');
+    expect(resolved.imports.has(`${dtoPackage}.Hub`)).toBe(true);
   });
 
   it('resolves composed FVO entity to the referenced model name', () => {
     const resolved = resolveJavaType({ $ref: '#/components/schemas/Hub_FVO' }, { schemas }, { dtoPackage });
-    expect(resolved.baseType).to.equal('HubFVO');
-    expect(resolved.fullType).to.equal('HubFVO');
-    expect(resolved.imports.has(`${dtoPackage}.HubFVO`)).to.be.true;
+    expect(resolved.baseType).toBe('HubFVO');
+    expect(resolved.fullType).toBe('HubFVO');
+    expect(resolved.imports.has(`${dtoPackage}.HubFVO`)).toBe(true);
   });
 });

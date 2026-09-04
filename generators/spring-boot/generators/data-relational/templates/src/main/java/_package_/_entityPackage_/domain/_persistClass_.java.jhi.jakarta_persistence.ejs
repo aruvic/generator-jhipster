@@ -31,18 +31,18 @@ import org.hibernate.type.SqlTypes;
 <&_ if (fragment.annotationSection) { -&>
 @Entity
 @Table(name = "<%- entityTableName %>")
-  <%_ if (polymorphicRoot) { _%>
+<%_ if (polymorphicRoot) { _%>
     @Inheritance(strategy = InheritanceType.JOINED)
-    <%_ if (discriminatorColumn) { _%>
+  <%_ if (discriminatorColumn) { _%>
     @DiscriminatorColumn(
         name = "<%- discriminatorColumn.name %>",
         discriminatorType = <%- discriminatorColumn.discriminatorTypeLiteral %><% if (discriminatorColumn.length) { %>,
         length = <%- discriminatorColumn.length %><% } %>
     )
-    <%_ } _%>
-  <%_ } else if (discriminatorValue) { _%>
-    @DiscriminatorValue("<%- discriminatorValue %>")
   <%_ } _%>
+<%_ } else if (discriminatorValue) { _%>
+    @DiscriminatorValue("<%- discriminatorValue %>")
+<%_ } _%>
 <&_ } -&>
 
 <%_ for (const field of fields) { -%>

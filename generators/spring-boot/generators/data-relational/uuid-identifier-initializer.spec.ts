@@ -1,8 +1,9 @@
 import { before, describe, it } from 'esmocha';
 
-import { defaultHelpers as helpers, runResult } from '../../lib/testing/index.ts';
+import { defaultHelpers as helpers, runResult } from '../../../../lib/testing/index.ts';
+import type { ConfigAll } from '../../../../lib/types/command-all.d.ts';
 
-const GENERATOR = 'jhipster:spring-data-relational';
+const GENERATOR = 'jhipster:spring-boot:data-relational';
 
 const applicationConfig = {
   baseName: 'uuididentifierinitializer',
@@ -18,7 +19,7 @@ const applicationConfig = {
   packageFolder: 'com/mycompany/myapp',
   nativeLanguage: 'en',
   languages: ['en'],
-};
+} satisfies Partial<ConfigAll>;
 
 const requiredIdentifierEntity = {
   name: 'EntityRefOrValue',
@@ -88,7 +89,7 @@ describe(`generator - ${GENERATOR} UUID identifier initializer`, () => {
     const entityPath = 'src/main/java/com/mycompany/myapp/domain/EntityRefOrValue.java';
     runResult.assertFileContent(
       entityPath,
-      /@PrePersist\s+protected void ensureGeneratedUuidIdentifiers\(\) {\s+if \(this\.getExternalId\(\) == null\) {\s+this\.setExternalId\(java\.util\.UUID\.randomUUID\(\)\);\s+}\s+}/,
+      /@PrePersist\s+@PreUpdate\s+protected void ensureGeneratedUuidIdentifiers\(\) {\s+if \(this\.getExternalId\(\) == null\) {\s+this\.setExternalId\(java\.util\.UUID\.randomUUID\(\)\);\s+}\s+}/,
     );
   });
 
@@ -96,7 +97,7 @@ describe(`generator - ${GENERATOR} UUID identifier initializer`, () => {
     const entityPath = 'src/main/java/com/mycompany/myapp/domain/ChildEntityRef.java';
     runResult.assertFileContent(
       entityPath,
-      /@PrePersist\s+protected void ensureGeneratedUuidIdentifiers\(\) {\s+if \(this\.getExternalId\(\) == null\) {\s+this\.setExternalId\(java\.util\.UUID\.randomUUID\(\)\);\s+}\s+}/,
+      /@PrePersist\s+@PreUpdate\s+protected void ensureGeneratedUuidIdentifiers\(\) {\s+if \(this\.getExternalId\(\) == null\) {\s+this\.setExternalId\(java\.util\.UUID\.randomUUID\(\)\);\s+}\s+}/,
     );
     runResult.assertNoFileContent(entityPath, /this\.externalId/);
   });

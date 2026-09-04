@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import fs from 'node:fs';
-import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { semanticIdentityValue } from './operation-identity.mjs';
@@ -621,9 +621,10 @@ function expectedResponseSubset(value, schema, depth = 0) {
   if (value === undefined || depth > 16) return undefined;
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) {
-    const itemSchema = Array.isArray(schema)
-      ? schema.length === 1 && schema[0]?.path?.length === 0 && schema[0].type === 'array'
-        ? schema[0].items
+    const itemSchema =
+      Array.isArray(schema) ?
+        schema.length === 1 && schema[0]?.path?.length === 0 && schema[0].type === 'array' ?
+          schema[0].items
         : undefined
       : schema?.items;
     return value.map(item => expectedResponseSubset(item, itemSchema, depth + 1));
@@ -744,7 +745,11 @@ function flattenEditablePrimitiveFields(fields = [], prefix = '') {
   const output = [];
   for (const field of fields ?? []) {
     const key = formlyFieldKey(field);
-    const pathValue = key ? (prefix ? `${prefix}.${key}` : key) : prefix;
+    const pathValue =
+      key ?
+        prefix ? `${prefix}.${key}`
+        : key
+      : prefix;
     if (field?.fieldGroup?.length) {
       output.push(...flattenEditablePrimitiveFields(field.fieldGroup, pathValue));
       continue;
@@ -823,7 +828,7 @@ function canonicalTmfHrefMatches(actual, expected, context) {
   ) {
     return false;
   }
-  const rootActual = context.rootActual;
+  const { rootActual } = context;
   if (!rootActual || typeof rootActual !== 'object' || Array.isArray(rootActual)) return false;
   const rootFieldNames = new Set(schemaFields(context.rootSchema).map(field => normalizeName(field.name)));
   const hasTmfMetadata =
@@ -851,10 +856,7 @@ function jsonContains(actual, expected, schema, context = {}) {
   };
   if (expected === undefined) return true;
   if (expected === null || typeof expected !== 'object') {
-    return (
-      equivalentSchemaPrimitive(actual, expected, schema) ||
-      canonicalTmfHrefMatches(actual, expected, comparisonContext)
-    );
+    return equivalentSchemaPrimitive(actual, expected, schema) || canonicalTmfHrefMatches(actual, expected, comparisonContext);
   }
   if (Array.isArray(expected)) {
     if (!Array.isArray(actual) || actual.length < expected.length) return false;
@@ -1014,10 +1016,8 @@ const exerciseUpdate = (process.env.FORM_CRUD_GUI_EXERCISE_UPDATE ?? 'true') !==
 const exerciseDelete = (process.env.FORM_CRUD_GUI_EXERCISE_DELETE ?? 'true') !== 'false';
 const exerciseApiOperations = (process.env.FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED ?? 'true') !== 'false';
 const requireAllApiOperations2xx = (process.env.FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX ?? 'false') === 'true';
-const requireAllApiOperationsAccounted =
-  (process.env.FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED ?? 'true') !== 'false';
-const requireAllAvailableResourceWorkflows =
-  (process.env.FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS ?? 'true') !== 'false';
+const requireAllApiOperationsAccounted = (process.env.FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED ?? 'true') !== 'false';
+const requireAllAvailableResourceWorkflows = (process.env.FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS ?? 'true') !== 'false';
 const failOnInvalidCreateForm = (process.env.FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM ?? 'true') !== 'false';
 const failOnCreateHttpError = (process.env.FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR ?? 'true') !== 'false';
 const screenshotFullPage = (process.env.FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS ?? 'true') !== 'false';
@@ -1031,15 +1031,10 @@ const sourceCoverageChunkNames = [
   ...new Set(sourceCoveragePrefixes.map(prefix => prefix.split('/').filter(Boolean).at(-1)).filter(Boolean)),
 ];
 const sourceCoverageMaxScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES ?? 64 * 1024 * 1024);
-const sourceCoverageMaxUnknownScriptBytes = Number(
-  process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES ?? 2 * 1024 * 1024,
-);
+const sourceCoverageMaxUnknownScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES ?? 2 * 1024 * 1024);
 const sourceCoverageMergeJest = (process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST ?? 'false') === 'true';
 const sourceCoverageWorkerHeapMb = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB ?? 1024);
-const sourceCoverageNavigationsPerSegment = Math.max(
-  1,
-  Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT ?? 3),
-);
+const sourceCoverageNavigationsPerSegment = Math.max(1, Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT ?? 3));
 const sourceCoverageWorker = fileURLToPath(new URL('./form-crud-source-coverage.mjs', import.meta.url));
 
 const result = {
@@ -1210,10 +1205,7 @@ function mergeRepeatedCoverageEntries(entries, v8Coverage) {
     if (!sameWebOrigin(entry.url)) continue;
     const sourceLength = entry.source?.length ?? 0;
     const namedScopedChunk = coverageScriptNameMatchesScope(entry.url);
-    if (
-      sourceLength > sourceCoverageMaxScriptBytes ||
-      (!namedScopedChunk && sourceLength > sourceCoverageMaxUnknownScriptBytes)
-    ) {
+    if (sourceLength > sourceCoverageMaxScriptBytes || (!namedScopedChunk && sourceLength > sourceCoverageMaxUnknownScriptBytes)) {
       continue;
     }
     const key = `${entry.url}\0${sourceLength}`;
@@ -1367,21 +1359,15 @@ async function collectSourceCoverage() {
       2,
     )}\n`,
   );
-  const worker = spawnSync(
-    process.execPath,
-    [`--max-old-space-size=${sourceCoverageWorkerHeapMb}`, sourceCoverageWorker, manifestFile],
-    {
-      cwd: appDir,
-      env: process.env,
-      encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024,
-    },
-  );
+  const worker = spawnSync(process.execPath, [`--max-old-space-size=${sourceCoverageWorkerHeapMb}`, sourceCoverageWorker, manifestFile], {
+    cwd: appDir,
+    env: process.env,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
   fs.writeFileSync(workerLogFile, `${worker.stdout ?? ''}${worker.stderr ?? ''}`);
   if (worker.status !== 0 || !fs.existsSync(workerResultFile)) {
-    throw new Error(
-      `Playwright source coverage worker failed with exit code ${worker.status ?? 'unknown'}; see ${workerLogFile}`,
-    );
+    throw new Error(`Playwright source coverage worker failed with exit code ${worker.status ?? 'unknown'}; see ${workerLogFile}`);
   }
   const workerReport = JSON.parse(fs.readFileSync(workerResultFile, 'utf8'));
   result.sourceCoverage = {
@@ -1456,9 +1442,7 @@ async function assertStructuredOperationForm(page, operation, state) {
   const objectStringControls = await form
     .locator('input, textarea, select')
     .evaluateAll(elements =>
-      elements
-        .map(element => ('value' in element ? String(element.value ?? '') : ''))
-        .filter(value => value === '[object Object]'),
+      elements.map(element => ('value' in element ? String(element.value ?? '') : '')).filter(value => value === '[object Object]'),
     );
   if (objectStringControls.length > 0) {
     result.coverage.objectStringControlFailures += objectStringControls.length;
@@ -1884,8 +1868,9 @@ async function configureReferencePickerViaAdmin(page, config) {
   let requestedConfig;
   try {
     const requestedBody = JSON.parse(response.request().postData() ?? '[]');
-    requestedConfig = Array.isArray(requestedBody)
-      ? requestedBody.find(
+    requestedConfig =
+      Array.isArray(requestedBody) ?
+        requestedBody.find(
           candidate =>
             candidate?.formId === config.formId &&
             candidate?.targetApiId === config.targetApiId &&
@@ -1900,8 +1885,9 @@ async function configureReferencePickerViaAdmin(page, config) {
   await screenshot(page, 'reference-picker-admin-saved');
 
   const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
-  const saved = Array.isArray(persisted.body)
-    ? persisted.body.find(
+  const saved =
+    Array.isArray(persisted.body) ?
+      persisted.body.find(
         candidate =>
           candidate?.formId === config.formId &&
           candidate?.targetApiId === config.targetApiId &&
@@ -2134,11 +2120,9 @@ function bodyWithResolvedPathParameters(operation, body, parameterValues) {
     const resolved = parameterValues[`path:${parameter.name}`];
     if (resolved === undefined || resolved === '') continue;
     output[parameter.name] =
-      parameter.type === 'integer' || parameter.type === 'number'
-        ? Number(resolved)
-        : parameter.type === 'boolean'
-          ? resolved === 'true'
-          : resolved;
+      parameter.type === 'integer' || parameter.type === 'number' ? Number(resolved)
+      : parameter.type === 'boolean' ? resolved === 'true'
+      : resolved;
   }
   return output;
 }
@@ -2173,9 +2157,9 @@ async function prepareOpenApiOperation(page, select, operation) {
           executable: false,
           workflowBlocked: operation.method === 'DELETE',
           reason:
-            operation.method === 'DELETE'
-              ? `no identity created during the API Operations sweep for path parameter ${parameter.name}`
-              : `unable to resolve path parameter ${parameter.name}`,
+            operation.method === 'DELETE' ?
+              `no identity created during the API Operations sweep for path parameter ${parameter.name}`
+            : `unable to resolve path parameter ${parameter.name}`,
         };
       }
     } else if (parameter.required) {
@@ -2193,11 +2177,9 @@ async function prepareOpenApiOperation(page, select, operation) {
       return { executable: false, reason: 'required request body could not be synthesized' };
     }
     const serialized =
-      requestBody === undefined
-        ? ''
-        : typeof requestBody === 'string' && !operation.requestContentType.includes('json')
-          ? requestBody
-          : JSON.stringify(requestBody, null, 2);
+      requestBody === undefined ? ''
+      : typeof requestBody === 'string' && !operation.requestContentType.includes('json') ? requestBody
+      : JSON.stringify(requestBody, null, 2);
     await bodyControl.fill(serialized);
   }
 
@@ -2337,9 +2319,9 @@ async function exerciseAllOpenApiOperations(page, operations) {
         path: operation.path,
         status,
         reason:
-          responseClassification === 'server-error'
-            ? `HTTP ${status} server error`
-            : `HTTP ${status} is not declared by the OpenAPI operation`,
+          responseClassification === 'server-error' ?
+            `HTTP ${status} server error`
+          : `HTTP ${status} is not declared by the OpenAPI operation`,
       };
       apiOperationsPageFailedOperations.push(entry);
       result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'failed', ...entry });
@@ -2373,11 +2355,9 @@ async function exerciseAllOpenApiOperations(page, operations) {
   result.steps.push({
     name: 'api-operations-page-execution-coverage',
     status:
-      apiOperationsPageFailedOperations.length || missingAccounted.length
-        ? 'failed'
-        : apiOperationsPageUnexecutableOperations.length
-          ? 'ok-with-workflow-blocked'
-          : 'ok',
+      apiOperationsPageFailedOperations.length || missingAccounted.length ? 'failed'
+      : apiOperationsPageUnexecutableOperations.length ? 'ok-with-workflow-blocked'
+      : 'ok',
     successful: apiOperationsPageSuccessfulOperationIds.size,
     declaredResponses: apiOperationsPageDeclaredResponseOperationIds.size,
     workflowBlocked: apiOperationsPageUnexecutableOperations.length,
@@ -2479,17 +2459,15 @@ async function ensureResourceRows(page, entry, stepName) {
 
 async function exerciseReferencePickerScenarios(page, resources) {
   const discoveredScenarios = referencePickerScenarios(resources);
-  const matchingScenarios = discoveredScenarios.filter(
-    scenario => {
-      const sourceOperation = scenario.sourceEntry.resource.updateOperation;
-      return (
-        (!referencePickerSourceOperationId ||
-          sourceOperation.id === referencePickerSourceOperationId ||
-          sourceOperation.operationId === referencePickerSourceOperationId) &&
-        (!referencePickerSourcePath || scenario.sourcePath === referencePickerSourcePath)
-      );
-    },
-  );
+  const matchingScenarios = discoveredScenarios.filter(scenario => {
+    const sourceOperation = scenario.sourceEntry.resource.updateOperation;
+    return (
+      (!referencePickerSourceOperationId ||
+        sourceOperation.id === referencePickerSourceOperationId ||
+        sourceOperation.operationId === referencePickerSourceOperationId) &&
+      (!referencePickerSourcePath || scenario.sourcePath === referencePickerSourcePath)
+    );
+  });
   if ((referencePickerSourceOperationId || referencePickerSourcePath) && matchingScenarios.length === 0) {
     const availableScenarios = discoveredScenarios.map(scenario => {
       const sourceOperation = scenario.sourceEntry.resource.updateOperation;
@@ -2843,9 +2821,7 @@ try {
     maxListResources,
   );
   result.coverage.plannedListResources = listEntries.length;
-  result.coverage.plannedUpdateResources = exerciseUpdate
-    ? listEntries.filter(candidate => candidate.resource.updateOperation).length
-    : 0;
+  result.coverage.plannedUpdateResources = exerciseUpdate ? listEntries.filter(candidate => candidate.resource.updateOperation).length : 0;
   result.steps.push({ name: 'list-resource-coverage', status: 'planned', count: listEntries.length });
   for (const entry of listEntries) {
     await exerciseListResource(page, entry);
@@ -2853,9 +2829,8 @@ try {
 
   await exerciseAllOpenApiOperations(page, declaredOperations);
 
-  result.coverage.plannedDeleteResources = exerciseDelete
-    ? createdEntries.filter(candidate => candidate.resource.listOperation && candidate.resource.deleteOperation).length
-    : 0;
+  result.coverage.plannedDeleteResources =
+    exerciseDelete ? createdEntries.filter(candidate => candidate.resource.listOperation && candidate.resource.deleteOperation).length : 0;
   for (const entry of createdEntries) {
     await exerciseDeleteCreatedItem(page, entry);
   }

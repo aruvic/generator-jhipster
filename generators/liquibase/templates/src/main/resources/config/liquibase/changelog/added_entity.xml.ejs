@@ -18,14 +18,43 @@
 -%>
 <%- include('/liquibase-changelog-header') -%>
 
-<%_
-const inheritedFieldNames = new Set<string>();
-let inheritanceCursor = entity.parentEntity;
-while (inheritanceCursor?.fields) {
-  for (const inheritedField of inheritanceCursor.fields) inheritedFieldNames.add(inheritedField.fieldName);
-  inheritanceCursor = inheritanceCursor.parentEntity;
-}
-const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+<%_ const inheritedFieldNames = new Set();
+    let inheritanceCursor = entity.parentEntity;
+    while (inheritanceCursor?.fields) {
+      for (const inheritedField of inheritanceCursor.fields) inheritedFieldNames.add(inheritedField.fieldName);
+      inheritanceCursor = inheritanceCursor.parentEntity;
+    }
+    const declaredFields = fields.filter(field => !inheritedFieldNames.has(field.fieldName));
+    const sqlStringLiteral = value => `'${String(value).replace(/'/g, "''")}'`;
+    const checkConstraintName = columnName =>
+      this.getUXConstraintName(entity.entityTableName, columnName, entity.prodDatabaseType).replace(/^ux_/, 'ck_');
+      const enumCheckSqls = [];
+      const writtenCheckConstraintNames = new Set();
+      for (const field of declaredFields) {
+        if (!field.fieldIsEnum || !field.columnName || field.columnName === entity.discriminatorColumn?.name) continue;
+        const values = field.enumValues?.length
+          ? field.enumValues.map(enumValue => typeof enumValue === 'string' ? enumValue : enumValue.name)
+          : String(field.fieldValues ?? '')
+          .split(',')
+          .map(value => value.trim().replace(/\(.+\)$/, ''))
+          .filter(Boolean);
+        const uniqueValues = [...new Set(values.filter(Boolean))];
+        const constraintName = checkConstraintName(field.columnName);
+        if (uniqueValues.length === 0 || writtenCheckConstraintNames.has(constraintName)) continue;
+        writtenCheckConstraintNames.add(constraintName);
+        enumCheckSqls.push(
+          `ALTER TABLE ${entity.entityTableName} ADD CONSTRAINT ${constraintName} CHECK (${field.columnName} IN (${uniqueValues.map(sqlStringLiteral).join(', ')}))`,
+        );
+      }
+      const discriminatorValues = entity.polymorphicRoot
+        ? [...new Set(Object.values(entity.discriminatorColumn?.values ?? {}).map(value => String(value).trim()).filter(Boolean))]
+        : [];
+      const discriminatorSqlLiteral = value =>
+        entity.discriminatorColumn?.discriminatorType === 'INTEGER' && /^-?\d+$/.test(value) ? value : sqlStringLiteral(value);
+        const discriminatorCheckSql
+          = entity.discriminatorColumn && discriminatorValues.length > 0
+          ? `ALTER TABLE ${entity.entityTableName} ADD CONSTRAINT ${checkConstraintName(entity.discriminatorColumn.name)} CHECK (${entity.discriminatorColumn.name} IN (${discriminatorValues.map(discriminatorSqlLiteral).join(', ')}))`
+          : undefined;
 _%>
 <%_ for (const [idx, field] of declaredFields.filter(field => field.liquibaseCustomSequenceGenerator).entries()) { _%>
     <changeSet id="<%- changelogDate %>-seq-<%- idx %>" author="jhipster">
@@ -38,27 +67,26 @@ _%>
     -->
     <changeSet id="<%- changelogDate %>-1" author="jhipster">
         <createTable tableName="<%- entity.entityTableName %>"<%- this.formatAsLiquibaseRemarks(entity.documentation, true) %>>
-<%_ const parentEntity = entity.parentEntity; _%>
+<%_ const { parentEntity } = entity; _%>
 <%_ const inheritedPrimaryKey = parentEntity?.primaryKey; _%>
-<%_ const writtenColumnNames = new Set<string>(); _%>
-<%_ if (entity.polymorphicChild && inheritedPrimaryKey) {
-      for (const inheritedField of inheritedPrimaryKey.fields) {
-_%>
+<%_ const writtenColumnNames = new Set(); _%>
+<%_ if (entity.polymorphicChild && inheritedPrimaryKey) { _%>
+  <%_ for (const inheritedField of inheritedPrimaryKey.fields) { _%>
             <column name="<%- inheritedField.columnName %>" type="<%- inheritedField.columnType %>">
                 <constraints primaryKey="true" nullable="false"/>
             </column>
-<%_             writtenColumnNames.add(inheritedField.columnName); _%>
-<%_       } _%>
+    <%_ writtenColumnNames.add(inheritedField.columnName); _%>
+  <%_ } _%>
 <%_ } _%>
 <%_ if (entity.polymorphicRoot && entity.discriminatorColumn) { _%>
             <column name="<%- entity.discriminatorColumn.name %>" type="<%- entity.discriminatorColumn.sqlType %>">
                 <constraints nullable="false"/>
             </column>
-<%_             writtenColumnNames.add(entity.discriminatorColumn.name); _%>
+  <%_ writtenColumnNames.add(entity.discriminatorColumn.name); _%>
 <%_ } _%>
 <%_ for (field of declaredFields) { _%>
-<%_     if (field.columnName && writtenColumnNames.has(field.columnName)) continue; _%>
-<%_     if (field.columnName) writtenColumnNames.add(field.columnName); _%>
+  <%_ if (field.columnName && writtenColumnNames.has(field.columnName)) continue; _%>
+  <%_ if (field.columnName) writtenColumnNames.add(field.columnName); _%>
             <column name="<%- field.columnName %>" type="<%- field.columnType %>"<%- this.createDefaultValueLiquibaseAttribute(field, true) -%><%- this.formatAsLiquibaseRemarks(field.documentation, true) %><%- field.id && field.liquibaseAutoIncrement ? ' autoIncrement="true" startWith="1500"' : '' %>>
   <%_ if (field.id) { _%>
                 <constraints primaryKey="true" nullable="false"/>
@@ -86,6 +114,12 @@ _%>
 <%_ } _%>
             <!-- jhipster-needle-liquibase-add-column - JHipster will add columns here -->
         </createTable>
+<%_ if (discriminatorCheckSql) { _%>
+        <sql><%- discriminatorCheckSql %></sql>
+<%_ } _%>
+<%_ for (const enumCheckSql of enumCheckSqls) { _%>
+        <sql><%- enumCheckSql %></sql>
+<%_ } _%>
 <%_ for (const field of declaredFields) { _%>
   <%_ if (field.shouldDropDefaultValue) { _%>
         <dropDefaultValue tableName="<%- entity.entityTableName %>" columnName="<%- field.columnName %>" columnDataType="${datetimeType}"/>
@@ -134,14 +168,21 @@ _%>
                   separator=";"
                   tableName="<%- entity.entityTableName %>"
                   usePreparedStatements="true">
+  <%_ const writtenLoadColumnNames = new Set(); _%>
   <%_ for (field of fields) { _%>
+    <%_ if (field.columnName && writtenLoadColumnNames.has(field.columnName)) continue; _%>
+    <%_ if (field.columnName) writtenLoadColumnNames.add(field.columnName); _%>
             <column name="<%- field.columnName %>" type="<%- field.loadColumnType %>"/>
     <%_ if (field.fieldType === 'byte[]' && field.fieldTypeBlobContent !== 'text') { _%>
+      <%_ writtenLoadColumnNames.add(`${field.columnName}_content_type`); _%>
             <column name="<%- field.columnName %>_content_type" type="string"/>
     <%_ } _%>
   <%_ } _%>
   <%_ for (relationship of relationships.filter(relationship => !relationship.id && relationship.columnRequired && relationship.persistableRelationship && !relationship.collection)) { _%>
     <%_ for (field of relationship.otherEntity.primaryKey.fields) { _%>
+      <%_ const relationshipColumnName = `${relationship.columnName}_${field.columnName}`; _%>
+      <%_ if (writtenLoadColumnNames.has(relationshipColumnName)) continue; _%>
+      <%_ writtenLoadColumnNames.add(relationshipColumnName); _%>
             <column name="<%- relationship.columnName %>_<%- field.columnName %>" type="<%- field.loadColumnType %>"/>
     <%_ } _%>
   <%_ } _%>

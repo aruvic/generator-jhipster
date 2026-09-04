@@ -28,7 +28,7 @@ import { provideHttpClientTesting, HttpTestingController } from '@angular/common
 import { DATE_FORMAT } from 'app/config';
 <%_ } _%>
 import { I<%- entityAngularName %> } from '../<%- entityFileName %>.model';
-import { sampleWithRequiredData, sampleWithNewData, sampleWithPartialData, sampleWithFullData } from '../<%- entityFileName %>.test-samples';
+import { sampleWithRequiredData<%- readOnly ? '' : ', sampleWithNewData' %>, sampleWithPartialData, sampleWithFullData } from '../<%- entityFileName %>.test-samples';
 
 import { <%- entityAngularName %>Service<% if (requiresRestTypeConversion) { %>, <%- entityRestName %><% } %> } from './<%- entityFileName %>.service';
 

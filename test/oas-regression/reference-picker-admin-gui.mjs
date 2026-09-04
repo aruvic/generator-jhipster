@@ -114,17 +114,15 @@ try {
   }
 
   const requestBody = JSON.parse(saveResponse.request().postData() ?? '[]');
-  const savedRequest = Array.isArray(requestBody)
-    ? requestBody.find(candidate => (candidate?.id ?? candidate?.pickerId) === pickerId)
-    : undefined;
+  const savedRequest =
+    Array.isArray(requestBody) ? requestBody.find(candidate => (candidate?.id ?? candidate?.pickerId) === pickerId) : undefined;
   if (!savedRequest || savedRequest.label !== updatedLabel) {
     throw new Error('Reference-picker administration PUT did not contain the edited mapping');
   }
 
   const responseBody = await saveResponse.json();
-  const savedResponse = Array.isArray(responseBody)
-    ? responseBody.find(candidate => (candidate?.id ?? candidate?.pickerId) === pickerId)
-    : undefined;
+  const savedResponse =
+    Array.isArray(responseBody) ? responseBody.find(candidate => (candidate?.id ?? candidate?.pickerId) === pickerId) : undefined;
   if (!savedResponse || savedResponse.label !== updatedLabel) {
     throw new Error('Reference-picker administration response did not contain the persisted edit');
   }

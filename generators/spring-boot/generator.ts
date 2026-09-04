@@ -652,7 +652,6 @@ ${classProperties
           this.validateResult(await generateKeyStore(keyStoreFile, { packageName: application.packageName! }));
         }
       },
-      
     });
   }
 
@@ -898,6 +897,17 @@ ${application.jhipsterDependenciesVersion?.includes('-CICD') ? '' : '// '}mavenL
                 artifactId: 'archunit-junit5-engine',
                 versionRef: 'archunit-junit5',
                 exclusions: [{ groupId: 'org.slf4j', artifactId: 'slf4j-api' }],
+              },
+            ],
+          },
+          {
+            condition: application.enableSwaggerCodegen,
+            dependencies: [
+              {
+                scope: 'test',
+                groupId: 'org.evomaster',
+                artifactId: 'evomaster-client-java-controller',
+                version: '6.0.0',
               },
             ],
           },

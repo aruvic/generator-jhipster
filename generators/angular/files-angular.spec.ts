@@ -449,7 +449,9 @@ paths:
     );
 
     expect(operations.find(candidate => candidate.operationId === 'createOrder')?.requestBodyExample).toEqual({
-      items: [{ service: { serviceSpecification: { '@type': 'ServiceSpecificationRef', href: '/serviceSpecification/1', name: 'Fiber' } } }],
+      items: [
+        { service: { serviceSpecification: { '@type': 'ServiceSpecificationRef', href: '/serviceSpecification/1', name: 'Fiber' } } },
+      ],
     });
   });
 
@@ -624,7 +626,9 @@ components:
       { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
       angularApplication,
     );
-    let child = operations.find(candidate => candidate.operationId === 'createNode')?.requestBodyFields?.find(field => field.name === 'child');
+    let child = operations
+      .find(candidate => candidate.operationId === 'createNode')
+      ?.requestBodyFields?.find(field => field.name === 'child');
     while (child?.fields?.some(field => field.name === 'child')) {
       child = child.fields.find(field => field.name === 'child');
     }
@@ -699,7 +703,9 @@ components:
       { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
       angularApplication,
     );
-    let target = operations.find(candidate => candidate.operationId === 'createOrder')?.requestBodyFields?.find(field => field.name === 'target');
+    let target = operations
+      .find(candidate => candidate.operationId === 'createOrder')
+      ?.requestBodyFields?.find(field => field.name === 'target');
     while (target?.fields?.some(field => field.name === 'next')) {
       target = target.fields.find(field => field.name === 'next');
     }

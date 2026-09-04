@@ -3,22 +3,12 @@
 exports[`generator - java-simple-application:openapi-generator gradle-addOpenapiGeneratorPlugin(false) should call source snapshot 1`] = `
 {
   "addJavaDefinitions": [
-    [
-      {
-        "dependencies": [
+    {
+      "condition": false,
+      "mavenDefinition": {
+        "pluginManagement": [
           {
-            "artifactId": "jackson-databind-nullable",
-            "groupId": "org.openapitools",
-            "version": "'JACKSON-DATABIND-NULLABLE-VERSION'",
-          },
-        ],
-      },
-      {
-        "condition": false,
-        "mavenDefinition": {
-          "pluginManagement": [
-            {
-              "additionalContent": "                <executions>
+            "additionalContent": "                <executions>
                     <execution>
                         <goals>
                             <goal>generate</goal>
@@ -35,12 +25,13 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                                  generator to rewrite or reject an otherwise usable contract. -->
                             <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
-
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
-                                <useSpringBoot3>true</useSpringBoot3>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <openApiNullable>false</openApiNullable>
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
                                 <containerDefaultToNull>true</containerDefaultToNull>
@@ -60,26 +51,25 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                     </execution>
                 </executions>
 ",
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-              "version": "\${openapi-generator-maven-plugin.version}",
-            },
-          ],
-          "plugins": [
-            {
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-            },
-          ],
-          "properties": [
-            {
-              "property": "openapi-generator-maven-plugin.version",
-              "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
-            },
-          ],
-        },
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+            "version": "\${openapi-generator-maven-plugin.version}",
+          },
+        ],
+        "plugins": [
+          {
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+          },
+        ],
+        "properties": [
+          {
+            "property": "openapi-generator-maven-plugin.version",
+            "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
+          },
+        ],
       },
-    ],
+    },
   ],
 }
 `;
@@ -119,22 +109,12 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
     },
   ],
   "addJavaDefinitions": [
-    [
-      {
-        "dependencies": [
+    {
+      "condition": true,
+      "mavenDefinition": {
+        "pluginManagement": [
           {
-            "artifactId": "jackson-databind-nullable",
-            "groupId": "org.openapitools",
-            "version": "'JACKSON-DATABIND-NULLABLE-VERSION'",
-          },
-        ],
-      },
-      {
-        "condition": true,
-        "mavenDefinition": {
-          "pluginManagement": [
-            {
-              "additionalContent": "                <executions>
+            "additionalContent": "                <executions>
                     <execution>
                         <goals>
                             <goal>generate</goal>
@@ -151,12 +131,13 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                                  generator to rewrite or reject an otherwise usable contract. -->
                             <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
-
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
-                                <useSpringBoot3>true</useSpringBoot3>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <openApiNullable>false</openApiNullable>
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
                                 <containerDefaultToNull>true</containerDefaultToNull>
@@ -176,26 +157,25 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
                     </execution>
                 </executions>
 ",
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-              "version": "\${openapi-generator-maven-plugin.version}",
-            },
-          ],
-          "plugins": [
-            {
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-            },
-          ],
-          "properties": [
-            {
-              "property": "openapi-generator-maven-plugin.version",
-              "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
-            },
-          ],
-        },
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+            "version": "\${openapi-generator-maven-plugin.version}",
+          },
+        ],
+        "plugins": [
+          {
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+          },
+        ],
+        "properties": [
+          {
+            "property": "openapi-generator-maven-plugin.version",
+            "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
+          },
+        ],
       },
-    ],
+    },
   ],
 }
 `;
@@ -223,22 +203,12 @@ exports[`generator - java-simple-application:openapi-generator gradle-addOpenapi
 exports[`generator - java-simple-application:openapi-generator maven-addOpenapiGeneratorPlugin(false) should call source snapshot 1`] = `
 {
   "addJavaDefinitions": [
-    [
-      {
-        "dependencies": [
+    {
+      "condition": false,
+      "mavenDefinition": {
+        "pluginManagement": [
           {
-            "artifactId": "jackson-databind-nullable",
-            "groupId": "org.openapitools",
-            "version": "'JACKSON-DATABIND-NULLABLE-VERSION'",
-          },
-        ],
-      },
-      {
-        "condition": false,
-        "mavenDefinition": {
-          "pluginManagement": [
-            {
-              "additionalContent": "                <executions>
+            "additionalContent": "                <executions>
                     <execution>
                         <goals>
                             <goal>generate</goal>
@@ -255,12 +225,13 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                                  generator to rewrite or reject an otherwise usable contract. -->
                             <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
-
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
-                                <useSpringBoot3>true</useSpringBoot3>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <openApiNullable>false</openApiNullable>
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
                                 <containerDefaultToNull>true</containerDefaultToNull>
@@ -280,26 +251,25 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                     </execution>
                 </executions>
 ",
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-              "version": "\${openapi-generator-maven-plugin.version}",
-            },
-          ],
-          "plugins": [
-            {
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-            },
-          ],
-          "properties": [
-            {
-              "property": "openapi-generator-maven-plugin.version",
-              "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
-            },
-          ],
-        },
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+            "version": "\${openapi-generator-maven-plugin.version}",
+          },
+        ],
+        "plugins": [
+          {
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+          },
+        ],
+        "properties": [
+          {
+            "property": "openapi-generator-maven-plugin.version",
+            "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
+          },
+        ],
       },
-    ],
+    },
   ],
 }
 `;
@@ -324,22 +294,12 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
 exports[`generator - java-simple-application:openapi-generator maven-addOpenapiGeneratorPlugin(true) should call source snapshot 1`] = `
 {
   "addJavaDefinitions": [
-    [
-      {
-        "dependencies": [
+    {
+      "condition": true,
+      "mavenDefinition": {
+        "pluginManagement": [
           {
-            "artifactId": "jackson-databind-nullable",
-            "groupId": "org.openapitools",
-            "version": "'JACKSON-DATABIND-NULLABLE-VERSION'",
-          },
-        ],
-      },
-      {
-        "condition": true,
-        "mavenDefinition": {
-          "pluginManagement": [
-            {
-              "additionalContent": "                <executions>
+            "additionalContent": "                <executions>
                     <execution>
                         <goals>
                             <goal>generate</goal>
@@ -356,12 +316,13 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                                  generator to rewrite or reject an otherwise usable contract. -->
                             <skipValidateSpec>true</skipValidateSpec>
                             <generateAliasAsModel>true</generateAliasAsModel>
-
                             <configOptions>
                                 <delegatePattern>true</delegatePattern>
                                 <documentationProvider>none</documentationProvider>
                                 <title>jhipster</title>
-                                <useSpringBoot3>true</useSpringBoot3>
+                                <useSpringBoot4>true</useSpringBoot4>
+                                <useJackson3>true</useJackson3>
+                                <openApiNullable>false</openApiNullable>
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
                                 <containerDefaultToNull>true</containerDefaultToNull>
@@ -381,26 +342,25 @@ exports[`generator - java-simple-application:openapi-generator maven-addOpenapiG
                     </execution>
                 </executions>
 ",
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-              "version": "\${openapi-generator-maven-plugin.version}",
-            },
-          ],
-          "plugins": [
-            {
-              "artifactId": "openapi-generator-maven-plugin",
-              "groupId": "org.openapitools",
-            },
-          ],
-          "properties": [
-            {
-              "property": "openapi-generator-maven-plugin.version",
-              "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
-            },
-          ],
-        },
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+            "version": "\${openapi-generator-maven-plugin.version}",
+          },
+        ],
+        "plugins": [
+          {
+            "artifactId": "openapi-generator-maven-plugin",
+            "groupId": "org.openapitools",
+          },
+        ],
+        "properties": [
+          {
+            "property": "openapi-generator-maven-plugin.version",
+            "value": "'OPENAPI-GENERATOR-MAVEN-PLUGIN-VERSION'",
+          },
+        ],
       },
-    ],
+    },
   ],
 }
 `;

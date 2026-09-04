@@ -195,7 +195,7 @@ export function prepareEntityPrimaryKeyForTemplates(
     if (!entityWithConfig.parentEntity.primaryKey) {
       prepareEntityPrimaryKeyForTemplates.call(this, { entity: entityWithConfig.parentEntity as EntityAll, application });
     }
-    entityWithConfig.primaryKey = entityWithConfig.parentEntity.primaryKey as PrimaryKey<FieldAll>;
+    entityWithConfig.primaryKey = entityWithConfig.parentEntity.primaryKey;
     return entityWithConfig;
   }
 

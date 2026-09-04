@@ -17,12 +17,11 @@
  * limitations under the License.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
-
 import { describe, expect, it } from 'esmocha';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { ensureMapperDependency, generateOpenApiDelegates } from './openapi-delegate-generator.ts';
 
@@ -520,7 +519,7 @@ describe('OpenAPI delegate generator', () => {
       mkdirSync(swaggerDir, { recursive: true });
       writeFileSync(
         join(swaggerDir, 'api.yml'),
-          `openapi: 3.0.1\n` +
+        `openapi: 3.0.1\n` +
           `paths:\n` +
           `  /services:\n` +
           `    get:\n` +
@@ -1191,29 +1190,43 @@ describe('OpenAPI delegate generator', () => {
 
       const outputPath = join(tempDir, 'src/main/java/com/example/web/api/impl/ReferenceApiDelegateImpl.java');
       const output = writes.get(outputPath) ?? '';
+      expect(output).toContain('import tools.jackson.databind.ObjectMapper;');
+      expect(output).not.toContain('com.fasterxml.jackson.databind');
+      expect(output).not.toContain('com.github.fge.jsonpatch');
+      expect(output).not.toContain('com.jayway.jsonpath');
       expect(output).toContain('private final ReferenceRepository repository;');
       expect(output).toContain('private final ReferenceMapper mapper;');
       expect(output).toContain('validatePayload(reference);');
-      expect(output.indexOf('validatePayload(reference);')).toBeLessThan(output.indexOf('Reference entity = this.mapper.toReferenceEntity(reference);'));
+      expect(output.indexOf('validatePayload(reference);')).toBeLessThan(
+        output.indexOf('Reference entity = this.mapper.toReferenceEntity(reference);'),
+      );
       expect(output).toContain('Reference entity = this.mapper.toReferenceEntity(reference);');
       expect(output).toContain('Reference responseBody = mapResponseBody(() -> this.mapper.toReferenceDto(responseEntity));');
       expect(output).toContain(
         'return ResponseEntity.created(buildLocation(responseEntity != null ? responseEntity.getId() : null)).body(responseBody);',
       );
       expect(output).toContain('ServletUriComponentsBuilder builder = ServletUriComponentsBuilder.fromCurrentRequestUri();');
-      expect(output).toContain('String.format("/%s/%s", "reference", idValue)');
+      expect(output).toContain('URI.create("/%s/%s".formatted("reference", idValue))');
       expect(output).toContain('this.mapper.toReferenceEntity(reference)');
-      expect(output).toContain('JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> this.mapper.toReferenceDto(existing)));');
-      expect(output).toContain('convertAndValidate(patchedNode, Reference.class);');
-      expect(output).toContain('JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);');
       expect(output).toContain(
-        'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(patchedNode, patchNode, patchFormat), Reference.class);',
+        'JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> this.mapper.toReferenceDto(existing)));',
       );
+      expect(output).toContain('JsonNode payloadNode = removePropertiesNotDeserializableBy(patchedNode, Reference.class);');
+      expect(output).toContain('convertAndValidate(payloadNode, Reference.class);');
+      expect(output).toContain(
+        'JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);',
+      );
+      expect(output).toContain(
+        'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat), Reference.class);',
+      );
+      expect(output).toContain('private JsonNode removePropertiesNotDeserializableBy(JsonNode node, Class<?> targetType)');
       expect(output).toContain('validatePayload(mergedPayload);');
       expect(output).toContain(
         'validateRequiredProperties(mergedPayload, List.of(new RequiredPropertyRule("/relatedParty/*", "tmfId", false)));',
       );
-      expect(output).toContain('private JsonNode preservePatchedArrayItemValues(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode, PatchFormat format)');
+      expect(output).toContain(
+        'private JsonNode preservePatchedArrayItemValues(JsonNode baseNode, JsonNode patchedNode, JsonNode patchNode, PatchFormat format)',
+      );
       expect(output).toContain('private void validateRequiredProperties(Object payload, List<RequiredPropertyRule> rules)');
       expect(output).toContain('Missing required payload field(s): ');
       expect(output).toContain('Map<String, Object> originalIdentifiers = snapshotIdentifierValues(existing);');

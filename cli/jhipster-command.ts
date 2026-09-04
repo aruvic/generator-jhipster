@@ -158,8 +158,9 @@ export default class JHipsterCommand extends Command {
       .forEach(([name, config]) => {
         const option = convertConfigToOption(name, config);
         if (option) {
-          const hasCustomName = option.name !== name;
-          const optionName = hasCustomName && option.name.includes('-') ? option.name : kebabCase(option.name);
+          const optionNameValue = option.name ?? name;
+          const hasCustomName = optionNameValue !== name;
+          const optionName = hasCustomName && optionNameValue.includes('-') ? optionNameValue : kebabCase(optionNameValue);
           this._addGeneratorOption(optionName, option, blueprintOptionDescription);
         }
       });

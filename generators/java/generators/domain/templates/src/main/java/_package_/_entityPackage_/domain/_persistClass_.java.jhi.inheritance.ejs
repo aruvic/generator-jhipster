@@ -21,8 +21,7 @@
  EJS fragments will process % delimiter tags in the template and & delimiter tags during the merge process.
 -%>
 <&_ if (fragment.extendsSection) { -&>
-  <%_
-    let templateParentEntity = undefined;
+<%_ let templateParentEntity = undefined;
     if (typeof parentEntity !== 'undefined' && parentEntity) {
       templateParentEntity = parentEntity;
     } else if (typeof entity !== 'undefined' && entity && entity.parentEntity) {
@@ -31,18 +30,18 @@
     let parentPersistClass = '';
     if (templateParentEntity) {
       if (typeof templateParentEntity === 'object') {
-        parentPersistClass =
-          templateParentEntity.persistClass ||
-          templateParentEntity.entityClass ||
-          templateParentEntity.name ||
-          templateParentEntity.entityName ||
-          '';
+        parentPersistClass
+          = templateParentEntity.persistClass
+          || templateParentEntity.entityClass
+          || templateParentEntity.name
+          || templateParentEntity.entityName
+          || '';
       } else {
         parentPersistClass = templateParentEntity;
       }
     }
-  _%>
-  <%_ if (parentPersistClass) { -%>
-extends <%= parentPersistClass %> 
-  <%_ } _%>
+_%>
+<%_ if (parentPersistClass) { -%>
+extends <%- parentPersistClass %>
+<%_ } _%>
 <&_ } -&>

@@ -73,10 +73,7 @@ export const loadEntitiesAnnotations = (entities: BaseApplicationEntity[]): void
 
 export const loadEntitiesOtherSide = (
   entities: BaseApplicationEntity[],
-  {
-    application,
-    allowMissingOtherEntity = false,
-  }: { application?: BaseApplicationApplication; allowMissingOtherEntity?: boolean } = {},
+  { application, allowMissingOtherEntity = false }: { application?: BaseApplicationApplication; allowMissingOtherEntity?: boolean } = {},
 ): ValidationResult => {
   const result: { warning: string[] } = { warning: [] };
   for (const entity of entities) {

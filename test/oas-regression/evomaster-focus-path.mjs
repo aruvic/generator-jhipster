@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+
 import { parse } from 'yaml';
 
 const [, , schemaPath, endpointId] = process.argv;

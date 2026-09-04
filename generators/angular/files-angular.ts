@@ -39,7 +39,7 @@ export const files = asWriteFilesSection({
   common: [
     clientRootTemplatesBlock({
       templates: [
-        { sourceFile: 'eslint.config.js.jhi.angular', destinationFile: ctx => `${ctx.eslintConfigFile}.jhi.angular` },
+        'eslint.config.ts.jhi.angular',
         'ngsw-config.json',
         'package.json',
         'tsconfig.json',
@@ -52,16 +52,9 @@ export const files = asWriteFilesSection({
       templates: ['postcss.config.json'],
     }),
   ],
-  jest: [
-    clientRootTemplatesBlock({
-      condition: ctx => ctx.clientTestFrameworkJest,
-      templates: ['jest.conf.js', 'setup-jest.ts'],
-    }),
-  ],
   vitest: [
-    clientSrcTemplatesBlock({
-      condition: ctx => ctx.clientTestFrameworkVitest,
-      templates: ['default-test-providers.ts'],
+    clientRootTemplatesBlock({
+      templates: ['vitest-base.config.ts'],
     }),
   ],
   webpack: [
@@ -70,6 +63,7 @@ export const files = asWriteFilesSection({
       templates: [
         'angular.json',
         'webpack/environment.js',
+        'webpack/package.json',
         'webpack/proxy.conf.js',
         'webpack/webpack.custom.js',
         'webpack/logo-jhipster.png',
@@ -187,12 +181,12 @@ export const files = asWriteFilesSection({
     {
       ...clientApplicationTemplatesBlock(),
       condition: generator => !generator.authenticationTypeOauth2,
-      templates: ['login/login.ts', 'login/login.html', 'login/login.model.ts'],
+      templates: ['login/login.ts', 'login/login.html', 'core/auth/login.model.ts'],
     },
     {
       ...clientApplicationTemplatesBlock(),
       condition: generator => generator.authenticationTypeOauth2,
-      templates: ['login/logout.model.ts'],
+      templates: ['core/auth/logout.model.ts'],
     },
   ],
   angularAccountModule: [
@@ -321,9 +315,7 @@ export const files = asWriteFilesSection({
     {
       ...clientApplicationTemplatesBlock(),
       templates: [
-        'core/config/application-config.service.ts',
-        'core/config/application-config.service.spec.ts',
-
+        'core/util/index.ts',
         'core/util/data-util.service.ts',
         'core/util/parse-links.service.ts',
         'core/util/alert.service.ts',
@@ -332,23 +324,22 @@ export const files = asWriteFilesSection({
         'core/util/operators.ts',
 
         // config
-        'config/uib-pagination.config.ts',
+        'config/index.ts',
         'config/dayjs.ts',
         'config/datepicker-adapter.ts',
         'config/font-awesome-icons.ts',
-        'config/error.constants.ts',
+        'config/endpoint.constants.ts',
         'config/input.constants.ts',
         'config/navigation.constants.ts',
         'config/pagination.constants.ts',
-        'config/authority.constants.ts',
 
         // interceptors
         'core/interceptor/error-handler.interceptor.ts',
         'core/interceptor/notification.interceptor.ts',
         'core/interceptor/auth-expired.interceptor.ts',
-        'core/interceptor/index.ts',
 
         // request
+        'core/request/index.ts',
         'core/request/request-util.ts',
         'core/request/request.model.ts',
       ],
@@ -368,7 +359,6 @@ export const files = asWriteFilesSection({
     {
       ...clientApplicationTemplatesBlock(),
       templates: [
-        'shared/shared.module.ts',
         'shared/date/index.ts',
         'shared/date/duration.pipe.ts',
         'shared/date/format-medium-date.pipe.ts',
@@ -384,6 +374,7 @@ export const files = asWriteFilesSection({
         'shared/pagination/index.ts',
         'shared/pagination/item-count.ts',
         // alert service code
+        'shared/alert/index.ts',
         'shared/alert/alert.ts',
         'shared/alert/alert.html',
         'shared/alert/alert-error.ts',
@@ -402,7 +393,7 @@ export const files = asWriteFilesSection({
       ...clientApplicationTemplatesBlock(),
       templates: [
         'shared/language/index.ts',
-        'shared/language/translation.module.ts',
+        'shared/language/translation.provider.ts',
         'shared/language/find-language-from-key.pipe.ts',
         'shared/language/translate.directive.ts',
       ],
@@ -412,7 +403,9 @@ export const files = asWriteFilesSection({
     {
       ...clientApplicationTemplatesBlock(),
       templates: [
+        'core/auth/index.ts',
         'core/auth/state-storage.service.ts',
+        'shared/auth/index.ts',
         'shared/auth/has-any-authority.directive.ts',
         'core/auth/account.model.ts',
         'core/auth/account.service.ts',
@@ -431,7 +424,7 @@ export const files = asWriteFilesSection({
       templates: ['core/auth/auth-session.service.ts'],
     },
     {
-      condition: generator => generator.authenticationTypeSession && generator.communicationSpringWebsocket,
+      condition: generator => generator.authenticationUsesCsrf && generator.communicationSpringWebsocket,
       ...clientApplicationTemplatesBlock(),
       templates: ['core/auth/csrf.service.ts'],
     },
@@ -530,7 +523,7 @@ function resolveOpenApiRef(openApi: any, value: any): any {
 }
 
 function schemaType(schema: any): string {
-  schema = schema ?? {};
+  schema ??= {};
   const rawType = Array.isArray(schema.type) ? schema.type.find((item: string) => item !== 'null') : schema.type;
   if (rawType) return String(rawType);
   if (schema.properties || schema.allOf || schema.oneOf || schema.anyOf) return 'object';
@@ -641,11 +634,9 @@ function schemaReferenceExample(openApi: any, schema: any, refName: string | und
   if (!refName) return undefined;
   const resolved = resolveOpenApiRef(openApi, schema);
   const discriminatorProperty =
-    typeof resolved?.discriminator?.propertyName === 'string'
-      ? resolved.discriminator.propertyName
-      : resolved?.properties?.['@type']
-        ? '@type'
-        : undefined;
+    typeof resolved?.discriminator?.propertyName === 'string' ? resolved.discriminator.propertyName
+    : resolved?.properties?.['@type'] ? '@type'
+    : undefined;
   if (!discriminatorProperty) return undefined;
   return { [discriminatorProperty]: discriminatorExampleValue(openApi, resolved, refName, discriminatorProperty) };
 }
@@ -654,11 +645,9 @@ function concreteReferenceExample(openApi: any, schema: any, refName: string | u
   if (!refName || !value || typeof value !== 'object' || Array.isArray(value)) return value;
   const normalizedSchema = mergeAllOfSchema(openApi, schema, new Set());
   const discriminatorProperty =
-    typeof normalizedSchema?.discriminator?.propertyName === 'string'
-      ? normalizedSchema.discriminator.propertyName
-      : normalizedSchema?.properties?.['@type']
-        ? '@type'
-        : undefined;
+    typeof normalizedSchema?.discriminator?.propertyName === 'string' ? normalizedSchema.discriminator.propertyName
+    : normalizedSchema?.properties?.['@type'] ? '@type'
+    : undefined;
   if (!discriminatorProperty) return value;
   const discriminatorValue = discriminatorExampleValue(openApi, normalizedSchema, refName, discriminatorProperty);
   return discriminatorValue ? { ...(value as Record<string, unknown>), [discriminatorProperty]: discriminatorValue } : value;
@@ -667,11 +656,11 @@ function concreteReferenceExample(openApi: any, schema: any, refName: string | u
 function discriminatorExampleValue(openApi: any, schema: any, refName: string | undefined, propertyName: string): string {
   const mapping = schema?.discriminator?.mapping;
   const mappingEntries =
-    mapping && typeof mapping === 'object'
-      ? Object.entries(mapping)
-          .filter((entry): entry is [string, unknown] => Boolean(entry[0]))
-          .map(([value, ref]) => [value, typeof ref === 'string' ? ref : undefined] as const)
-      : [];
+    mapping && typeof mapping === 'object' ?
+      Object.entries(mapping)
+        .filter((entry): entry is [string, unknown] => Boolean(entry[0]))
+        .map(([value, ref]) => [value, typeof ref === 'string' ? ref : undefined] as const)
+    : [];
   const schemaDiscriminatorValue = refName ? stripDtoSuffix(refName) : undefined;
   if (schemaDiscriminatorValue && mappingEntries.some(([value]) => value === schemaDiscriminatorValue)) {
     return schemaDiscriminatorValue;
@@ -770,9 +759,9 @@ function schemaField(
     const referenceExample = schemaReferenceExample(openApi, originalSchema, refName);
     if (referenceExample) {
       field.example =
-        field.example && typeof field.example === 'object' && !Array.isArray(field.example)
-          ? { ...(field.example as Record<string, unknown>), ...referenceExample }
-          : referenceExample;
+        field.example && typeof field.example === 'object' && !Array.isArray(field.example) ?
+          { ...(field.example as Record<string, unknown>), ...referenceExample }
+        : referenceExample;
     }
   }
 
@@ -784,7 +773,7 @@ function schemaField(
     const requiredProperties = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
     field.fields = Object.entries(schema.properties)
       .filter(([, propertySchema]) => {
-        const resolvedProperty = resolveOpenApiRef(openApi, propertySchema) as any;
+        const resolvedProperty = resolveOpenApiRef(openApi, propertySchema);
         return mode === 'request' ? !resolvedProperty?.readOnly : !resolvedProperty?.writeOnly;
       })
       .map(([propertyName, propertySchema]) =>
@@ -805,14 +794,14 @@ function schemaField(
     const typeDiscriminatorValues = discriminatorProperty ? discriminatorValues : implicitTypeValues;
     if (typeDiscriminatorValues.length) {
       field.fields = field.fields.map(child =>
-        (discriminatorProperty && child.name === discriminatorProperty) || (!discriminatorProperty && child.name === '@type')
-          ? {
-              ...child,
-              discriminatorValues: typeDiscriminatorValues,
-              enumValues: child.enumValues?.length ? child.enumValues : typeDiscriminatorValues,
-              example: typeDiscriminatorValues.includes(String(child.example)) ? child.example : typeDiscriminatorValues[0],
-            }
-          : child,
+        (discriminatorProperty && child.name === discriminatorProperty) || (!discriminatorProperty && child.name === '@type') ?
+          {
+            ...child,
+            discriminatorValues: typeDiscriminatorValues,
+            enumValues: child.enumValues?.length ? child.enumValues : typeDiscriminatorValues,
+            example: typeDiscriminatorValues.includes(String(child.example)) ? child.example : typeDiscriminatorValues[0],
+          }
+        : child,
       );
     }
   } else if (type === 'array') {
@@ -969,9 +958,9 @@ function selectExampleChoice(openApi: any, schema: any, example: unknown): any |
   if (!choices.length) return undefined;
   const discriminatorProperty = schema?.discriminator?.propertyName;
   const discriminatorValue =
-    example && typeof example === 'object' && !Array.isArray(example) && discriminatorProperty
-      ? String((example as Record<string, unknown>)[discriminatorProperty] ?? '')
-      : '';
+    example && typeof example === 'object' && !Array.isArray(example) && discriminatorProperty ?
+      String((example as Record<string, unknown>)[discriminatorProperty] ?? '')
+    : '';
   const mappedRef = discriminatorValue ? schema?.discriminator?.mapping?.[discriminatorValue] : undefined;
   if (typeof mappedRef === 'string') {
     const mappedChoice = choices.find(choice => choice?.$ref === mappedRef);
@@ -998,7 +987,8 @@ function validExplicitScalar(schema: any, value: unknown): boolean {
         // Invalid schema patterns are not a reason to discard an otherwise type-correct example.
       }
     }
-    if (schema?.format === 'date-time' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return false;
+    if (schema?.format === 'date-time' && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value))
+      return false;
     if (schema?.format === 'date' && !/^\d{4}-\d{2}-\d{2}$/u.test(value)) return false;
   }
   if (typeof value === 'number') {
@@ -1008,13 +998,7 @@ function validExplicitScalar(schema: any, value: unknown): boolean {
   return true;
 }
 
-function sanitizeRequestExample(
-  openApi: any,
-  schema: any,
-  example: unknown,
-  seen = new Set<string>(),
-  depth = 0,
-): unknown {
+function sanitizeRequestExample(openApi: any, schema: any, example: unknown, seen = new Set<string>(), depth = 0): unknown {
   if (!schema || typeof schema !== 'object' || depth > MAX_OPERATION_FORM_EXAMPLE_DEPTH) return example;
   const refName = extractSchemaRef(schema);
   if (typeof schema.$ref === 'string') {
@@ -1030,11 +1014,10 @@ function sanitizeRequestExample(
     const sanitized = sanitizeRequestExample(openApi, choice, example, seen, depth + 1);
     const discriminatorProperty = schema?.discriminator?.propertyName;
     const branchRef = typeof choice?.$ref === 'string' ? choice.$ref : undefined;
-    const discriminatorValue = branchRef
-      ? Object.entries(schema?.discriminator?.mapping ?? {}).find(([, mappedRef]) => mappedRef === branchRef)?.[0]
-      : undefined;
-    return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized) && discriminatorProperty && discriminatorValue
-      ? { ...(sanitized as Record<string, unknown>), [discriminatorProperty]: discriminatorValue }
+    const discriminatorValue =
+      branchRef ? Object.entries(schema?.discriminator?.mapping ?? {}).find(([, mappedRef]) => mappedRef === branchRef)?.[0] : undefined;
+    return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized) && discriminatorProperty && discriminatorValue ?
+        { ...(sanitized as Record<string, unknown>), [discriminatorProperty]: discriminatorValue }
       : sanitized;
   }
 
@@ -1048,7 +1031,7 @@ function sanitizeRequestExample(
       if (Object.keys(properties).length === 0 && !schema.additionalProperties) return source;
       const required = new Set(Array.isArray(schema.required) ? schema.required.map(String) : []);
       for (const [propertyName, propertySchema] of Object.entries(properties)) {
-        if ((resolveOpenApiRef(openApi, propertySchema) as any)?.readOnly) continue;
+        if (resolveOpenApiRef(openApi, propertySchema)?.readOnly) continue;
         if (Object.hasOwn(source, propertyName)) {
           result[propertyName] = sanitizeRequestExample(openApi, propertySchema, source[propertyName], new Set(seen), depth + 1);
         } else if (required.has(propertyName)) {
@@ -1060,17 +1043,15 @@ function sanitizeRequestExample(
         for (const [propertyName, propertyValue] of Object.entries(source)) {
           if (Object.hasOwn(properties, propertyName)) continue;
           result[propertyName] =
-            schema.additionalProperties === true
-              ? propertyValue
-              : sanitizeRequestExample(openApi, schema.additionalProperties, propertyValue, new Set(seen), depth + 1);
+            schema.additionalProperties === true ?
+              propertyValue
+            : sanitizeRequestExample(openApi, schema.additionalProperties, propertyValue, new Set(seen), depth + 1);
         }
       }
       const discriminatorProperty =
-        typeof schema.discriminator?.propertyName === 'string'
-          ? schema.discriminator.propertyName
-          : properties['@type']
-            ? '@type'
-            : undefined;
+        typeof schema.discriminator?.propertyName === 'string' ? schema.discriminator.propertyName
+        : properties['@type'] ? '@type'
+        : undefined;
       if (discriminatorProperty && refName) {
         const discriminatorValue = discriminatorExampleValue(openApi, schema, refName, discriminatorProperty);
         if (discriminatorValue) result[discriminatorProperty] = discriminatorValue;
@@ -1184,11 +1165,9 @@ function collectOperationParameters(openApi: any, pathItem: any, operation: any)
       format: schema.format,
       enumValues: schemaEnumValues(schema),
       description:
-        typeof parameter.description === 'string'
-          ? parameter.description
-          : typeof schema.description === 'string'
-            ? schema.description
-            : undefined,
+        typeof parameter.description === 'string' ? parameter.description
+        : typeof schema.description === 'string' ? schema.description
+        : undefined,
       defaultValue: schema.default,
       example: parameter.example ?? (parameter.required || location === 'path' ? schemaExample(openApi, schema) : undefined),
       minLength: schemaNumber(schema.minLength),
@@ -1208,8 +1187,8 @@ export function loadOpenApiOperations(generator: any, application: AngularApplic
   if (!openApiPath) return [];
   const openApi = parseYaml(readFileSync(openApiPath, 'utf8'));
   const operations: OpenApiOperationDefinition[] = [];
-  for (const [path, pathItem] of Object.entries(openApi?.paths ?? {}) as [string, any][]) {
-    for (const [method, operation] of Object.entries(pathItem ?? {}) as [string, any][]) {
+  for (const [path, pathItem] of Object.entries(openApi?.paths ?? {})) {
+    for (const [method, operation] of Object.entries(pathItem ?? {})) {
       if (!HTTP_METHODS.has(method)) continue;
       const operationId = operationIdFor(method, path, operation);
       const body = requestBodyDefinition(openApi, operation);

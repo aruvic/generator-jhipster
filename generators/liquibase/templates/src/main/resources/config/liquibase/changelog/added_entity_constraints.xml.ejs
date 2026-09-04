@@ -21,10 +21,10 @@
         Added the constraints for entity <%- entity.entityClass %>.
     -->
     <changeSet id="<%- changelogDate %>-2" author="jhipster">
-<%_ if (entity.polymorphicChild && entity.parentEntity?.primaryKey) {
-      const inheritedColumnNames = entity.parentEntity.primaryKey.fields.map(field => field.columnName).join(', ');
+<%_ if (entity.polymorphicChild && entity.parentEntity?.primaryKey) { _%>
+  <%_ const inheritedColumnNames = entity.parentEntity.primaryKey.fields.map(field => field.columnName).join(', ');
       const constraintName = this.getFKConstraintName(entity.entityTableName, entity.parentEntity.name, prodDatabaseType);
-_%>
+  _%>
         <addForeignKeyConstraint baseColumnNames="<%- inheritedColumnNames %>"
                                  baseTableName="<%- entity.entityTableName %>"
                                  constraintName="<%- constraintName %>"

@@ -58,11 +58,11 @@ const CRUD_SUFFIX_MAPPINGS: Record<string, CrudPrefix> = {
 };
 
 const BASE_TEMPLATE_IMPORTS = new Set([
-  'com.fasterxml.jackson.databind.JsonNode',
-  'com.fasterxml.jackson.databind.ObjectMapper',
-  'com.fasterxml.jackson.databind.node.ArrayNode',
-  'com.fasterxml.jackson.databind.node.NullNode',
-  'com.fasterxml.jackson.databind.node.ObjectNode',
+  'tools.jackson.databind.JsonNode',
+  'tools.jackson.databind.ObjectMapper',
+  'tools.jackson.databind.node.ArrayNode',
+  'tools.jackson.databind.node.NullNode',
+  'tools.jackson.databind.node.ObjectNode',
   'java.net.URI',
   'java.nio.charset.StandardCharsets',
   'java.util.HashSet',
@@ -294,7 +294,7 @@ function collectSchemaRequiredProperties(
     return new Set();
   }
   if (cache.has(schemaName)) {
-    return new Set(cache.get(schemaName)!);
+    return new Set(cache.get(schemaName));
   }
   const schema = schemas[schemaName];
   if (!schema || visiting.has(schemaName)) {
@@ -381,8 +381,8 @@ function buildDefaultValueExpression(field: any, value: unknown): string | undef
   }
   if (normalizedType === 'uuid') {
     const stringValue = String(value);
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stringValue)
-      ? `java.util.UUID.fromString(${javaStringLiteral(stringValue)})`
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(stringValue) ?
+        `java.util.UUID.fromString(${javaStringLiteral(stringValue)})`
       : undefined;
   }
   if (normalizedType === 'localdate') {
@@ -622,7 +622,10 @@ function buildRequiredPropertyRulesExpression(
     return undefined;
   }
   return `List.of(${rules
-    .map(rule => `new RequiredPropertyRule(${javaStringLiteral(rule.pointer)}, ${javaStringLiteral(rule.propertyName)}, ${rule.nullable ? 'true' : 'false'})`)
+    .map(
+      rule =>
+        `new RequiredPropertyRule(${javaStringLiteral(rule.pointer)}, ${javaStringLiteral(rule.propertyName)}, ${rule.nullable ? 'true' : 'false'})`,
+    )
     .join(', ')})`;
 }
 
@@ -651,8 +654,7 @@ function buildRequiredPropertyRules(
     rulesByLocation.set(key, existing ? { ...existing, nullable: existing.nullable && nullable } : { pointer, propertyName, nullable });
   };
 
-  const hasOwnProperty = (object: SchemaProperties, propertyName: string): boolean =>
-    Object.prototype.hasOwnProperty.call(object, propertyName);
+  const hasOwnProperty = (object: SchemaProperties, propertyName: string): boolean => Object.hasOwn(object, propertyName);
 
   const resolveRequiredPropertyName = (propertyName: string, properties: SchemaProperties): string => {
     if (hasOwnProperty(properties, propertyName)) {
@@ -719,7 +721,8 @@ function buildRequiredPropertyRules(
   };
 
   const rootSchema = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? schemaObject.items : schemaObject;
-  const rootSchemaName = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
+  const rootSchemaName =
+    options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
   visit(rootSchema, rootSchemaName, new Set(), '');
   if (
     schemaName &&
@@ -775,7 +778,7 @@ function buildDiscriminatorRules(
       return;
     }
 
-    const discriminator = schema.discriminator;
+    const { discriminator } = schema;
     const propertyName = typeof discriminator?.propertyName === 'string' ? discriminator.propertyName : undefined;
     if (propertyName) {
       addRule(pointer, propertyName, discriminatorAllowedValues(schema, hintedSchemaName, propertyName, schemas, options));
@@ -798,7 +801,8 @@ function buildDiscriminatorRules(
   };
 
   const rootSchema = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? schemaObject.items : schemaObject;
-  const rootSchemaName = options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
+  const rootSchemaName =
+    options.arrayItemsAsRoot && schemaObject?.type === 'array' ? (extractSchemaRef(schemaObject.items) ?? schemaName) : schemaName;
   visit(rootSchema, rootSchemaName, new Set(), '');
   if (schemaName && !options.arrayItemsAsRoot && (!schemaObject || !extractSchemaRef(schemaObject))) {
     visit(schemas[schemaName], schemaName, new Set(), '');
@@ -835,11 +839,7 @@ function schemaPropertiesForDiscriminatorTraversal(
   return properties;
 }
 
-function schemaPropertiesForRequiredTraversal(
-  schema: any,
-  schemaName: string | undefined,
-  schemas: Record<string, any>,
-): SchemaProperties {
+function schemaPropertiesForRequiredTraversal(schema: any, schemaName: string | undefined, schemas: Record<string, any>): SchemaProperties {
   if (schemaName) {
     return collectSchemaProperties(schemaName, schemas);
   }
@@ -900,12 +900,7 @@ function discriminatorAllowedValues(
   return values;
 }
 
-function findDiscriminatorPropertySchema(
-  schema: any,
-  propertyName: string,
-  schemas: Record<string, any>,
-  seen = new Set<string>(),
-): any {
+function findDiscriminatorPropertySchema(schema: any, propertyName: string, schemas: Record<string, any>, seen = new Set<string>()): any {
   if (!schema) {
     return undefined;
   }
@@ -936,7 +931,7 @@ function parseOpenApiSourceOfTruth(
   application: SpringBootApplication,
   fallbackSpec: ReturnType<typeof parseOpenAPISpec>,
 ): ReturnType<typeof parseOpenAPISpec> {
-  const oas3Input = (application as any).oas3Input;
+  const { oas3Input } = application as any;
   if (typeof oas3Input !== 'string' || !oas3Input.trim()) {
     return fallbackSpec;
   }
@@ -1008,12 +1003,12 @@ export function ensureMapperDependency(
 type ParsedMethodSignature = {
   methodName: string;
   returnType: string;
-  parameters: Array<{
+  parameters: {
     type: string;
     name: string;
     annotations: string[];
     declaration: string;
-  }>;
+  }[];
   fullSignature: string;
   throwsClause?: string;
 };
@@ -1041,7 +1036,7 @@ function parseApiDelegateInterface(interfaceFilePath: string): Map<string, Parse
     const paramsStr = match[3];
     const throwsClause = match[4]?.trim();
 
-    const parameterDeclarations: Array<{ type: string; name: string; annotations: string[]; declaration: string }> = [];
+    const parameterDeclarations: { type: string; name: string; annotations: string[]; declaration: string }[] = [];
 
     if (paramsStr.trim()) {
       // Split parameters, handling nested generics
@@ -1368,8 +1363,9 @@ function resolveResponseMapperMethod(
   sourceEntityName: string | undefined,
   mapperMethods: Map<string, MapperMethodSignature[]>,
 ): string | undefined {
-  const defaultName = responseEntityName && sourceEntityName && responseEntityName !== sourceEntityName
-    ? `to${responseEntityName}`
+  const defaultName =
+    responseEntityName && sourceEntityName && responseEntityName !== sourceEntityName ?
+      `to${responseEntityName}`
     : `to${responseEntityName}Dto`;
   const methods = mapperMethods.get(mapperSimpleName);
   if (!methods || methods.length === 0) {
@@ -1388,19 +1384,21 @@ function resolveResponseMapperMethod(
 
   const responseReturnSimple = extractSimpleType(responseReturnFqcn);
   const fallbackCandidates = Array.from(
-    new Set([
-      responseReturnSimple ? `to${responseReturnSimple}` : undefined,
-      responseReturnSimple ? `to${responseReturnSimple}Dto` : undefined,
-      `to${responseEntityName}Dto`,
-      `to${responseEntityName}`,
-    ].filter((candidate): candidate is string => Boolean(candidate))),
+    new Set(
+      [
+        responseReturnSimple ? `to${responseReturnSimple}` : undefined,
+        responseReturnSimple ? `to${responseReturnSimple}Dto` : undefined,
+        `to${responseEntityName}Dto`,
+        `to${responseEntityName}`,
+      ].filter((candidate): candidate is string => Boolean(candidate)),
+    ),
   );
 
   const bestFallback = fallbackCandidates.find(candidate =>
-    methods.some(method =>
-      method.name === candidate &&
-      method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName))
-    )
+    methods.some(
+      method =>
+        method.name === candidate && method.parameterTypes.some(param => matchesTypeSignature(param, sourceEntityFqcn, sourceEntityName)),
+    ),
   );
 
   if (bestFallback) {
@@ -1420,9 +1418,9 @@ function classifyCrudOperation(
   const descriptorHasPathParams = descriptor?.pathParameters?.length ? descriptor.pathParameters.length > 0 : undefined;
   const operationHasPathParams = (operation.parameters ?? []).some(param => param.in === 'path');
   const hasPathParams =
-    descriptorHasPathParams === undefined
-      ? operationHasPathParams || Boolean(operation.path && operation.path.includes('{'))
-      : descriptorHasPathParams;
+    descriptorHasPathParams === undefined ?
+      operationHasPathParams || Boolean(operation.path && operation.path.includes('{'))
+    : descriptorHasPathParams;
   const responseIsArray = Boolean(operation.responseIsArray || operation.responseSchemaObject?.type === 'array');
 
   let kind: CrudPrefix | undefined;
@@ -1436,7 +1434,10 @@ function classifyCrudOperation(
       kind = 'delete';
       break;
     case 'read':
-      kind = responseIsArray ? 'list' : hasPathParams ? 'retrieve' : 'list';
+      kind =
+        responseIsArray ? 'list'
+        : hasPathParams ? 'retrieve'
+        : 'list';
       break;
     case 'update':
       if (method === 'PATCH' || lowerOpId.startsWith('patch') || lowerOpId.includes('patch')) {
@@ -1472,7 +1473,10 @@ function classifyCrudOperation(
         kind = 'delete';
         break;
       case 'GET':
-        kind = responseIsArray ? 'list' : hasPathParams ? 'retrieve' : 'list';
+        kind =
+          responseIsArray ? 'list'
+          : hasPathParams ? 'retrieve'
+          : 'list';
         break;
       case 'PATCH':
         kind = 'patch';
@@ -1556,9 +1560,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
   // Determine where generated API interfaces are located
   const javaPackageDir =
     application.javaPackageSrcDir ??
-    (application.srcMainJava && application.packageNameWithSlashes
-      ? join(application.srcMainJava, application.packageNameWithSlashes)
-      : undefined);
+    (application.srcMainJava && application.packageNameWithSlashes ?
+      join(application.srcMainJava, application.packageNameWithSlashes)
+    : undefined);
 
   if (!javaPackageDir) {
     generator.log.warn('Unable to resolve Java package directory for delegate implementations');
@@ -1803,9 +1807,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
     const requestBodyParam = opContext.parameters.find(param => param.in === 'body');
     const requestBodyIsCollection = Boolean(
       opContext.requestBodyIsArray ||
-        requestBodyParam?.resolvedType?.isList ||
-        isCollectionTypeSignature(requestBodyParam?.fullType) ||
-        isCollectionTypeSignature(requestBodyParam?.javaType),
+      requestBodyParam?.resolvedType?.isList ||
+      isCollectionTypeSignature(requestBodyParam?.fullType) ||
+      isCollectionTypeSignature(requestBodyParam?.javaType),
     );
     opContext.requestDiscriminatorRulesExpression = buildDiscriminatorRulesExpression(
       sourceOperation.requestBodySchemaObject,
@@ -1842,8 +1846,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       },
     );
 
-    const matchedEntityInfo: EntityInfo | undefined = descriptor?.matchedEntity
-      ? {
+    const matchedEntityInfo: EntityInfo | undefined =
+      descriptor?.matchedEntity ?
+        {
           name: descriptor.matchedEntity.name,
           fqcn: descriptor.matchedEntity.fqcn,
           definition: descriptor.matchedEntity.entity,
@@ -1855,8 +1860,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
       definition: descriptor?.matchedEntity?.entity,
     };
 
-    const responseEntityInfo: EntityInfo | undefined = descriptor?.responseEntityMatch
-      ? {
+    const responseEntityInfo: EntityInfo | undefined =
+      descriptor?.responseEntityMatch ?
+        {
           name: descriptor.responseEntityMatch.name,
           fqcn: descriptor.responseEntityMatch.fqcn,
           definition: descriptor.responseEntityMatch.entity,
@@ -1883,7 +1889,8 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         const requestMapperMethods = mapperMethodsByName.get(requestMapper.simpleName);
         const requestBodyBaseName = stripDtoSuffix(opContext.requestBodyType ?? '');
         const requestBodyFullType = opContext.requestBodyResolvedType?.fullType ?? bodyParam?.fullType;
-        const requestBodySimpleType = extractSimpleType(opContext.requestBodyType) ?? extractSimpleType(bodyParam?.javaType) ?? bodyParam?.javaType;
+        const requestBodySimpleType =
+          extractSimpleType(opContext.requestBodyType) ?? extractSimpleType(bodyParam?.javaType) ?? bodyParam?.javaType;
         opContext.requestMapperField = requestMapper.fieldName;
         opContext.requestMapperMethod = resolveRequestMapperMethod(
           requestMapper.simpleName,
@@ -1955,10 +1962,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           }
           const method = methods.find(candidate => candidate.name === methodName);
           return Boolean(
-            method &&
-              method.parameterTypes.some(param =>
-                matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
-              ),
+            method?.parameterTypes.some(param =>
+              matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+            ),
           );
         };
         const responseMapperMethod = resolveResponseMapperMethod(
@@ -1976,11 +1982,9 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
           opContext.responseMapperMethod = responseMapperMethod;
           if (responseMapperMethods) {
             const resolvedMethod = responseMapperMethods.find(method => method.name === responseMapperMethod);
-            const acceptsSource =
-              resolvedMethod &&
-              resolvedMethod.parameterTypes.some(param =>
-                matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
-              );
+            const acceptsSource = resolvedMethod?.parameterTypes.some(param =>
+              matchesTypeSignature(param, opContext.persistenceEntityFqcn, opContext.persistenceEntityName),
+            );
             if (!acceptsSource) {
               const alternative = responseMapperMethods.find(
                 method =>
@@ -2069,7 +2073,7 @@ export async function generateOpenApiDelegates(generator: any, application: Spri
         key,
         fieldName: 'objectMapper',
         simpleName: 'ObjectMapper',
-        import: 'com.fasterxml.jackson.databind.ObjectMapper',
+        import: 'tools.jackson.databind.ObjectMapper',
         order: context.injections.length,
       };
       context.injections.push(dependency);
@@ -2386,9 +2390,8 @@ function buildOperationContext(
     }
   }
 
-  const resolvedRequestBodyType = operation.requestBodySchemaObject
-    ? resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions)
-    : undefined;
+  const resolvedRequestBodyType =
+    operation.requestBodySchemaObject ? resolveJavaType(operation.requestBodySchemaObject, resolverContext, resolverOptions) : undefined;
   tagRequestBodyParameter(parameterContexts, operation, resolvedRequestBodyType);
 
   const bodyParam = parameterContexts.find(param => param.in === 'body');
@@ -2396,22 +2399,26 @@ function buildOperationContext(
   const requestBodyType = requestBodyResolvedType?.baseType ?? bodyParam?.javaType;
   const requestBodyIsArray = Boolean(
     operation.requestBodyIsArray ||
-      operation.requestBodySchemaObject?.type === 'array' ||
-      requestBodyResolvedType?.isList ||
-      isCollectionTypeSignature(bodyParam?.fullType) ||
-      isCollectionTypeSignature(bodyParam?.signatureFragment),
+    operation.requestBodySchemaObject?.type === 'array' ||
+    requestBodyResolvedType?.isList ||
+    isCollectionTypeSignature(bodyParam?.fullType) ||
+    isCollectionTypeSignature(bodyParam?.signatureFragment),
   );
 
   const responseSchema = operation.responseSchemaObject;
   const responseResolvedType = responseSchema ? resolveJavaType(responseSchema, resolverContext, resolverOptions) : undefined;
   const namedArrayResponse = resolveNamedArrayResponse(responseSchema, resolverContext, resolverOptions);
   const responseArrayElementResolvedType =
-    responseResolvedType?.componentType ?? namedArrayResponse?.elementType ?? (operation.responseIsArray ? responseResolvedType?.componentType : undefined);
+    responseResolvedType?.componentType ??
+    namedArrayResponse?.elementType ??
+    (operation.responseIsArray ? responseResolvedType?.componentType : undefined);
   const responseType = responseResolvedType?.baseType;
 
   const responseBodyType = extractResponseEntityBodyType(returnType);
   const responseCollectionWrapperType =
-    namedArrayResponse && (!responseBodyType || !isCollectionTypeSignature(responseBodyType)) ? namedArrayResponse.wrapperType.fullType : undefined;
+    namedArrayResponse && (!responseBodyType || !isCollectionTypeSignature(responseBodyType)) ?
+      namedArrayResponse.wrapperType.fullType
+    : undefined;
   const defaultResponseType = responseCollectionWrapperType ?? responseResolvedType?.fullType;
   const defaultReturnType = defaultResponseType ? `ResponseEntity<${defaultResponseType}>` : 'ResponseEntity<Void>';
   const successStatus = operation.responseStatus ? Number.parseInt(operation.responseStatus, 10) : undefined;

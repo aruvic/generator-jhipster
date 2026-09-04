@@ -131,8 +131,16 @@ describe(`generator - ${generator}`, () => {
     });
 
     it('should use generated JavaBean accessor suffixes in domain test helpers', () => {
-      result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java', 'seteBLVisualisationByCarrierChecksum');
-      result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java', 'setEBLVisualisationByCarrierChecksum');
+      result.assertFileContent(
+        'src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java',
+        '.eBLVisualisationByCarrierChecksum',
+      );
+      result.assertNoFileContent(
+        'src/test/java/com/mycompany/myapp/domain/IssuanceManifestTestSamples.java',
+        '.EBLVisualisationByCarrierChecksum',
+      );
+      result.assertFileContent('src/main/java/com/mycompany/myapp/domain/IssuanceManifest.java', 'seteBLVisualisationByCarrierChecksum');
+      result.assertNoFileContent('src/main/java/com/mycompany/myapp/domain/IssuanceManifest.java', 'setEBLVisualisationByCarrierChecksum');
       result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'getEBLVisualisationByCarrier');
       result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'geteBLVisualisationByCarrier');
     });

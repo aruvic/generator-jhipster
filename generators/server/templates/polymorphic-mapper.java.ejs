@@ -1,36 +1,35 @@
 <%#
  Copyright 2013-2025 the original author or authors from the JHipster project.
 -%>
-<%
-    const basePackage = packageName.replace('.web.api.mapper', '');
-    const simpleName = fqcn => (fqcn ? fqcn.split('.').pop() : fqcn);
+<%_ const basePackage = packageName.replace('.web.api.mapper', '');
+    const simpleName = fqcn => fqcn ? fqcn.split('.').pop() : fqcn;
     const seenBridgeMappings = new Set();
     const domainBridgeMappings = [];
     for (const poly of polymorphicTypes ?? []) {
-        if (!poly?.baseDomainType || !Array.isArray(poly.subtypes)) {
-            continue;
+      if (!poly?.baseDomainType || !Array.isArray(poly.subtypes)) {
+        continue;
+      }
+      for (const subtype of poly.subtypes) {
+        if (!subtype?.domainType || subtype.domainType === poly.baseDomainType) {
+          continue;
         }
-        for (const subtype of poly.subtypes) {
-            if (!subtype?.domainType || subtype.domainType === poly.baseDomainType) {
-                continue;
-            }
-            const key = `${subtype.domainType}->${poly.baseDomainType}`;
-            if (seenBridgeMappings.has(key)) {
-                continue;
-            }
-            seenBridgeMappings.add(key);
-            const subtypeSimpleName = subtype.domainSimpleName ?? simpleName(subtype.domainType) ?? 'Subtype';
-            const baseSimpleName = poly.baseType ?? simpleName(poly.baseDomainType) ?? 'BaseType';
-            domainBridgeMappings.push({
-                methodName: `map${subtypeSimpleName}To${baseSimpleName}`,
-                paramType: subtype.domainType,
-                returnType: poly.baseDomainType,
-                paramSimpleName: subtypeSimpleName,
-                returnSimpleName: baseSimpleName,
-            });
+        const key = `${subtype.domainType}->${poly.baseDomainType}`;
+        if (seenBridgeMappings.has(key)) {
+          continue;
         }
+        seenBridgeMappings.add(key);
+        const subtypeSimpleName = subtype.domainSimpleName ?? simpleName(subtype.domainType) ?? 'Subtype';
+        const baseSimpleName = poly.baseType ?? simpleName(poly.baseDomainType) ?? 'BaseType';
+        domainBridgeMappings.push({
+          methodName: `map${subtypeSimpleName}To${baseSimpleName}`,
+          paramType: subtype.domainType,
+          returnType: poly.baseDomainType,
+          paramSimpleName: subtypeSimpleName,
+          returnSimpleName: baseSimpleName,
+        });
+      }
     }
-%>
+_%>
  * Shared mapper for polymorphic types with @SubclassMapping support.
  * This mapper handles all abstract/interface types that have multiple concrete implementations.
  */
@@ -43,12 +42,11 @@ import org.mapstruct.ReportingPolicy;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.SubclassExhaustiveStrategy;
 import org.springframework.context.annotation.Lazy;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
-import org.openapitools.jackson.nullable.JsonNullable;
 
 @Lazy
 @Mapper(
@@ -60,22 +58,6 @@ public interface <%- mapperName %> {
 
     // ========== Support Mapping Methods ==========
     
-    /**
-     * Map JsonNullable<Object> to String for DTO-to-Domain conversions
-     */
-    default String mapJsonNullableObjectToString(JsonNullable<Object> value) {
-        if (value == null || !value.isPresent()) return null;
-        Object obj = value.get();
-        return obj == null ? null : JsonValueSupport.writeValueAsString(obj);
-    }
-
-    /**
-     * Map String to JsonNullable<Object> for Domain-to-DTO conversions
-     */
-    default JsonNullable<Object> mapStringToJsonNullableObject(String value) {
-        return value == null ? JsonNullable.undefined() : JsonNullable.of(value);
-    }
-
     /**
      * Map Object to String
      */
@@ -107,7 +89,7 @@ public interface <%- mapperName %> {
             }
             try {
                 return OBJECT_MAPPER.writeValueAsString(value);
-            } catch (JsonProcessingException ex) {
+            } catch (JacksonException ex) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to serialize value", ex);
             }
         }
@@ -116,7 +98,7 @@ public interface <%- mapperName %> {
 <%_ if (domainBridgeMappings.length > 0) { _%>
     // ========== Concrete to Abstract Type Bridges ==========
 
-    <%_ for (const mapping of domainBridgeMappings) { _%>
+  <%_ for (const mapping of domainBridgeMappings) { _%>
     /**
      * Map concrete <%- mapping.paramSimpleName %> to abstract <%- mapping.returnSimpleName %>
      */
@@ -124,7 +106,7 @@ public interface <%- mapperName %> {
         return value;
     }
 
-    <%_ } _%>
+  <%_ } _%>
 <%_ } _%>
 
 
@@ -134,14 +116,14 @@ public interface <%- mapperName %> {
     /**
      * Map <%- poly.baseType %> with runtime type resolution
      */
-    <%_ for (const subtype of poly.subtypes) { _%>
+  <%_ for (const subtype of poly.subtypes) { _%>
     @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
-    <%_ } _%>
+  <%_ } _%>
     <%- poly.baseDomainType %> map<%- poly.baseType %>(<%- poly.baseDtoType %> source);
 
-    <%_ const variantBridges = poly.variants.filter(variant => !variant.isBase && !variant.isWrapper); _%>
-    <%_ const wrapperVariants = poly.variants.filter(variant => variant.isWrapper && variant.subtypes.length > 0); _%>
-    <%_ if (variantBridges.length > 0) { _%>
+  <%_ const variantBridges = poly.variants.filter(variant => !variant.isBase && !variant.isWrapper); _%>
+  <%_ const wrapperVariants = poly.variants.filter(variant => variant.isWrapper && variant.subtypes.length > 0); _%>
+  <%_ if (variantBridges.length > 0) { _%>
         // ========== <%- poly.baseType %> Variant Bridge Mappings ==========
 
     <%_ for (const variant of variantBridges) { _%>
@@ -160,13 +142,13 @@ public interface <%- mapperName %> {
             if (source == null) {
                 return null;
             }
-    <%_ for (const subtype of variant.subtypes) { _%>
-      <%_ if (subtype.isCompatible) { _%>
+      <%_ for (const subtype of variant.subtypes) { _%>
+        <%_ if (subtype.isCompatible) { _%>
             if ((Object) source instanceof <%- subtype.dtoType %>) {
                 return new <%- subtype.domainType %>();
             }
+        <%_ } _%>
       <%_ } _%>
-    <%_ } _%>
             return null;
         }
 
@@ -180,18 +162,18 @@ public interface <%- mapperName %> {
         }
 
     <%_ } _%>
-    <%_ } _%>
+  <%_ } _%>
 
-    <%_ if (wrapperVariants.length > 0) { _%>
+  <%_ if (wrapperVariants.length > 0) { _%>
         // ========== <%- poly.baseType %> Wrapper Variant Mappings ==========
 
     <%_ for (const variant of wrapperVariants) { _%>
         /**
          * Wrapper mapping for variant <%- variant.dtoSimpleName %> -> <%- poly.baseType %>
          */
-    <%_ for (const subtype of variant.subtypes) { _%>
+      <%_ for (const subtype of variant.subtypes) { _%>
         @SubclassMapping(source = <%- subtype.dtoType %>.class, target = <%- subtype.domainType %>.class)
-    <%_ } _%>
+      <%_ } _%>
         <%- poly.baseDomainType %> map<%- variant.normalizedName %>(<%- variant.dtoType %> source);
 
         /**
@@ -200,20 +182,20 @@ public interface <%- mapperName %> {
         @ObjectFactory
         default <%- poly.baseDomainType %> create<%- poly.baseType %>From<%- variant.normalizedName %>(<%- variant.dtoType %> source) {
             if (source == null) return null;
-    <%_ for (const subtype of variant.subtypes) { _%>
-      <%_ if (subtype.isCompatible) { _%>
+      <%_ for (const subtype of variant.subtypes) { _%>
+        <%_ if (subtype.isCompatible) { _%>
             if ((Object) source instanceof <%- subtype.dtoType %>) return new <%- subtype.domainType %>();
+        <%_ } _%>
       <%_ } _%>
-    <%_ } _%>
             return null;
         }
 
         /**
          * Wrapper reverse mapping: <%- poly.baseType %> -> variant <%- variant.dtoSimpleName %>
          */
-    <%_ for (const subtype of variant.subtypes) { _%>
+      <%_ for (const subtype of variant.subtypes) { _%>
         @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
-    <%_ } _%>
+      <%_ } _%>
         <%- variant.dtoType %> map<%- poly.baseType %>To<%- variant.normalizedName %>(<%- poly.baseDomainType %> source);
 
         /**
@@ -222,14 +204,14 @@ public interface <%- mapperName %> {
         @ObjectFactory
         default <%- variant.dtoType %> create<%- variant.normalizedName %>From<%- poly.baseType %>(<%- poly.baseDomainType %> source) {
             if (source == null) return null;
-    <%_ for (const subtype of variant.subtypes) { _%>
+      <%_ for (const subtype of variant.subtypes) { _%>
             if ((Object) source instanceof <%- subtype.domainType %>) return new <%- subtype.dtoType %>();
-    <%_ } _%>
+      <%_ } _%>
             return null;
         }
 
     <%_ } _%>
-    <%_ } _%>
+  <%_ } _%>
 
     /**
      * Object factory for <%- poly.baseType %> - creates correct concrete instance
@@ -248,7 +230,7 @@ public interface <%- mapperName %> {
     /**
      * Reverse mapping: Domain -> DTO
      */
-    <%_ for (const subtype of poly.subtypes) { _%>
+  <%_ for (const subtype of poly.subtypes) { _%>
     @SubclassMapping(source = <%- subtype.domainType %>.class, target = <%- subtype.dtoType %>.class)
   <%_ } _%>
     <%- poly.baseDtoType %> map<%- poly.baseType %>ToDto(<%- poly.baseDomainType %> source);

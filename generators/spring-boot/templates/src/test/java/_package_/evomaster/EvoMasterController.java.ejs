@@ -16,9 +16,9 @@
  See the License for the specific language governing permissions and
  limitations under the License.
 -%>
-package <%= packageName %>.evomaster;
+package <%- packageName %>.evomaster;
 
-import <%= packageName %>.<%= mainClass %>;
+import <%- packageName %>.<%- mainClass %>;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,7 +34,6 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.YearMonth;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -73,7 +72,7 @@ import org.yaml.snakeyaml.Yaml;
 public class EvoMasterController extends EmbeddedSutController {
 
     private static final String OPENAPI_RESOURCE = "swagger/api.yml";
-    private static final String OPENAPI_BASE_PATH_PROPERTY = "openapi.<%= dasherizedBaseName %>.base-path";
+    private static final String OPENAPI_BASE_PATH_PROPERTY = "openapi.<%- dasherizedBaseName %>.base-path";
     private static final Pattern SQL_DATE_LITERAL = Pattern.compile("^(['\"])(-?\\d{4,})-(\\d{2})-(\\d{2})\\1$");
     private static final Pattern SQL_TIMESTAMP_LITERAL = Pattern.compile(
         "^(['\"])(-?\\d{4,})-(\\d{2})-(\\d{2})[ T](\\d{2}):(\\d{2}):(\\d{2})(\\.\\d+)?\\1$"
@@ -83,7 +82,7 @@ public class EvoMasterController extends EmbeddedSutController {
     );
     private static final String DEFAULT_PACKAGES_TO_SKIP_INSTRUMENTATION = String.join(
         ",",
-        "<%= packageName %>.evomaster",
+        "<%- packageName %>.evomaster",
         "io.micrometer.core.instrument.binder.kafka.KafkaMetrics",
         "org.springframework.cache.interceptor.CacheAspectSupport$ReactiveCachingHandler",
         "org.springframework.security.config.annotation.authentication.configurers.ldap.",
@@ -122,7 +121,7 @@ public class EvoMasterController extends EmbeddedSutController {
         args.add("--spring.datasource.hikari.maximum-pool-size=" + envOrDefault("EVOMASTER_HIKARI_MAXIMUM_POOL_SIZE", "50"));
         args.add("--spring.datasource.hikari.connection-timeout=" + envOrDefault("EVOMASTER_HIKARI_CONNECTION_TIMEOUT_MS", "60000"));
         args.add("--logging.level.ROOT=" + envOrDefault("EVOMASTER_LOG_LEVEL", "INFO"));
-        args.add("--logging.level.<%= packageName %>=" + envOrDefault("EVOMASTER_APP_LOG_LEVEL", "INFO"));
+        args.add("--logging.level.<%- packageName %>=" + envOrDefault("EVOMASTER_APP_LOG_LEVEL", "INFO"));
         args.add("--logging.level.org.hibernate.SQL=" + envOrDefault("EVOMASTER_SQL_LOG_LEVEL", "INFO"));
         args.add("--logging.level.org.eclipse.jetty=" + envOrDefault("EVOMASTER_JETTY_LOG_LEVEL", "INFO"));
 
@@ -131,7 +130,7 @@ public class EvoMasterController extends EmbeddedSutController {
         addIfPresent(args, "spring.datasource.password", "EVOMASTER_DB_PASSWORD");
 
         waitForConfiguredDatabase();
-        context = SpringApplication.run(<%= mainClass %>.class, args.toArray(String[]::new));
+        context = SpringApplication.run(<%- mainClass %>.class, args.toArray(String[]::new));
         DataSource dataSource = context.getBeanProvider(DataSource.class).getIfAvailable();
         try {
             connection = openEvoMasterConnection(dataSource);
@@ -175,7 +174,7 @@ public class EvoMasterController extends EmbeddedSutController {
     @Override
     public List<DbSpecification> getDbSpecifications() {
         if (connection == null) {
-            return Collections.emptyList();
+            return List.of();
         }
         DbSpecification specification = new DbSpecification(databaseType(connection), connectionForEvoMaster());
 <%_ if (authenticationTypeJwt || authenticationTypeSession) { _%>
@@ -290,7 +289,7 @@ public class EvoMasterController extends EmbeddedSutController {
 
     @Override
     public String getPackagePrefixesToCover() {
-        return "<%= packageName %>";
+        return "<%- packageName %>";
     }
 
     @Override
@@ -330,7 +329,7 @@ public class EvoMasterController extends EmbeddedSutController {
             AuthUtils.getForDefaultSpringFormLogin("user", "user", "user", "/login")
         );
 <%_ } else { _%>
-        return Collections.emptyList();
+        return List.of();
 <%_ } _%>
     }
 
@@ -503,7 +502,7 @@ public class EvoMasterController extends EmbeddedSutController {
 
     private static Map<String, Object> componentSchemas(Map<String, Object> openApi) {
         if (!(openApi.get("components") instanceof Map<?, ?> components) || !(components.get("schemas") instanceof Map<?, ?> schemas)) {
-            return Collections.emptyMap();
+            return Map.of();
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> mutableSchemas = (Map<String, Object>) schemas;
@@ -584,7 +583,7 @@ public class EvoMasterController extends EmbeddedSutController {
         Map<String, Object> property = rawProperty instanceof Map<?, ?> map ? toMutableMap(map) : new LinkedHashMap<>();
         property.putIfAbsent("type", "string");
         property.putIfAbsent("default", discriminatorValue);
-        property.put("enum", Collections.singletonList(discriminatorValue));
+        property.put("enum", List.of(discriminatorValue));
         properties.put(propertyName, property);
         schema.put("properties", properties);
         schema.put("required", uniqueStringList(schema.get("required"), List.of(propertyName)));
@@ -1614,7 +1613,7 @@ public class EvoMasterController extends EmbeddedSutController {
 
     private static List<String> splitSqlCsv(String rawValues) {
         if (rawValues == null || rawValues.isBlank()) {
-            return Collections.emptyList();
+            return List.of();
         }
         List<String> values = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -1690,7 +1689,7 @@ public class EvoMasterController extends EmbeddedSutController {
             int minute = clamp(parseSqlTemporalInt(timestampMatcher.group(6), 0), 0, 59);
             int second = clamp(parseSqlTemporalInt(timestampMatcher.group(7), 0), 0, 59);
             String fraction = timestampMatcher.group(8) == null ? "" : timestampMatcher.group(8);
-            return String.format(Locale.ROOT, "%s%04d-%02d-%02d %02d:%02d:%02d%s%s", quote, year, month, day, hour, minute, second, fraction, quote);
+            return "%s%04d-%02d-%02d %02d:%02d:%02d%s%s".formatted(quote, year, month, day, hour, minute, second, fraction, quote);
         }
         Matcher dateMatcher = SQL_DATE_LITERAL.matcher(printableValue.trim());
         if (dateMatcher.matches()) {
@@ -1698,7 +1697,7 @@ public class EvoMasterController extends EmbeddedSutController {
             int year = clamp(parseSqlTemporalInt(dateMatcher.group(2), 1970), 1, 9999);
             int month = clamp(parseSqlTemporalInt(dateMatcher.group(3), 1), 1, 12);
             int day = clamp(parseSqlTemporalInt(dateMatcher.group(4), 1), 1, YearMonth.of(year, month).lengthOfMonth());
-            return String.format(Locale.ROOT, "%s%04d-%02d-%02d%s", quote, year, month, day, quote);
+            return "%s%04d-%02d-%02d%s".formatted(quote, year, month, day, quote);
         }
         return printableValue;
     }
@@ -1758,7 +1757,7 @@ public class EvoMasterController extends EmbeddedSutController {
 
     private static List<String> sqlIdentifierCandidates(String identifier) {
         if (identifier == null || identifier.isBlank()) {
-            return Collections.emptyList();
+            return List.of();
         }
         Set<String> candidates = new LinkedHashSet<>();
         String normalized = normalizeSqlIdentifier(identifier);
@@ -1829,7 +1828,7 @@ public class EvoMasterController extends EmbeddedSutController {
                 }
             }
         }
-        return Collections.emptyList();
+        return List.of();
     }
 
     private static String enumConstraintKey(String tableName, String columnName) {
@@ -1879,7 +1878,7 @@ public class EvoMasterController extends EmbeddedSutController {
 
     private static List<String> parseCheckEnumValues(String constraintDefinition) {
         if (constraintDefinition == null || constraintDefinition.isBlank()) {
-            return Collections.emptyList();
+            return List.of();
         }
         String sql = decodeXmlEntities(constraintDefinition);
         Matcher arrayMatcher = Pattern.compile("ARRAY\\s*\\[(.*?)]", Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(sql);
@@ -1890,7 +1889,7 @@ public class EvoMasterController extends EmbeddedSutController {
         if (inMatcher.find()) {
             return parseSqlStringList(inMatcher.group(1));
         }
-        return Collections.emptyList();
+        return List.of();
     }
 
     private static String readResource(Resource resource) throws IOException {

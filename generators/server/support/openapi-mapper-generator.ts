@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 
 import { parse as parseYaml } from 'yaml';
+
 import { upperFirstCamelCase } from '../../../lib/utils/string.ts';
 
 /**
@@ -137,7 +138,7 @@ interface ParseOpenAPISpecOptions {
 export function parseOpenAPISpec(swaggerInput: string, options: ParseOpenAPISpecOptions = {}): ParsedOpenAPISpec {
   const { isFilePath = true } = options;
   const yamlContent = isFilePath ? readFileSync(swaggerInput, 'utf-8') : swaggerInput;
-  const spec = parseYaml(yamlContent) as any;
+  const spec = parseYaml(yamlContent);
 
   const operations: OpenAPIOperation[] = [];
   const schemas = spec.components?.schemas || {};
@@ -325,9 +326,7 @@ export function normalizeTypeName(name: string): string {
 export function normalizeDtoTypeName(name: string): string {
   if (!name) return name;
   const segments = name.split(/[^A-Za-z0-9]+/g).filter(Boolean);
-  return segments
-    .map(segment => (segment ? segment.charAt(0).toUpperCase() + segment.slice(1) : segment))
-    .join('');
+  return segments.map(segment => (segment ? segment.charAt(0).toUpperCase() + segment.slice(1) : segment)).join('');
 }
 
 /**

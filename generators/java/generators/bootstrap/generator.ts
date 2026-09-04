@@ -100,8 +100,8 @@ export default class JavaBootstrapGenerator extends JavaApplicationGenerator {
         mutateData(relationship, mutateRelationship, {
           relationshipNameCapitalizedPlural: ({ relationshipNameCapitalized, relationshipName }) =>
             relationshipName.length > 1 ?
-              pluralize(relationshipNameCapitalized, { force: true })
-            : upperFirst(pluralize(relationshipName, { force: true })),
+              pluralize(relationshipNameCapitalized, { force: false })
+            : upperFirst(pluralize(relationshipName, { force: false })),
           relationshipUpdateBackReference: ({ ownerSide, relationshipRightSide, otherEntity }) =>
             !otherEntity.embedded && (application.databaseTypeNeo4j ? relationshipRightSide : !ownerSide),
         });

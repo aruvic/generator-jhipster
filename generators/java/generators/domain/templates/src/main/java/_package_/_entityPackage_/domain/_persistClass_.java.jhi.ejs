@@ -79,13 +79,13 @@ import java.time.LocalTime;
 import java.time.Duration;
 <%_ } _%>
 <%_ if (entityContainsCollectionField) { _%>
-<%_ if (enableSwaggerCodegen) { _%>
+  <%_ if (enableSwaggerCodegen) { _%>
 import java.util.ArrayList;
 import java.util.List;
-<%_ } else { _%>
+  <%_ } else { _%>
 import java.util.HashSet;
 import java.util.Set;
-<%_ } _%>
+  <%_ } _%>
 <%_ } _%>
 <%_ if (anyFieldIsUUID || otherEntityPrimaryKeyTypesIncludesUUID) { _%>
 import java.util.UUID;
@@ -147,11 +147,10 @@ public <%- abstractClass ? 'abstract ' : '' %>class <%- persistClass %> <&- frag
 <%_ } _%>
 <&- fragments.classAdditionalFieldsSection() -&>
 
-<%_
-const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
-const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
+<%_ const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
+    const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
 
-// An embedded entity should not reference entities that embed it, unless the other entities are also embedded
+    // An embedded entity should not reference entities that embed it, unless the other entities are also embedded
 _%>
 <%_ for (relationship of relationships) { _%>
   <%_ if (relationship.relationshipApiDescription) { _%>
@@ -198,7 +197,7 @@ _%>
 <%_ } _%>
 <&- fragments.classAdditionalRelationshipsSection() -&>
     // jhipster-needle-entity-add-field - JHipster will add fields here
-<%_ for (const field of fields.filter(field => !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
+<%_ for (const field of fields.filter(field => !field.javaInherited && !field.transient && (embedded || !field.id || !primaryKey.composite))) { _%>
 <&- fragments.field<%- field.fieldNameCapitalized %>CustomMethodsSection() -&>
 <&_ if (!fragments.field<%- field.fieldNameCapitalized %>CustomMethodsSection()) { -&>
 
@@ -247,7 +246,7 @@ _%>
     }
 
   <%_ } else { _%>
-    public <%- relationship.otherEntity.persistClass %> get<%- relationship.relationshipNameCapitalized %>() {
+    public <%- relationship.otherEntity.persistClass %> <%- relationship.propertySupplierName %>() {
         return this.<%- relationship.relationshipFieldName %>;
     }
 

@@ -21,12 +21,13 @@ import { HttpClient, HttpContext, HttpHeaders, HttpParams, HttpResponse } from '
 import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { AbstractControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
+import { FontAwesomeModule } from '@fortawesome/angular-fontawesome';
 import { FieldArrayType, FieldWrapper, FormlyConfig, FormlyFieldConfig, FormlyForm, FormlyModule } from '@ngx-formly/core';
 import { Subscription } from 'rxjs';
 import { finalize } from 'rxjs/operators';
 
-import SharedModule from 'app/shared/shared.module';
 import { SKIP_AUTH_EXPIRED_LOGOUT } from 'app/core/interceptor/auth-expired.interceptor';
+import { Alert, AlertError } from 'app/shared/alert';
 
 import {
   FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY,
@@ -86,7 +87,7 @@ type BodySerializationOptions = {
 };
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-form-crud-section-wrapper',
+  selector: '<%- jhiPrefixDashed %>-form-crud-section-wrapper',
   standalone: true,
   imports: [CommonModule],
   template: `
@@ -134,7 +135,7 @@ class FormCrudSectionWrapper extends FieldWrapper implements OnInit {
 }
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-form-crud-accordion-wrapper',
+  selector: '<%- jhiPrefixDashed %>-form-crud-accordion-wrapper',
   standalone: true,
   imports: [CommonModule],
   template: `
@@ -182,7 +183,7 @@ class FormCrudAccordionWrapper extends FieldWrapper implements OnInit {
 }
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-form-crud-repeat',
+  selector: '<%- jhiPrefixDashed %>-form-crud-repeat',
   standalone: true,
   imports: [CommonModule, FormlyModule],
   template: `
@@ -298,10 +299,10 @@ class FormCrudRepeatType extends FieldArrayType<FormlyFieldConfig> {
 }
 
 @Component({
-  selector: '<%= jhiPrefixDashed %>-form-crud',
+  selector: '<%- jhiPrefixDashed %>-form-crud',
   templateUrl: './form-crud.html',
   styleUrl: './form-crud.scss',
-  imports: [SharedModule, ReactiveFormsModule, RouterLink, FormlyForm],
+  imports: [CommonModule, ReactiveFormsModule, RouterLink, FormlyForm, FontAwesomeModule, Alert, AlertError],
 })
 export default class FormCrud implements OnInit, OnDestroy {
   readonly operations = OPENAPI_OPERATIONS;
@@ -369,7 +370,7 @@ export default class FormCrud implements OnInit, OnDestroy {
   selectOperation(operationId: string): void {
     const operation = this.operations.find(candidate => candidate.id === operationId) ?? this.firstOperation();
     this.selectedOperation.set(operation);
-    this.form = new FormGroup({});
+    this.clearFormControls(this.form);
     this.model = this.initialModel(operation);
     this.fields = this.fieldsForOperation(operation);
     this.responseStatus.set(null);
@@ -661,7 +662,7 @@ export default class FormCrud implements OnInit, OnDestroy {
 
   loadDetailForm(item: unknown, resource: CrudResource | undefined): void {
     this.selectedResponseItem.set(item);
-    this.responseDetailForm = new FormGroup({});
+    this.clearFormControls(this.responseDetailForm);
     this.detailReferencePickerDirtyPaths.clear();
     const fields = this.detailSchemaFields(resource);
     this.responseDetailModel = this.detailModelForItem(item, fields);
@@ -681,7 +682,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       const fields = this.detailSchemaFields(this.currentResource());
       const readonly = !this.currentResource()?.updateOperation;
       const effectiveFields = fields.length ? fields : this.inferredFieldsFromItem(selectedItem);
-      this.responseDetailForm = new FormGroup({});
+      this.clearFormControls(this.responseDetailForm);
       this.responseDetailFields = [
         {
           wrappers: ['form-crud-accordion'],
@@ -694,7 +695,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       ];
       return;
     }
-    this.form = new FormGroup({});
+    this.clearFormControls(this.form);
     this.fields = this.fieldsForOperation(this.selectedOperation());
   }
 
@@ -721,6 +722,12 @@ export default class FormCrud implements OnInit, OnDestroy {
     }
 
     return fields;
+  }
+
+  private clearFormControls(form: FormGroup): void {
+    for (const controlName of Object.keys(form.controls)) {
+      form.removeControl(controlName);
+    }
   }
 
   private parameterFields(operation: OpenApiOperationDefinition): FormlyFieldConfig[] {
@@ -2239,7 +2246,7 @@ export default class FormCrud implements OnInit, OnDestroy {
     const listOperation = resource.listOperation;
     if (!listOperation) return;
     this.selectedOperation.set(listOperation);
-    this.form = new FormGroup({});
+    this.clearFormControls(this.form);
     this.model = this.initialModel(listOperation);
     this.fields = this.fieldsForOperation(listOperation);
     this.responseStatus.set(null);
@@ -2294,7 +2301,7 @@ export default class FormCrud implements OnInit, OnDestroy {
     this.selectedResponseRow.set(null);
     this.detailStatus.set(null);
     this.detailError.set('');
-    this.responseDetailForm = new FormGroup({});
+    this.clearFormControls(this.responseDetailForm);
     this.responseDetailModel = {};
     this.responseDetailFields = [];
   }

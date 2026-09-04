@@ -51,6 +51,22 @@ default_generator_node_heap_mb() {
   fi
 }
 
+resolve_form_crud_node_bin() {
+  if [[ -n "${FORM_CRUD_GUI_NODE_BIN:-}" && -x "${FORM_CRUD_GUI_NODE_BIN}/node" ]]; then
+    printf '%s\n' "$FORM_CRUD_GUI_NODE_BIN"
+    return
+  fi
+
+  local newest_nvm_bin
+  newest_nvm_bin="$(find "$HOME/.nvm/versions/node" -type f -path '*/bin/node' -printf '%h\n' 2> /dev/null | sort -V | tail -n 1)"
+  if [[ -n "$newest_nvm_bin" && -x "$newest_nvm_bin/node" ]]; then
+    printf '%s\n' "$newest_nvm_bin"
+    return
+  fi
+
+  dirname "$(command -v node)"
+}
+
 GENERATOR_NODE_OPTIONS="${GENERATOR_NODE_OPTIONS:---max-old-space-size=$(default_generator_node_heap_mb)}"
 ANGULAR_NODE_OPTIONS="${ANGULAR_NODE_OPTIONS:-$GENERATOR_NODE_OPTIONS}"
 EVOMASTER_ENABLED="${EVOMASTER_ENABLED:-true}"
@@ -67,11 +83,12 @@ FORM_CRUD_GUI_NPM_INSTALL="${FORM_CRUD_GUI_NPM_INSTALL:-offline}"
 FORM_CRUD_GUI_NPM_INSTALL_COMMAND="${FORM_CRUD_GUI_NPM_INSTALL_COMMAND:-npm install --no-audit --no-fund}"
 FORM_CRUD_GUI_START_COMMAND="${FORM_CRUD_GUI_START_COMMAND:-npm start -- --host $FORM_CRUD_GUI_HOST --port $FORM_CRUD_GUI_PORT}"
 FORM_CRUD_GUI_JEST_ENABLED="${FORM_CRUD_GUI_JEST_ENABLED:-true}"
-FORM_CRUD_GUI_JEST_COMMAND="${FORM_CRUD_GUI_JEST_COMMAND:-npx jest --runInBand --coverage --config jest.conf.js}"
+FORM_CRUD_GUI_JEST_COMMAND="${FORM_CRUD_GUI_JEST_COMMAND:-npx ng test --coverage}"
 FORM_CRUD_GUI_JEST_NODE_OPTIONS="${FORM_CRUD_GUI_JEST_NODE_OPTIONS:-${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}}"
 FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS:-900}"
 FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS:-30}"
 FORM_CRUD_GUI_NODE_OPTIONS="${FORM_CRUD_GUI_NODE_OPTIONS:-${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}}"
+FORM_CRUD_GUI_NODE_BIN="$(resolve_form_crud_node_bin)"
 FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS:-2400}"
 FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS:-30}"
 FORM_CRUD_GUI_PLAYWRIGHT_ROOT="${FORM_CRUD_GUI_PLAYWRIGHT_ROOT:-/tmp/playwright-tests}"
@@ -581,7 +598,7 @@ run_form_crud_gui_jest() {
   (
     cd "$app_dir"
     timeout --kill-after="${FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS}s" \
-      env CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="$FORM_CRUD_GUI_JEST_NODE_OPTIONS" NO_UPDATE_NOTIFIER=1 bash -lc "$FORM_CRUD_GUI_JEST_COMMAND" >"$jest_log" 2>&1 < /dev/null
+      env PATH="$FORM_CRUD_GUI_NODE_BIN:$PATH" CI=true NG_CLI_ANALYTICS=false NODE_OPTIONS="$FORM_CRUD_GUI_JEST_NODE_OPTIONS" NO_UPDATE_NOTIFIER=1 bash -c "$FORM_CRUD_GUI_JEST_COMMAND" >"$jest_log" 2>&1 < /dev/null
   )
   jest_status=$?
   set -e
@@ -684,7 +701,7 @@ run_form_crud_gui_smoke() {
   timestamped_step "$name" "Form CRUD GUI browser smoke start"
   (
     cd "$app_dir"
-    exec setsid env CI=true NG_CLI_ANALYTICS=false NO_UPDATE_NOTIFIER=1 bash -lc "$FORM_CRUD_GUI_START_COMMAND" >"$gui_log" 2>&1 < /dev/null
+    exec setsid env PATH="$FORM_CRUD_GUI_NODE_BIN:$PATH" CI=true NG_CLI_ANALYTICS=false NO_UPDATE_NOTIFIER=1 bash -c "$FORM_CRUD_GUI_START_COMMAND" >"$gui_log" 2>&1 < /dev/null
   ) &
   angular_pid=$!
 
@@ -725,7 +742,7 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="$FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="$FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST" \
     timeout --kill-after="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS}s" \
-      node "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
+      "$FORM_CRUD_GUI_NODE_BIN/node" "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
 
   cleanup_process "$angular_pid"
   gui_end="$(now_epoch)"

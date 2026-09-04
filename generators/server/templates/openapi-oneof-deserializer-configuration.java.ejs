@@ -1,14 +1,13 @@
-package <%= packageName %>.config;
+package <%- packageName %>.config;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.DeserializationContext;
-import com.fasterxml.jackson.databind.JsonDeserializer;
-import com.fasterxml.jackson.databind.JsonMappingException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.Module;
-import com.fasterxml.jackson.databind.module.SimpleModule;
-import java.io.IOException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.JsonParser;
+import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.JacksonModule;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ValueDeserializer;
+import tools.jackson.databind.module.SimpleModule;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -29,11 +28,11 @@ import org.springframework.context.annotation.ClassPathScanningCandidateComponen
 @Configuration
 public class OpenApiOneOfDeserializerConfiguration {
 
-    private static final String DTO_PACKAGE = "<%= packageName %>.service.api.dto";
+    private static final String DTO_PACKAGE = "<%- packageName %>.service.api.dto";
 
     @Bean
     @SuppressWarnings({ "rawtypes", "unchecked" })
-    public Module openApiOneOfDeserializersModule() {
+    public JacksonModule openApiOneOfDeserializersModule() {
         SimpleModule module = new SimpleModule("openApiOneOfDeserializers");
         for (Map.Entry<Class<?>, List<Class<?>>> entry : discoverOpenApiInterfaces().entrySet()) {
             Class rawType = entry.getKey();
@@ -101,7 +100,7 @@ public class OpenApiOneOfDeserializerConfiguration {
         };
     }
 
-    private static final class ShapeBasedInterfaceDeserializer extends JsonDeserializer<Object> {
+    private static final class ShapeBasedInterfaceDeserializer extends ValueDeserializer<Object> {
 
         private final Class<?> interfaceType;
         private final List<Class<?>> implementations;
@@ -116,13 +115,13 @@ public class OpenApiOneOfDeserializerConfiguration {
         }
 
         @Override
-        public Object deserialize(JsonParser parser, DeserializationContext context) throws IOException {
-            JsonNode node = parser.getCodec().readTree(parser);
+        public Object deserialize(JsonParser parser, DeserializationContext context) throws JacksonException {
+            JsonNode node = context.readTree(parser);
             Class<?> targetType = selectTargetType(node);
             if (targetType == null) {
-                throw JsonMappingException.from(parser, "Unable to select concrete type for " + interfaceType.getName());
+                return context.reportInputMismatch(interfaceType, "Unable to select concrete type for %s", interfaceType.getName());
             }
-            return parser.getCodec().treeToValue(node, targetType);
+            return context.readTreeAsValue(node, targetType);
         }
 
         private Class<?> selectTargetType(JsonNode node) {
@@ -131,7 +130,7 @@ public class OpenApiOneOfDeserializerConfiguration {
             }
 
             Set<String> incomingProperties = new LinkedHashSet<>();
-            node.fieldNames().forEachRemaining(incomingProperties::add);
+            node.propertyNames().forEach(incomingProperties::add);
             Class<?> bestType = null;
             int bestScore = -1;
             for (Class<?> implementation : implementations) {

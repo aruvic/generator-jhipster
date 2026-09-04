@@ -36,7 +36,10 @@ ANGULAR_TEST_ENABLED=true test/oas-regression/generate_compile.sh
 
 When Angular validation is enabled, the script runs `npm run webapp:prod` after
 Java compile for builds and
-`npm run jest -- --testPathPattern=openapi-operations|form-crud` for focused
+`npx ng test --coverage` for generated Angular unit coverage. Current JHipster
+applications use the Angular Vitest builder; the direct Angular command avoids
+the optional npm `pretest` hook, and callers can still override
+`ANGULAR_TEST_COMMAND` to target a narrower test command.
 OpenAPI UI tests. This direct Jest invocation avoids the generated `pretest`
 full-tree lint because regression apps are intentionally generated with
 `--skip-prettier`; the separate production build remains the generated Angular
@@ -164,7 +167,7 @@ ARTIFACT_EXCLUDE=DCSA_EBL
 EVOMASTER_ENABLED=true
 FORM_CRUD_GUI_ENABLED=true
 FORM_CRUD_GUI_JEST_ENABLED=true
-FORM_CRUD_GUI_JEST_COMMAND="npx jest --runInBand --coverage --config jest.conf.js"
+FORM_CRUD_GUI_JEST_COMMAND="npx ng test --coverage"
 FORM_CRUD_GUI_JEST_NODE_OPTIONS="--max-old-space-size=6144"
 FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS=900
 FORM_CRUD_GUI_NODE_OPTIONS="--max-old-space-size=6144"

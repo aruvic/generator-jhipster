@@ -19,6 +19,8 @@
 
 import { describe, expect, it } from 'esmocha';
 
+import { mutateData } from '../../lib/utils/object.ts';
+
 import * as entityData from './entity.ts';
 
 import { mutateMockedCompleteData, mutateMockedData, prepareMutationTest } from '#testing';
@@ -32,4 +34,19 @@ describe('mutation object test', () => {
       expect(Object.keys(mutateMockedCompleteData(...data))).toHaveLength(0);
     });
   }
+
+  it('preserves an explicitly plural collection relationship name', () => {
+    const relationship = {
+      relationshipName: 'pets',
+      relationshipType: 'one-to-many',
+    };
+
+    mutateData(relationship, entityData.mutateRelationship);
+
+    expect(relationship).toMatchObject({
+      relationshipFieldNamePlural: 'pets',
+      relationshipNamePlural: 'pets',
+      propertyName: 'pets',
+    });
+  });
 });

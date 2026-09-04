@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+
 import { parse } from 'yaml';
 
 const [, , yamlPath, baseUrl, token, appName, outputDir = '.'] = process.argv;
@@ -151,7 +152,13 @@ function successStatuses(operation, method) {
     .sort((a, b) => a - b);
   if (method === 'post' && codes.includes(201)) return [201, ...codes.filter(code => code !== 201)];
   if (method === 'delete' && codes.includes(204)) return [204, ...codes.filter(code => code !== 204)];
-  return codes.length ? codes : [method === 'post' ? 201 : method === 'delete' ? 204 : 200];
+  return codes.length ? codes : (
+      [
+        method === 'post' ? 201
+        : method === 'delete' ? 204
+        : 200,
+      ]
+    );
 }
 
 function schemaType(schema) {
@@ -175,7 +182,6 @@ function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-
 function schemaHasBooleanFlag(schema, flag, seen = new Set()) {
   const resolved = deref(schema);
   if (!resolved || typeof resolved !== 'object') return false;
@@ -193,7 +199,6 @@ function schemaHasBooleanFlag(schema, flag, seen = new Set()) {
 
   return false;
 }
-
 
 function matchingPropertyName(name, source) {
   if (!name || !source) return undefined;
@@ -227,12 +232,7 @@ function isRequestPayloadMode(mode) {
 
 function hasRequiredPayloadValue(output, requiredProperty, properties, mode) {
   if (isRequestPayloadMode(mode)) {
-    return Boolean(
-      output &&
-        typeof output === 'object' &&
-        !Array.isArray(output) &&
-        output[requiredProperty] !== undefined
-    );
+    return Boolean(output && typeof output === 'object' && !Array.isArray(output) && output[requiredProperty] !== undefined);
   }
 
   return hasRequiredValue(output, requiredProperty, properties);
@@ -290,10 +290,7 @@ function backfillRequiredPayload(output, source, schema, options = {}) {
     const propertyKey = matchingPropertyName(property, properties) ?? property;
     const propertySchema = properties[propertyKey];
     if (hasRequiredPayloadValue(output, property, properties, mode)) {
-      if (
-        propertySchema &&
-        !(isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly'))
-      ) {
+      if (propertySchema && !(isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly'))) {
         sanitizeExistingRequiredPayloadValue(output, property, propertyKey, propertySchema, { mode, full, seen, memo });
       }
       continue;
@@ -304,17 +301,15 @@ function backfillRequiredPayload(output, source, schema, options = {}) {
 
       const sourceKey = matchingPropertyName(propertyKey, source);
       const value =
-        sourceKey === undefined
-          ? payloadFor(propertySchema, { mode, full, seen, memo })
-          : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
+        sourceKey === undefined ?
+          payloadFor(propertySchema, { mode, full, seen, memo })
+        : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
 
       assignRequiredPayloadValue(output, property, propertyKey, value, mode);
     } else if (schema.additionalProperties !== false) {
       const sourceKey = matchingPropertyName(property, source);
       output[property] =
-        sourceKey === undefined
-          ? unknownRequiredPayload(property)
-          : source[sourceKey] ?? unknownRequiredPayload(property);
+        sourceKey === undefined ? unknownRequiredPayload(property) : (source[sourceKey] ?? unknownRequiredPayload(property));
     }
   }
 }
@@ -341,9 +336,9 @@ function backfillSafeOptionalPayload(output, source, schema, options = {}) {
     if (output[property] !== undefined) continue;
     const sourceKey = matchingPropertyName(property, source);
     const value =
-      sourceKey === undefined
-        ? payloadFor(propertySchema, { mode, full, seen, memo })
-        : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
+      sourceKey === undefined ?
+        payloadFor(propertySchema, { mode, full, seen, memo })
+      : sanitizePayloadForSchema(source[sourceKey], propertySchema, { mode, full, seen, memo });
     if (value !== undefined) output[property] = value;
   }
 }
@@ -351,8 +346,7 @@ function backfillSafeOptionalPayload(output, source, schema, options = {}) {
 function hasRootObjectMembers(schema) {
   schema = deref(schema);
   return Boolean(
-    schema &&
-      (Object.keys(schema.properties ?? {}).length || (schema.required ?? []).length || schema.additionalProperties !== undefined)
+    schema && (Object.keys(schema.properties ?? {}).length || (schema.required ?? []).length || schema.additionalProperties !== undefined),
   );
 }
 
@@ -362,7 +356,6 @@ function withoutObjectVariants(schema) {
   const { oneOf: _oneOf, anyOf: _anyOf, discriminator: _discriminator, ...rest } = schema;
   return rest;
 }
-
 
 function collectProperties(schema, seen = new Set()) {
   schema = deref(schema);
@@ -383,7 +376,6 @@ function collectProperties(schema, seen = new Set()) {
   Object.assign(properties, schema.properties ?? {});
   return properties;
 }
-
 
 function collectRequired(schema, seen = new Set()) {
   const schemaName = schemaNameFor(schema);
@@ -451,7 +443,9 @@ function orderedVariantsForValue(schema, value) {
   if (discriminatorVariant) {
     return [
       { variant: discriminatorVariant, score: Number.MAX_SAFE_INTEGER },
-      ...variants.filter(variant => variant !== discriminatorVariant).map(variant => ({ variant, score: variantShapeScore(variant, value) })),
+      ...variants
+        .filter(variant => variant !== discriminatorVariant)
+        .map(variant => ({ variant, score: variantShapeScore(variant, value) })),
     ];
   }
   return variants
@@ -580,7 +574,7 @@ function mappedDiscriminatorSchemaName(discriminatorSchema, discriminatorValue) 
   const mappedRef = discriminatorSchema?.discriminator?.mapping?.[String(discriminatorValue)];
   if (mappedRef) return schemaNameFor({ $ref: mappedRef });
   const variant = [...(discriminatorSchema?.oneOf ?? []), ...(discriminatorSchema?.anyOf ?? [])].find(
-    candidate => schemaNameFor(candidate) === discriminatorValue
+    candidate => schemaNameFor(candidate) === discriminatorValue,
   );
   if (variant) return discriminatorValue;
   return Object.keys(discriminatorSchema?.discriminator?.mapping ?? {}).length ? undefined : discriminatorValue;
@@ -621,11 +615,14 @@ function ensureDiscriminatorValue(payload, schema, targetName) {
   for (const discriminatorSchema of discriminatorSchemasFor(schema, targetName)) {
     const discriminatorName = discriminatorSchema?.discriminator?.propertyName;
     if (!discriminatorName) continue;
-    const schemaUsesDiscriminator = payload[discriminatorName] !== undefined || properties[discriminatorName] || required.has(discriminatorName);
+    const schemaUsesDiscriminator =
+      payload[discriminatorName] !== undefined || properties[discriminatorName] || required.has(discriminatorName);
     if (!schemaUsesDiscriminator) continue;
     const propertySchema = discriminatorPropertySchema(discriminatorSchema);
     const discriminatorTypeErrors =
-      payload[discriminatorName] === undefined || !propertySchema ? [] : validateValue(payload[discriminatorName], propertySchema, { mode: 'request' });
+      payload[discriminatorName] === undefined || !propertySchema ?
+        []
+      : validateValue(payload[discriminatorName], propertySchema, { mode: 'request' });
     if (
       payload[discriminatorName] !== undefined &&
       discriminatorTypeErrors.length === 0 &&
@@ -718,13 +715,22 @@ function sanitizeKnownObjectProperties(output, schema, options = {}) {
   for (const [property, propertyValue] of Object.entries(output)) {
     const propertyKey = matchingPropertyName(property, properties);
     const propertySchema = propertyKey ? properties[propertyKey] : undefined;
-    if (!propertySchema) continue;
+    // Request examples often include response-only or stale fields. Generated DTOs
+    // bind only declared request members, unless the OAS explicitly permits a map.
+    if (!propertySchema) {
+      if (isRequestPayloadMode(mode) && Object.keys(properties).length && schema.additionalProperties === undefined) {
+        delete output[property];
+      }
+      continue;
+    }
     if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) {
       delete output[property];
       continue;
     }
     const sanitizedValue = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
-    if (sanitizedValue !== undefined) output[property] = sanitizedValue;
+    if (sanitizedValue === undefined) continue;
+    if (property !== propertyKey) delete output[property];
+    output[propertyKey] = sanitizedValue;
   }
   return output;
 }
@@ -762,15 +768,21 @@ function payloadFor(schema, options = {}) {
     }
     const variant = chooseVariant(schema);
     if (variant) {
-      const payload = hasRootObjectMembers(schema)
-        ? mergeObjects(payloadFor(withoutObjectVariants(schema), { mode, full, seen, memo }), payloadFor(variant, { mode, full, seen, memo }))
+      const payload =
+        hasRootObjectMembers(schema) ?
+          mergeObjects(
+            payloadFor(withoutObjectVariants(schema), { mode, full, seen, memo }),
+            payloadFor(variant, { mode, full, seen, memo }),
+          )
         : payloadFor(variant, { mode, full, seen, memo });
       return remember(ensureDiscriminatorValue(payload, schema, schemaNameFor(variant) ?? schemaName));
     }
     if (schema.enum || ['integer', 'number', 'boolean', 'string'].includes(schemaType(schema))) return remember(primitivePayload(schema));
     if (schemaType(schema) === 'array') {
       const count = Math.max(schema.minItems ?? 1, full ? 1 : 0);
-      const values = Array.from({ length: count }, () => payloadFor(schema.items ?? {}, { mode, full, seen, memo })).filter(value => value !== undefined);
+      const values = Array.from({ length: count }, () => payloadFor(schema.items ?? {}, { mode, full, seen, memo })).filter(
+        value => value !== undefined,
+      );
       return remember(values.length ? values : undefined);
     }
     const properties = collectProperties(schema);
@@ -778,11 +790,11 @@ function payloadFor(schema, options = {}) {
     const output = {};
     const entries = Object.entries(properties).filter(([, propertySchema]) => !schemaHasBooleanFlag(propertySchema, 'readOnly'));
     const selectedEntries =
-      mode === 'patch'
-        ? entries.filter(([property]) => required.has(property)).slice(0, 1).length
-          ? entries.filter(([property]) => required.has(property)).slice(0, 1)
-          : entries.slice(0, 1)
-        : entries.filter(([property, propertySchema]) => full || required.has(property) || deref(propertySchema)?.enum);
+      mode === 'patch' ?
+        entries.filter(([property]) => required.has(property)).slice(0, 1).length ?
+          entries.filter(([property]) => required.has(property)).slice(0, 1)
+        : entries.slice(0, 1)
+      : entries.filter(([property, propertySchema]) => full || required.has(property) || deref(propertySchema)?.enum);
     for (const [property, propertySchema] of selectedEntries) {
       const value = payloadFor(propertySchema, { mode, full, seen, memo });
       if (value !== undefined) output[property] = value;
@@ -804,7 +816,8 @@ function payloadFor(schema, options = {}) {
     }
     backfillSafeOptionalPayload(output, {}, schema, { mode, full, seen, memo });
     if (!Object.keys(output).length && schema.additionalProperties) {
-      output.additionalProperty = schema.additionalProperties === true ? 'sample' : payloadFor(schema.additionalProperties, { mode, full, seen, memo });
+      output.additionalProperty =
+        schema.additionalProperties === true ? 'sample' : payloadFor(schema.additionalProperties, { mode, full, seen, memo });
     }
     return remember(ensureDiscriminatorValue(output, schema, schemaName));
   } finally {
@@ -824,7 +837,10 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
   schema = deref(schema);
   try {
     if (!schema || value === undefined) return value;
-    if (value === null) return schema.nullable || schema.type === 'null' || schema.type?.includes?.('null') ? null : payloadFor(schema, { mode, full, seen, memo });
+    if (value === null)
+      return schema.nullable || schema.type === 'null' || schema.type?.includes?.('null') ?
+          null
+        : payloadFor(schema, { mode, full, seen, memo });
     if (schema.allOf?.length) {
       const output = schema.allOf
         .map(part => sanitizePayloadForSchema(value, part, { mode, full, seen, memo }))
@@ -837,10 +853,11 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
     }
     const variant = chooseVariant(schema, value);
     if (variant) {
-      const output = hasRootObjectMembers(schema)
-        ? mergeObjects(
+      const output =
+        hasRootObjectMembers(schema) ?
+          mergeObjects(
             sanitizePayloadForSchema(value, withoutObjectVariants(schema), { mode, full, seen, memo }),
-            sanitizePayloadForSchema(value, variant, { mode, full, seen, memo })
+            sanitizePayloadForSchema(value, variant, { mode, full, seen, memo }),
           )
         : sanitizePayloadForSchema(value, variant, { mode, full, seen, memo });
       return ensureDiscriminatorValue(output, schema, schemaNameFor(variant) ?? schemaName);
@@ -859,15 +876,16 @@ function sanitizePayloadForSchema(value, schema, options = {}) {
     const required = collectRequired(schema);
     const output = {};
     for (const [property, propertyValue] of Object.entries(value)) {
-      const propertySchema = properties[property];
+      const propertyKey = matchingPropertyName(property, properties);
+      const propertySchema = propertyKey ? properties[propertyKey] : undefined;
       if (schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
       if (propertySchema) {
-        output[property] = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
-      } else if (schema.additionalProperties !== false) {
+        output[propertyKey] = sanitizePayloadForSchema(propertyValue, propertySchema, { mode, full, seen, memo });
+      } else if (!isRequestPayloadMode(mode) || !Object.keys(properties).length || schema.additionalProperties !== undefined) {
         output[property] =
-          schema.additionalProperties === undefined || schema.additionalProperties === true
-            ? propertyValue
-            : sanitizePayloadForSchema(propertyValue, schema.additionalProperties, { mode, full, seen, memo });
+          schema.additionalProperties === undefined || schema.additionalProperties === true ?
+            propertyValue
+          : sanitizePayloadForSchema(propertyValue, schema.additionalProperties, { mode, full, seen, memo });
       }
     }
     const shouldBackfill = full || mode !== 'patch';
@@ -918,7 +936,8 @@ function validateValue(value, schema, options = {}) {
     if (!matched) errors.push(`${pointerFor(pointer)} did not match any composed schema`);
     return errors;
   }
-  if (schema.enum?.length && !schema.enum.includes(value)) errors.push(`${pointerFor(pointer)} expected enum value ${schema.enum.join(', ')}`);
+  if (schema.enum?.length && !schema.enum.includes(value))
+    errors.push(`${pointerFor(pointer)} expected enum value ${schema.enum.join(', ')}`);
   const type = schemaType(schema);
   if (type === 'integer' && !Number.isInteger(value)) errors.push(`${pointerFor(pointer)} expected integer`);
   if (type === 'number' && typeof value !== 'number') errors.push(`${pointerFor(pointer)} expected number`);
@@ -929,8 +948,10 @@ function validateValue(value, schema, options = {}) {
     if (schema.maximum !== undefined && value > schema.maximum) errors.push(`${pointerFor(pointer)} expected <= ${schema.maximum}`);
   }
   if (typeof value === 'string') {
-    if (schema.minLength !== undefined && value.length < schema.minLength) errors.push(`${pointerFor(pointer)} expected minLength ${schema.minLength}`);
-    if (schema.maxLength !== undefined && value.length > schema.maxLength) errors.push(`${pointerFor(pointer)} expected maxLength ${schema.maxLength}`);
+    if (schema.minLength !== undefined && value.length < schema.minLength)
+      errors.push(`${pointerFor(pointer)} expected minLength ${schema.minLength}`);
+    if (schema.maxLength !== undefined && value.length > schema.maxLength)
+      errors.push(`${pointerFor(pointer)} expected maxLength ${schema.maxLength}`);
     if (schema.pattern) {
       try {
         if (!new RegExp(schema.pattern).test(value)) errors.push(`${pointerFor(pointer)} expected pattern ${schema.pattern}`);
@@ -943,9 +964,13 @@ function validateValue(value, schema, options = {}) {
     if (!Array.isArray(value)) {
       errors.push(`${pointerFor(pointer)} expected array`);
     } else {
-      if (schema.minItems !== undefined && value.length < schema.minItems) errors.push(`${pointerFor(pointer)} expected minItems ${schema.minItems}`);
-      if (schema.maxItems !== undefined && value.length > schema.maxItems) errors.push(`${pointerFor(pointer)} expected maxItems ${schema.maxItems}`);
-      value.forEach((item, index) => errors.push(...validateValue(item, schema.items ?? {}, { mode, pointer: [...pointer, index], depth: depth + 1 })));
+      if (schema.minItems !== undefined && value.length < schema.minItems)
+        errors.push(`${pointerFor(pointer)} expected minItems ${schema.minItems}`);
+      if (schema.maxItems !== undefined && value.length > schema.maxItems)
+        errors.push(`${pointerFor(pointer)} expected maxItems ${schema.maxItems}`);
+      value.forEach((item, index) =>
+        errors.push(...validateValue(item, schema.items ?? {}, { mode, pointer: [...pointer, index], depth: depth + 1 })),
+      );
     }
   }
   if (type === 'object') {
@@ -973,9 +998,12 @@ function validateValue(value, schema, options = {}) {
         if (propertyValue === null && !required.has(property)) continue;
         if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
         if (mode === 'response' && schemaHasBooleanFlag(propertySchema, 'writeOnly')) continue;
-        if (propertySchema) errors.push(...validateValue(propertyValue, propertySchema, { mode, pointer: [...pointer, property], depth: depth + 1 }));
+        if (propertySchema)
+          errors.push(...validateValue(propertyValue, propertySchema, { mode, pointer: [...pointer, property], depth: depth + 1 }));
         else if (schema.additionalProperties && schema.additionalProperties !== true) {
-          errors.push(...validateValue(propertyValue, schema.additionalProperties, { mode, pointer: [...pointer, property], depth: depth + 1 }));
+          errors.push(
+            ...validateValue(propertyValue, schema.additionalProperties, { mode, pointer: [...pointer, property], depth: depth + 1 }),
+          );
         }
       }
     }
@@ -1055,14 +1083,14 @@ function identityValueFor(paramName, json, locationHeader) {
   const tokenCompatible = properties.find(property => {
     const propertyTokens = nameTokens(property.name);
     return (
-      paramTokens.length > 1 &&
-      propertyTokens.at(-1) === paramTokens.at(-1) &&
-      paramTokens.every(token => propertyTokens.includes(token))
+      paramTokens.length > 1 && propertyTokens.at(-1) === paramTokens.at(-1) && paramTokens.every(token => propertyTokens.includes(token))
     );
   });
   if (tokenCompatible) return tokenCompatible.value;
   if (normalizedParam === 'id') {
-    const idLike = properties.find(property => /(^|[_-])id$/i.test(property.name) || /id$/i.test(property.name) || /reference$/i.test(property.name));
+    const idLike = properties.find(
+      property => /(^|[_-])id$/i.test(property.name) || /id$/i.test(property.name) || /reference$/i.test(property.name),
+    );
     if (idLike) return idLike.value;
   }
   if (normalizedParam.endsWith('id')) {
@@ -1158,7 +1186,8 @@ function serializeError(error) {
 async function request(method, resolvedPath, body, requestHeaders = {}) {
   const headers = { Accept: 'application/json', Connection: 'close', ...requestHeaders };
   if (token && token !== '-') headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined && !Object.keys(headers).some(header => /^content-type$/i.test(header))) headers['Content-Type'] = 'application/json';
+  if (body !== undefined && !Object.keys(headers).some(header => /^content-type$/i.test(header)))
+    headers['Content-Type'] = 'application/json';
   const response = await fetch(urlFor(resolvedPath), {
     method: method.toUpperCase(),
     headers,
@@ -1228,11 +1257,7 @@ function ensureShippingInstructionEquipmentReference(payload) {
   for (const equipment of payload.utilizedTransportEquipments) {
     if (!equipment || typeof equipment !== 'object' || Array.isArray(equipment)) continue;
 
-    if (
-      equipment.equipmentReference === undefined ||
-      equipment.equipmentReference === null ||
-      equipment.equipmentReference === ''
-    ) {
+    if (equipment.equipmentReference === undefined || equipment.equipmentReference === null || equipment.equipmentReference === '') {
       equipment.equipmentReference = reference;
     }
   }
@@ -1261,20 +1286,19 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
   const schema = requestSchemaFor(operation);
   const explicit = schema ? explicitExample(operation, schema) : undefined;
   let payload =
-    schema && bodyMode !== 'none'
-      ? explicit !== undefined
-        ? sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
-        : payloadFor(schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
-      : undefined;
+    schema && bodyMode !== 'none' ?
+      explicit !== undefined ?
+        sanitizePayloadForSchema(explicit, schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
+      : payloadFor(schema, { mode: bodyMode, full: bodyMode !== 'patch', memo: payloadMemo })
+    : undefined;
   const requestHeaders = operationRequestHeaders(pathItem, operation);
   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
   payload = fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload);
   evidenceSequence += 1;
   const key = operationKey(method, rawPath, operation);
   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);
-  const headersFile = Object.keys(requestHeaders).length
-    ? writeJson(path.join(outputDir, 'payloads', `${key}.headers.json`), requestHeaders)
-    : undefined;
+  const headersFile =
+    Object.keys(requestHeaders).length ? writeJson(path.join(outputDir, 'payloads', `${key}.headers.json`), requestHeaders) : undefined;
   let payloadPreparationEndEpochMs = Date.now();
   if (schema && payload !== undefined) {
     const requestErrors = validateValue(payload, schema, { mode: 'request' });
@@ -1391,7 +1415,9 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
       responseStatus: response.status,
       responseBody: response.json ?? response.text,
     });
-    throw new Error(`${appName} ${method.toUpperCase()} ${resolvedPath} expected ${expected.join('/')} got ${response.status}: ${response.text}`);
+    throw new Error(
+      `${appName} ${method.toUpperCase()} ${resolvedPath} expected ${expected.join('/')} got ${response.status}: ${response.text}`,
+    );
   }
   const responseSchema = responseSchemaFor(operation, response.status);
   if (responseSchema && response.json !== undefined) {
@@ -1445,7 +1471,8 @@ async function main() {
   }
 
   for (const item of operationsFor('get').filter(item => /\{[^}]+}/.test(item.rawPath))) {
-    if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
+    if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
+      await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
   }
 
   for (const method of ['patch', 'put']) {
@@ -1458,27 +1485,43 @@ async function main() {
 
   if (!skipDelete) {
     for (const item of operationsFor('delete')) {
-      if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
+      if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
+        await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
     }
   }
 
   const slowOperations = [...results]
     .sort((left, right) => (right.operationDurationMs ?? right.durationMs ?? 0) - (left.operationDurationMs ?? left.durationMs ?? 0))
     .slice(0, 10)
-    .map(({ method, path, status, expected, durationMs, operationDurationMs, payloadPreparationDurationMs, requestDurationMs, operationStartIso, operationEndIso, startIso, endIso }) => ({
-      method,
-      path,
-      status,
-      expected,
-      durationMs,
-      operationDurationMs,
-      payloadPreparationDurationMs,
-      requestDurationMs,
-      operationStartIso,
-      operationEndIso,
-      startIso,
-      endIso,
-    }));
+    .map(
+      ({
+        method,
+        path,
+        status,
+        expected,
+        durationMs,
+        operationDurationMs,
+        payloadPreparationDurationMs,
+        requestDurationMs,
+        operationStartIso,
+        operationEndIso,
+        startIso,
+        endIso,
+      }) => ({
+        method,
+        path,
+        status,
+        expected,
+        durationMs,
+        operationDurationMs,
+        payloadPreparationDurationMs,
+        requestDurationMs,
+        operationStartIso,
+        operationEndIso,
+        startIso,
+        endIso,
+      }),
+    );
   const summary = {
     appName,
     artifact: yamlPath,

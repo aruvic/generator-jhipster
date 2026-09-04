@@ -61,6 +61,23 @@ const routes: Routes = [
     title: 'login.title',
   },
 <%_ } _%>
+<%_ if (typeof openApiOperations !== 'undefined' && openApiOperations.length) { _%>
+  {
+    path: 'openapi-operations',
+    loadComponent: () => import('./openapi-operations/openapi-operations'),
+    canActivate: [userRouteAccessService],
+  },
+  {
+    path: 'form-crud/:operationId',
+    loadComponent: () => import('./form-crud/form-crud'),
+    canActivate: [userRouteAccessService],
+  },
+  {
+    path: 'form-crud',
+    loadComponent: () => import('./form-crud/form-crud'),
+    canActivate: [userRouteAccessService],
+  },
+<%_ } _%>
 <%_ if (microfrontend) { _%>
   <%_ for (const remote of microfrontends) { _%>
   {

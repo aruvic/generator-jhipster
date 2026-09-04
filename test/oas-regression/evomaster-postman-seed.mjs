@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+
 import { parse } from 'yaml';
 
 const [, , summaryPath, outputPath, basePath = '/api', openApiPath] = process.argv;
@@ -27,7 +28,10 @@ function readOpenApi(filePath) {
 }
 
 function normalizePathPart(value) {
-  return `/${String(value ?? '').split('/').filter(Boolean).join('/')}`;
+  return `/${String(value ?? '')
+    .split('/')
+    .filter(Boolean)
+    .join('/')}`;
 }
 
 function prefixedPath(rawPath) {
@@ -139,7 +143,9 @@ function chooseVariant(schema, value) {
 }
 
 function normalizeFraction(value) {
-  return String(value ?? '').padEnd(3, '0').slice(0, 3);
+  return String(value ?? '')
+    .padEnd(3, '0')
+    .slice(0, 3);
 }
 
 function normalizeDateTimeForEvoMaster(value) {
@@ -245,7 +251,9 @@ function operationForResult(result) {
   if (!openApi?.paths || !method || !result?.path) return undefined;
   const exact = openApi.paths[result.path]?.[method];
   if (exact) return exact;
-  const matchedPath = Object.entries(openApi.paths).find(([templatePath, pathItem]) => pathMatches(templatePath, result.path) && pathItem?.[method]);
+  const matchedPath = Object.entries(openApi.paths).find(
+    ([templatePath, pathItem]) => pathMatches(templatePath, result.path) && pathItem?.[method],
+  );
   return matchedPath?.[1]?.[method];
 }
 

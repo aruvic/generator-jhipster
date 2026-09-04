@@ -137,7 +137,11 @@ export type Source = JavaSource &
      */
     addApplicationYamlDocument?(document: string): void;
     addEntryToCache?(entry: { entry: string }): void;
-    addEntityToCache?(entry: { entityAbsoluteClass: string; relationships?: { propertyName: string; collection: boolean }[] }): void;
+    addEntityToCache?(entry: {
+      entityAbsoluteClass: string;
+      relationships?: { propertyName: string; collection: boolean }[];
+      skipEntityCache?: boolean;
+    }): void;
   };
 
 type DatabaseTypeApplication = OptionWithDerivedProperties<'databaseType', ['sql', 'no', 'cassandra', 'couchbase', 'mongodb', 'neo4j']>;

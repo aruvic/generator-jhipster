@@ -300,9 +300,7 @@ describe('Mapper Context Builder', () => {
       };
 
       const contexts = generateMapperContexts(spec, 'eu.example.app');
-      const taxCertificateMethod = contexts
-        .flatMap(c => c.methods)
-        .find(m => m.methodName === 'toTaxExemptionCertificateEntity');
+      const taxCertificateMethod = contexts.flatMap(c => c.methods).find(m => m.methodName === 'toTaxExemptionCertificateEntity');
 
       expect(taxCertificateMethod).toBeDefined();
       expect(taxCertificateMethod?.annotations).toContain('@Mapping(target = "attachment", ignore = true)');

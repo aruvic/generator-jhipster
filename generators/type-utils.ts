@@ -323,7 +323,7 @@ const addImport = (imports: Set<string>, fqcn?: string) => {
   imports.add(fqcn);
 };
 
-const mergeImports = (...sets: Array<Set<string>>): Set<string> => {
+const mergeImports = (...sets: Set<string>[]): Set<string> => {
   const merged = new Set<string>();
   for (const set of sets) {
     for (const value of set) {
@@ -413,7 +413,7 @@ const resolveJavaTypeInternal = (
   const mapType = options.mapType ?? DEFAULT_MAP_TYPE.simple;
   const mapFqcn = options.mapFqcn ?? DEFAULT_MAP_TYPE.fqcn;
   const modelPrefix = options.modelPrefix ?? 'Model';
-  const dtoPackage = options.dtoPackage;
+  const { dtoPackage } = options;
 
   if (!schema) {
     return createJavaType({ fullType: 'Void', baseType: 'Void', rawType: 'Void', isPrimitive: true });
@@ -485,7 +485,7 @@ const resolveJavaTypeInternal = (
   }
 
   const type = schema.type ?? (schema.enum ? typeof schema.enum[0] : undefined);
-  const format = schema.format;
+  const { format } = schema;
 
   switch (type) {
     case 'integer': {

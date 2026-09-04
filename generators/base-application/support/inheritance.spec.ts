@@ -17,17 +17,15 @@
  * limitations under the License.
  */
 
-import { describe, it } from 'esmocha';
-
-import { expect } from 'chai';
-import sinon from 'sinon';
+import { describe, expect, it } from 'esmocha';
 
 import { linkEntityInheritance } from './inheritance.ts';
 
 describe('generator - base-application - support - inheritance', () => {
   describe('linkEntityInheritance', () => {
     it('marks every descendant of a polymorphic root as a polymorphic child', () => {
-      const logger = { warn: sinon.spy() };
+      const warnings: unknown[][] = [];
+      const logger = { warn: (...args: unknown[]) => warnings.push(args) };
       const root: any = {
         name: 'PartyOrPartyRole',
         fields: [],
@@ -53,15 +51,16 @@ describe('generator - base-application - support - inheritance', () => {
 
       linkEntityInheritance([root, intermediate, child], logger as any);
 
-      expect(root.polymorphicRoot).to.be.true;
-      expect(intermediate.polymorphicChild).to.be.true;
-      expect(child.polymorphicChild).to.be.true;
-      expect(child.discriminatorValue).to.equal('party-ref');
-      expect(logger.warn.callCount).to.equal(0);
+      expect(root.polymorphicRoot).toBe(true);
+      expect(intermediate.polymorphicChild).toBe(true);
+      expect(child.polymorphicChild).toBe(true);
+      expect(child.discriminatorValue).toBe('party-ref');
+      expect(warnings).toHaveLength(0);
     });
 
     it('resolves a polymorphic ancestor declared after its descendants', () => {
-      const logger = { warn: sinon.spy() };
+      const warnings: unknown[][] = [];
+      const logger = { warn: (...args: unknown[]) => warnings.push(args) };
       const root: any = {
         name: 'PlaceRefOrValue',
         fields: [],
@@ -87,11 +86,11 @@ describe('generator - base-application - support - inheritance', () => {
 
       linkEntityInheritance([intermediate, child, root], logger as any);
 
-      expect(root.polymorphicRoot).to.be.true;
-      expect(intermediate.polymorphicChild).to.be.true;
-      expect(child.polymorphicChild).to.be.true;
-      expect(child.discriminatorValue).to.equal('location');
-      expect(logger.warn.callCount).to.equal(0);
+      expect(root.polymorphicRoot).toBe(true);
+      expect(intermediate.polymorphicChild).toBe(true);
+      expect(child.polymorphicChild).toBe(true);
+      expect(child.discriminatorValue).toBe('location');
+      expect(warnings).toHaveLength(0);
     });
   });
 });

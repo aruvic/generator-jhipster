@@ -1,8 +1,10 @@
 import { before, describe, it } from 'esmocha';
 
-import { defaultHelpers as helpers, runResult } from '../../lib/testing/index.ts';
+import type { ConfigAll } from '../../../../lib/types/command-all.d.ts';
 
-const GENERATOR = 'jhipster:spring-data-relational';
+import { defaultHelpers as helpers, runResult } from '#testing';
+
+const GENERATOR = 'jhipster:spring-boot:data-relational';
 
 const applicationConfig = {
   baseName: 'inheritance',
@@ -18,7 +20,7 @@ const applicationConfig = {
   packageFolder: 'com/mycompany/myapp',
   nativeLanguage: 'en',
   languages: ['en'],
-};
+} satisfies Partial<ConfigAll>;
 
 const attachmentRoot = {
   name: 'AttachmentRefOrValue',
@@ -68,25 +70,6 @@ describe(`generator - ${GENERATOR} hibernate cache inheritance`, () => {
     const childPath = 'src/main/java/com/mycompany/myapp/domain/Attachment.java';
 
     runResult.assertFileContent(rootPath, '@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)');
-    const childSnapshotMap = runResult.getStateSnapshot('src/main/java/**/Attachment.java');
-    const childSnapshot = Object.values(childSnapshotMap)[0];
-    if (childSnapshot) {
-      // eslint-disable-next-line no-console
-      console.log(childSnapshot.contents);
-    }
-    if (runResult.entities?.Attachment) {
-      // eslint-disable-next-line no-console
-      console.log(
-        'extends',
-        runResult.entities.Attachment.extends,
-        'parent',
-        runResult.entities.Attachment.parentEntity?.name,
-        'polymorphicChild',
-        runResult.entities.Attachment.polymorphicChild,
-        'hasParentEntity',
-        runResult.entities.Attachment.hasParentEntity,
-      );
-    }
     runResult.assertNoFileContent(childPath, '@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)');
   });
 });

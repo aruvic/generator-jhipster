@@ -92,7 +92,7 @@ describe('FormCrud', () => {
   }
 
   function formControlForBodyField(field: OpenApiSchemaField): MutableFormControl | null {
-    return comp.form.get(`body.${field.name}`) as MutableFormControl | null;
+    return comp.form.get(['body', field.name]) as MutableFormControl | null;
   }
 
   function clientValidValueForField(field: OpenApiSchemaField): unknown {

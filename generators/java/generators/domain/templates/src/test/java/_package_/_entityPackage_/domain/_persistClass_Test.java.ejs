@@ -18,25 +18,24 @@
 -%>
 package <%- entityAbsolutePackage %>.domain;
 
-<%_
-const findFirstConcreteChildEntity = entities => {
-  if (!Array.isArray(entities)) return undefined;
-  for (const childEntity of entities) {
-    if (childEntity && !childEntity.abstractClass) return childEntity;
-  }
-  for (const childEntity of entities) {
-    const found = findFirstConcreteChildEntity(childEntity?.childEntities);
-    if (found) return found;
-  }
-  return undefined;
-};
-const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
-const instantiationExpression = instantiationChildEntity
-  ? `new ${instantiationChildEntity.persistClass}()`
-  : abstractClass
-    ? `new ${persistClass}() {}`
-    : `new ${persistClass}()`;
-const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
+<%_ const findFirstConcreteChildEntity = (entities) => {
+      if (!Array.isArray(entities)) return undefined;
+      for (const childEntity of entities) {
+        if (childEntity && !childEntity.abstractClass) return childEntity;
+      }
+      for (const childEntity of entities) {
+        const found = findFirstConcreteChildEntity(childEntity?.childEntities);
+        if (found) return found;
+      }
+      return undefined;
+    };
+    const instantiationChildEntity = abstractClass ? findFirstConcreteChildEntity(childEntities) : undefined;
+    const instantiationExpression = instantiationChildEntity
+      ? `new ${instantiationChildEntity.persistClass}()`
+      : abstractClass
+      ? `new ${persistClass}() {}`
+      : `new ${persistClass}()`;
+    const needsInstantiationImport = instantiationChildEntity && instantiationChildEntity.entityPackage !== entityPackage;
 _%>
 import static <%- entityAbsolutePackage %>.domain.<%- persistClass %>TestSamples.*;
 <%_ for (const otherEntity of otherEntities.filter(otherEntity => !otherEntity.builtIn)) { _%>
@@ -49,13 +48,13 @@ import <%- otherEntity.entityAbsolutePackage %>.domain.<%- otherEntity.persistCl
 import <%- instantiationChildEntity.entityAbsolutePackage %>.domain.<%- instantiationChildEntity.persistClass %>;
 <%_ } _%>
 <%_ if (relationships.some(relationship => relationship.collection)) { _%>
-<%_ if (enableSwaggerCodegen) { _%>
+  <%_ if (enableSwaggerCodegen) { _%>
 import java.util.ArrayList;
 import java.util.List;
-<%_ } else { _%>
+  <%_ } else { _%>
 import java.util.HashSet;
 import java.util.Set;
-<%_ } _%>
+  <%_ } _%>
 <%_ } _%>
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -92,12 +91,10 @@ class <%- persistClass %>Test {
         assertThat(<%- persistInstance %>).hasSameHashCodeAs(<%- persistInstance %>1);
     }
 <%_ } _%>
-<%_
-const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
-const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
-
-for (const relationship of relationships.filter(rel => !rel.otherEntity.builtIn && (!embedded || (rel.otherEntity.embedded && rel.ownerSide)))) {
+<%_ const relationshipCollectionType = enableSwaggerCodegen ? 'List' : 'Set';
+    const relationshipCollectionImpl = enableSwaggerCodegen ? 'ArrayList' : 'HashSet';
 _%>
+<%_ for (const relationship of relationships.filter(rel => !rel.otherEntity.builtIn && (!embedded || (rel.otherEntity.embedded && rel.ownerSide)))) { _%>
 
     @Test
     void <%- relationship.relationshipName %>Test() {

@@ -24,20 +24,20 @@ import ejs from 'ejs';
 
 import type { Application as SpringBootApplication } from '../types.ts';
 
-import { collectImports, generateMapperContexts } from './mapper-context-builder.ts';
-import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 import { generateHybridMappers } from './hybrid-mapper-generator.ts';
+import { collectImports, generateMapperContexts } from './mapper-context-builder.ts';
 import { OpenApiEntityMatcher } from './openapi-entity-matcher.ts';
 import {
-  clearDtoNameOverrides,
   clearDomainNameOverrides,
+  clearDtoNameOverrides,
   getOpenApiModelNameMappings,
   normalizeTypeName,
   parseOpenAPISpec,
-  registerDtoNameOverride,
   registerDomainNameOverride,
+  registerDtoNameOverride,
   stripDtoSuffix,
 } from './openapi-mapper-generator.ts';
+import { generateUnifiedMappers } from './unified-mapper-generator.ts';
 
 /**
  * Generate MapStruct mappers from OpenAPI spec
@@ -85,23 +85,18 @@ export async function generateMapStructMappers(generator: any, application: Spri
 
   const javaPackageDir =
     application.javaPackageSrcDir ??
-    (application.srcMainJava && application.packageNameWithSlashes
-      ? join(application.srcMainJava, application.packageNameWithSlashes)
-      : undefined);
+    (application.srcMainJava && application.packageNameWithSlashes ?
+      join(application.srcMainJava, application.packageNameWithSlashes)
+    : undefined);
 
   const domainInspector = javaPackageDir ? (entityName: string) => inspectDomainClass(generator, javaPackageDir, entityName) : undefined;
 
-  const existingEntities: Array<{ name?: string; definition?: any }> = generator.getExistingEntities?.() ?? [];
+  const existingEntities: { name?: string; definition?: any }[] = generator.getExistingEntities?.() ?? [];
   const existingEntityNames = new Set<string>();
   const entityDefinitionsByName = new Map<string, any>();
   for (const entry of existingEntities) {
     const entityDef = entry?.definition ?? entry;
-    const candidates = [
-      entry?.name,
-      entityDef?.entityClass,
-      entityDef?.name,
-      entityDef?.entityNameCapitalized,
-    ];
+    const candidates = [entry?.name, entityDef?.entityClass, entityDef?.name, entityDef?.entityNameCapitalized];
     for (const candidate of candidates) {
       const normalized = candidate ? normalizeTypeName(candidate) : undefined;
       if (normalized) {
@@ -162,7 +157,7 @@ export async function generateMapStructMappers(generator: any, application: Spri
       abstractSchemas,
       entityDefinitionsByName,
     );
-    
+
     mapperContexts = [];
 
     mapperContexts.push({
@@ -336,7 +331,9 @@ function writeOpenApiOneOfDeserializerConfiguration(generator: any, javaPackageD
   }
 
   if (!templatePath) {
-    generator.log.warn(`MapStruct: could not resolve template at ${relativeTemplatePath}, skipping OpenAPI oneOf deserializer configuration`);
+    generator.log.warn(
+      `MapStruct: could not resolve template at ${relativeTemplatePath}, skipping OpenAPI oneOf deserializer configuration`,
+    );
     return;
   }
 

@@ -17,8 +17,12 @@
  * limitations under the License.
  */
 
-import type { MapperContext, MapperMethod, OpenAPIOperation, ParsedOpenAPISpec, PolymorphicTypeInfo } from './openapi-mapper-generator.ts';
 import {
+  type MapperContext,
+  type MapperMethod,
+  type OpenAPIOperation,
+  type ParsedOpenAPISpec,
+  type PolymorphicTypeInfo,
   buildDomainFqcn,
   buildDtoFqcn,
   buildSchemaGraph,
@@ -252,16 +256,7 @@ function createOutputMapper(
 
     const schemaProperties = collectSchemaProperties(schemaName, schema, allSchemas);
 
-    const method = createMappingMethod(
-      baseName,
-      domainFqcn,
-      dtoFqcn,
-      'domain-to-dto',
-      false,
-      false,
-      schemaProperties,
-      allSchemas,
-    );
+    const method = createMappingMethod(baseName, domainFqcn, dtoFqcn, 'domain-to-dto', false, false, schemaProperties, allSchemas);
 
     methods.push(method);
 
@@ -471,30 +466,25 @@ export function collectImports(context: MapperContext): string[] {
     imports.add('org.mapstruct.SubclassExhaustiveStrategy');
   }
 
-  // Add type imports from methods (only domain types; DTOs are always fully-qualified)
+  const addTypeImport = (type: string) => {
+    if (type.includes('.') && !type.startsWith('java.lang.') && !type.startsWith(`${context.packageName}.`)) {
+      imports.add(type);
+    }
+  };
+
+  // Add type imports from methods
   for (const method of context.methods) {
-    // Only import domain types, never DTO types
-    if (method.sourceType.includes('.domain.')) {
-      imports.add(method.sourceType);
-    }
-    if (method.targetType.includes('.domain.')) {
-      imports.add(method.targetType);
-    }
+    addTypeImport(method.sourceType);
+    addTypeImport(method.targetType);
   }
 
-  // Add polymorphic type imports (domain only; DTOs fully-qualified)
+  // Add polymorphic type imports
   if (context.polymorphicTypes) {
     for (const polymorphic of context.polymorphicTypes) {
-      if (polymorphic.baseType.includes('.domain.')) {
-        imports.add(polymorphic.baseType);
-      }
+      addTypeImport(polymorphic.baseType);
       for (const subtype of polymorphic.subtypes) {
-        if (subtype.sourceType.includes('.domain.')) {
-          imports.add(subtype.sourceType);
-        }
-        if (subtype.targetType.includes('.domain.')) {
-          imports.add(subtype.targetType);
-        }
+        addTypeImport(subtype.sourceType);
+        addTypeImport(subtype.targetType);
       }
     }
   }
