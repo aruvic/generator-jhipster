@@ -141,8 +141,8 @@ describe(`generator - ${generator}`, () => {
       );
       result.assertFileContent('src/main/java/com/mycompany/myapp/domain/IssuanceManifest.java', 'seteBLVisualisationByCarrierChecksum');
       result.assertNoFileContent('src/main/java/com/mycompany/myapp/domain/IssuanceManifest.java', 'setEBLVisualisationByCarrierChecksum');
-      result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'getEBLVisualisationByCarrier');
-      result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'geteBLVisualisationByCarrier');
+      result.assertFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'geteBLVisualisationByCarrier');
+      result.assertNoFileContent('src/test/java/com/mycompany/myapp/domain/IssuanceRequestAsserts.java', 'getEBLVisualisationByCarrier');
     });
   });
 

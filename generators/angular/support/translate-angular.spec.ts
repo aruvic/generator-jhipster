@@ -253,6 +253,21 @@ title: 'translated-value-activate.title2-1',
 "
 `);
         });
+
+        it('should translate repeated title keys exactly once', () => {
+          const body = `
+title: 'error.title',
+title: 'error.title',
+title: 'error.title',
+`;
+          expect(replaceAngularTranslations(body, extension)).toMatchInlineSnapshot(`
+"
+title: 'translated-value-error.title-0',
+title: 'translated-value-error.title-1',
+title: 'translated-value-error.title-2',
+"
+`);
+        });
       });
 
       describe('.routes.ts files', () => {

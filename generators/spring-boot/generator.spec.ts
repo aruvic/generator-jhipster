@@ -202,6 +202,10 @@ describe(`generator - ${generator}`, () => {
       expect(runResult.getSnapshot('src/main/java/**/web/api/impl/*ApiDelegateImpl.java')).toMatchSnapshot();
     });
 
+    it('should not cascade bean validation on UUID model properties', () => {
+      runResult.assertFileContent('src/main/openapi-templates/beanValidation.mustache', '{{^isUuid}}@Valid');
+    });
+
     it('should generate EvoMaster white-box driver support for OpenAPI apps', () => {
       runResult.assertFile('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java');
       runResult.assertFile('src/main/java/com/mycompany/myapp/validation/PatternObjectValidator.java');

@@ -198,7 +198,7 @@ const swaggerFiles = asWriteFilesSection<SpringBootApplication>({
     {
       path: 'src/main/openapi-templates/',
       transform: false,
-      templates: ['typeInfoAnnotation.mustache', 'oneof_interface.mustache'],
+      templates: ['typeInfoAnnotation.mustache', 'oneof_interface.mustache', 'beanValidation.mustache'],
     },
     {
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,

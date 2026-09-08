@@ -61,17 +61,23 @@ function replaceTranslationKeysWithText(
 ) {
   const regex = new RegExp(regexSource, 'g');
   const allMatches = content.matchAll(regex);
+  let translatedContent = '';
+  let previousMatchEnd = 0;
   for (const match of allMatches) {
-    // match is now the next match, in array form and our key is at index 1, index 1 is replace target.
+    if (match.index === undefined) {
+      throw new Error('Translation match has no source index');
+    }
     const key = match[keyIndex];
     const target = match[replacementIndex];
     let translation = getWebappTranslation(key);
     if (escape) {
       translation = escape(translation, match);
     }
-    content = content.replace(target, translation);
+    translatedContent += content.slice(previousMatchEnd, match.index);
+    translatedContent += match[0].replace(target, translation);
+    previousMatchEnd = match.index + match[0].length;
   }
-  return content;
+  return translatedContent + content.slice(previousMatchEnd);
 }
 
 /**

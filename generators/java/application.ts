@@ -174,6 +174,6 @@ export const mutateRelationship = {
   __override__: false,
 
   propertyJavaBeanName: ({ propertyName }) => javaBeanCase(propertyName),
-  propertyConsumerName: ({ propertyName }) => `set${upperFirst(propertyName)}`,
-  propertySupplierName: ({ propertyName }) => `get${upperFirst(propertyName)}`,
+  propertyConsumerName: ({ propertyJavaBeanName }) => `set${propertyJavaBeanName}`,
+  propertySupplierName: ({ propertyJavaBeanName }) => `get${propertyJavaBeanName}`,
 } as const satisfies MutateDataPropertiesWithRequiredProperties<MutateDataParam<JavaRelationship>, JavaAddedRelationshipProperties>;

@@ -18,12 +18,46 @@
  */
 import { readFile } from 'node:fs/promises';
 
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { GRADLE_BUILD_SRC_MAIN_DIR } from '../../../generator-constants.ts';
 import { JavaApplicationGenerator } from '../../../java/generator.ts';
 import { javaMainResourceTemplatesBlock } from '../../../java/support/files.ts';
 import { getOpenApiModelNameMappings } from '../../../server/support/openapi-mapper-generator.ts';
+
+type PreparedOpenApiSpec = {
+  specContents: string;
+  generatorSpecContents?: string;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+export function normalizeOpenApiSpecForGenerator<T>(document: T): T {
+  const normalized = structuredClone(document);
+
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    if (!isRecord(node)) return;
+
+    const anyOf = node.anyOf;
+    const hasBaseObjectShape = isRecord(node.properties) || (Array.isArray(node.required) && node.required.length > 0);
+    if (hasBaseObjectShape && Array.isArray(anyOf)) {
+      for (const variant of anyOf) {
+        if (isRecord(variant) && Array.isArray(variant.required)) {
+          delete variant.required;
+        }
+      }
+    }
+
+    Object.values(node).forEach(visit);
+  };
+
+  visit(normalized);
+  return normalized;
+}
 
 export default class OpenapiGeneratorGenerator extends JavaApplicationGenerator {
   async beforeQueue() {
@@ -172,25 +206,27 @@ ${modelNameMappings}
     return this.delegateTasksToBlueprint(() => this.postWriting);
   }
 
-  async copyProvidedOpenApiSpec(application: {
-    oas3Input?: string;
-    srcMainResources: string;
-    preparedOpenApiSpec?: { specContents: string };
-  }) {
+  async copyProvidedOpenApiSpec(application: { oas3Input?: string; srcMainResources: string; preparedOpenApiSpec?: PreparedOpenApiSpec }) {
     const preparedSpec = await this.prepareProvidedOpenApiSpec(application);
     if (!preparedSpec) return;
     this.writeDestination(
       `${application.srcMainResources}swagger/api.yml`,
       preparedSpec.specContents.endsWith('\n') ? preparedSpec.specContents : `${preparedSpec.specContents}\n`,
     );
+    if (preparedSpec.generatorSpecContents) {
+      this.writeDestination(
+        `${application.srcMainResources}swagger/api-codegen.yml`,
+        preparedSpec.generatorSpecContents.endsWith('\n') ? preparedSpec.generatorSpecContents : `${preparedSpec.generatorSpecContents}\n`,
+      );
+    }
   }
 
   async prepareProvidedOpenApiSpec(application: {
     oas3Input?: string;
-    preparedOpenApiSpec?: { specContents: string };
+    preparedOpenApiSpec?: PreparedOpenApiSpec;
     openApiGeneratorInputFile?: string;
     openApiModelNameMappings?: { sourceName: string; targetName: string }[];
-  }): Promise<{ specContents: string } | undefined> {
+  }): Promise<PreparedOpenApiSpec | undefined> {
     if (!application.oas3Input) return undefined;
     if (application.preparedOpenApiSpec) return application.preparedOpenApiSpec;
     const resolvedInputPath = this.destinationPath(application.oas3Input);
@@ -201,9 +237,14 @@ ${modelNameMappings}
         const contents = await readFile(candidate, 'utf-8');
         if (candidate !== resolvedInputPath) this.log.info(`Using OpenAPI specification at ${candidate}`);
         const parsed = parseYaml(contents) as { components?: { schemas?: Record<string, unknown> } };
+        const generatorSpec = normalizeOpenApiSpecForGenerator(parsed);
+        const generatorSpecChanged = JSON.stringify(generatorSpec) !== JSON.stringify(parsed);
         application.openApiModelNameMappings = getOpenApiModelNameMappings(Object.keys(parsed?.components?.schemas ?? {}));
-        application.openApiGeneratorInputFile = 'api.yml';
-        application.preparedOpenApiSpec = { specContents: contents };
+        application.openApiGeneratorInputFile = generatorSpecChanged ? 'api-codegen.yml' : 'api.yml';
+        application.preparedOpenApiSpec = {
+          specContents: contents,
+          generatorSpecContents: generatorSpecChanged ? stringifyYaml(generatorSpec, { lineWidth: 0 }) : undefined,
+        };
         return application.preparedOpenApiSpec;
       } catch (error) {
         failures.push(`${candidate}: ${error instanceof Error ? error.message : String(error)}`);

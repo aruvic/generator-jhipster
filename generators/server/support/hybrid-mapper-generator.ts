@@ -136,6 +136,7 @@ export interface EntityMapping {
   responseCollectionFields?: CollectionFieldContext[];
   generatedUuidFields?: GeneratedUuidFieldContext[];
   generatedDefaultFields?: GeneratedDefaultFieldContext[];
+  ignoreNullsOnUpdate?: boolean;
 }
 
 export interface CollectionFieldContext {
@@ -4041,6 +4042,7 @@ export function generateHybridMappers(
   const responseSourcesBySchema = new Map<string, Set<string>>();
   const responseSchemasByRequestTarget = new Map<string, Set<string>>();
   const operationRequestSchemas = new Set<string>();
+  const patchRequestSchemas = new Set<string>();
   const operationResponseSchemas = new Set<string>();
   const entityMetadata = collectEntityMetadata(operationDescriptors, resolveDomainMetadata, entityDefinitions);
   const relationshipTargets = new Map<string, Map<string, string>>();
@@ -4224,6 +4226,9 @@ export function generateHybridMappers(
       const { responseSchema } = operation;
       if (requestSchema) {
         operationRequestSchemas.add(requestSchema);
+        if (operation.method.toUpperCase() === 'PATCH') {
+          patchRequestSchemas.add(requestSchema);
+        }
       }
       if (responseSchema) {
         operationResponseSchemas.add(responseSchema);
@@ -4273,8 +4278,8 @@ export function generateHybridMappers(
       }
     }
 
-    const expandRequestSchemaReachability = () => {
-      const requestSchemaQueue = Array.from(operationRequestSchemas);
+    const expandRequestSchemaReachability = (requestSchemas: Set<string>) => {
+      const requestSchemaQueue = Array.from(requestSchemas);
       const visitedRequestSchemas = new Set<string>();
       while (requestSchemaQueue.length > 0) {
         const currentSchema = requestSchemaQueue.shift()!;
@@ -4286,20 +4291,21 @@ export function generateHybridMappers(
         for (const target of exactReferences) {
           const targetSchemaName =
             schemas[target] ? target : schemaNamesByNormalizedName.get(normalizeTypeName(stripDtoSuffix(target)) ?? '');
-          if (targetSchemaName && !operationRequestSchemas.has(targetSchemaName)) {
-            operationRequestSchemas.add(targetSchemaName);
+          if (targetSchemaName && !requestSchemas.has(targetSchemaName)) {
+            requestSchemas.add(targetSchemaName);
             requestSchemaQueue.push(targetSchemaName);
           }
           const targetBaseSchemaName = schemaNamesByNormalizedName.get(normalizeTypeName(stripDtoSuffix(target)) ?? '');
-          if (targetBaseSchemaName && !operationRequestSchemas.has(targetBaseSchemaName)) {
-            operationRequestSchemas.add(targetBaseSchemaName);
+          if (targetBaseSchemaName && !requestSchemas.has(targetBaseSchemaName)) {
+            requestSchemas.add(targetBaseSchemaName);
             requestSchemaQueue.push(targetBaseSchemaName);
           }
         }
       }
     };
 
-    expandRequestSchemaReachability();
+    expandRequestSchemaReachability(operationRequestSchemas);
+    expandRequestSchemaReachability(patchRequestSchemas);
 
     for (const [baseEntity, variants] of schemaVariants.entries()) {
       const hasRequestVariantForEntity = [...variants].some(variantName => operationRequestSchemas.has(variantName));
@@ -4319,7 +4325,7 @@ export function generateHybridMappers(
       }
     }
 
-    expandRequestSchemaReachability();
+    expandRequestSchemaReachability(operationRequestSchemas);
 
     const polymorphicBaseTypes = new Set<string>();
     for (const [schemaName, schema] of Object.entries(schemas)) {
@@ -5235,6 +5241,7 @@ export function generateHybridMappers(
     for (const mapper of entityMappersMap.values()) {
       const referenced = new Set<string>(mapper.referencedEntities ?? []);
       for (const mapping of mapper.requestMappings) {
+        mapping.ignoreNullsOnUpdate = Boolean(mapping.sourceSchemaName && patchRequestSchemas.has(mapping.sourceSchemaName));
         const targetEntityName = mapping.targetSchemaName ?? mapper.entityName;
         const domainProperties = collectDomainPropertyNames(targetEntityName, entityDefinitions, domainPropertyCache);
         const domainFieldTypes = collectDomainFieldTypes(targetEntityName, entityDefinitions, domainFieldTypeCache);

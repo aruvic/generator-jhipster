@@ -51,7 +51,7 @@ const discriminatorColumnEntity = {
   discriminator: {
     column: 'atType',
     type: 'String',
-    values: 'ConcreteRef->ConcreteRef, ExternalRef->ExternalRef',
+    values: 'concreteRef->ConcreteRef, externalRef->ExternalRef',
   },
   fields: [
     { fieldName: 'atType', fieldType: 'String', fieldValidateRules: ['required'] },
@@ -71,7 +71,25 @@ const discriminatorChildEntity = {
   extends: 'EntityRefOrValue',
   annotations: {
     discriminatorValue: {
-      value: 'ConcreteRef',
+      value: 'concreteRef',
+    },
+  },
+  fields: [],
+  relationships: [],
+};
+
+const discriminatorGrandchildEntity = {
+  name: 'NestedConcreteRef',
+  changelogDate: '20240203000200',
+  entityTableName: 'nested_concrete_ref',
+  dto: 'no',
+  service: 'no',
+  pagination: 'no',
+  applications: [applicationConfig.baseName],
+  extends: 'ConcreteRef',
+  annotations: {
+    discriminatorValue: {
+      value: 'nestedRef',
     },
   },
   fields: [],
@@ -86,6 +104,7 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
         duplicateColumnEntity as any,
         discriminatorColumnEntity as any,
         discriminatorChildEntity as any,
+        discriminatorGrandchildEntity as any,
       ]);
   });
 
@@ -125,7 +144,7 @@ describe(`generator - ${GENERATOR} duplicate columns`, () => {
     const changelogPath = `${SERVER_MAIN_RES_DIR}config/liquibase/changelog/20240203000000_added_entity_EntityRefOrValue.xml`;
     runResult.assertFileContent(
       changelogPath,
-      /CHECK \(at_type IN \((?:'|&#39;)ConcreteRef(?:'|&#39;), (?:'|&#39;)ExternalRef(?:'|&#39;)\)\)/,
+      /CHECK \(at_type IN \((?:'|&#39;)concreteRef(?:'|&#39;), (?:'|&#39;)externalRef(?:'|&#39;), (?:'|&#39;)nestedRef(?:'|&#39;)\)\)/,
     );
   });
 

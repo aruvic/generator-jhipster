@@ -22,6 +22,7 @@ import { basename, resolve } from 'node:path';
 import { shouldSupportFeatures, testBlueprintSupport } from '../../../../test/support/tests.ts';
 
 import Generator from './index.ts';
+import { normalizeOpenApiSpecForGenerator } from './generator.ts';
 
 import { defaultHelpers as helpers, fromMatrix, result } from '#testing';
 
@@ -30,6 +31,44 @@ const generator = `${basename(resolve(import.meta.dirname, '../../'))}:${basenam
 describe(`generator - ${generator}`, () => {
   shouldSupportFeatures(Generator);
   describe('blueprint support', () => testBlueprintSupport(generator));
+
+  it('normalizes conditional anyOf requirements without changing the source contract', () => {
+    const source = {
+      components: {
+        schemas: {
+          Contact: {
+            type: 'object',
+            required: ['name'],
+            properties: { name: { type: 'string' } },
+            anyOf: [
+              { required: ['phone'], properties: { phone: { type: 'string' } } },
+              { required: ['email'], properties: { email: { type: 'string' } } },
+            ],
+          },
+          Union: {
+            anyOf: [{ required: ['left'] }, { required: ['right'] }],
+          },
+        },
+      },
+    };
+
+    expect(normalizeOpenApiSpecForGenerator(source)).toEqual({
+      components: {
+        schemas: {
+          Contact: {
+            type: 'object',
+            required: ['name'],
+            properties: { name: { type: 'string' } },
+            anyOf: [{ properties: { phone: { type: 'string' } } }, { properties: { email: { type: 'string' } } }],
+          },
+          Union: {
+            anyOf: [{ required: ['left'] }, { required: ['right'] }],
+          },
+        },
+      },
+    });
+    expect(source.components.schemas.Contact.anyOf[0].required).toEqual(['phone']);
+  });
 
   for (const [name, config] of Object.entries(
     fromMatrix({ buildTool: ['maven' as const, 'gradle' as const], addOpenapiGeneratorPlugin: [true, false] }),

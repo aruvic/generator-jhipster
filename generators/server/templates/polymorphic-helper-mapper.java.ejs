@@ -136,6 +136,7 @@ public abstract class <%- mapperName %> {
 _%>
 <%_ if (mapperFields.length > 0) { mapperFields.forEach((field) => { _%>
     @Autowired
+    @Lazy
     protected <%- field.fqcn %> <%- lowerFirst(field.simpleName) %>;
   <%_ }); _%>
 <%_ } _%>

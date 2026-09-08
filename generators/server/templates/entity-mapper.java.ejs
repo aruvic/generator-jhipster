@@ -77,6 +77,7 @@ public abstract class <%- mapperName %> {
 
 <%_ if (needsMapperHelpers) { mergeMappersList.forEach((fqcn) => { _%>
     @Autowired
+    @Lazy
     protected <%- fqcn %> <%- fqcn.split('.').pop().charAt(0).toLowerCase() + fqcn.split('.').pop().slice(1) %>;
   <%_ }); _%>
 <%_ } _%>
@@ -99,7 +100,7 @@ public abstract class <%- mapperName %> {
   <%_ } _%>
     public abstract <%- mapping.targetType %> <%- mapping.methodName %>(<%- mapping.sourceType %> source);
 
-  @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.SET_TO_NULL)
+  @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.<%- mapping.ignoreNullsOnUpdate ? 'IGNORE' : 'SET_TO_NULL' %>)
   <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
     <%_ for (const annotation of mapping.annotations) { _%>
     <%- annotation %>

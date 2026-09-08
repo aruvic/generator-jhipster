@@ -46,9 +46,39 @@
           `ALTER TABLE ${entity.entityTableName} ADD CONSTRAINT ${constraintName} CHECK (${field.columnName} IN (${uniqueValues.map(sqlStringLiteral).join(', ')}))`,
         );
       }
-      const discriminatorValues = entity.polymorphicRoot
-        ? [...new Set(Object.values(entity.discriminatorColumn?.values ?? {}).map(value => String(value).trim()).filter(Boolean))]
-        : [];
+      const discriminatorValues = [];
+      if (entity.polymorphicRoot) {
+        const seenDiscriminatorValues = new Set();
+        const addDiscriminatorValue = value => {
+          const normalizedValue = String(value ?? '').trim();
+          if (!normalizedValue || seenDiscriminatorValues.has(normalizedValue)) return;
+          seenDiscriminatorValues.add(normalizedValue);
+          discriminatorValues.push(normalizedValue);
+        };
+        const addConfiguredDiscriminatorValues = values => {
+          if (typeof values === 'string') {
+            for (const entry of values.split(',')) addDiscriminatorValue(entry.split('->')[0]);
+          } else if (Array.isArray(values)) {
+            for (const entry of values) {
+              if (typeof entry === 'string') {
+                addDiscriminatorValue(entry.split('->')[0]);
+              } else {
+                addDiscriminatorValue(entry?.discriminatorValue ?? entry?.value ?? entry?.name);
+              }
+            }
+          } else {
+            for (const value of Object.keys(values ?? {})) addDiscriminatorValue(value);
+          }
+        };
+        const addChildDiscriminatorValues = childEntities => {
+          for (const childEntity of childEntities ?? []) {
+            addDiscriminatorValue(childEntity.discriminatorValue);
+            addChildDiscriminatorValues(childEntity.childEntities);
+          }
+        };
+        addConfiguredDiscriminatorValues(entity.discriminatorColumn?.values);
+        addChildDiscriminatorValues(entity.childEntities);
+      }
       const discriminatorSqlLiteral = value =>
         entity.discriminatorColumn?.discriminatorType === 'INTEGER' && /^-?\d+$/.test(value) ? value : sqlStringLiteral(value);
         const discriminatorCheckSql

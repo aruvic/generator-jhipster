@@ -4159,7 +4159,7 @@ describe('Hybrid mapper generator', () => {
     expect(helper?.usesMappers).toEqual(expect.arrayContaining(['com.example.web.api.mapper.PaymentMethodRefMapper']));
   });
 
-  it('links polymorphic helper mappers to referenced entity and helper mappers', () => {
+  it('renders polymorphic helper mapper dependencies as lazy injection points', () => {
     const spec: ParsedOpenAPISpec = {
       operations: [
         {
@@ -4229,9 +4229,23 @@ describe('Hybrid mapper generator', () => {
     expect(partyHelper?.usesMappers).toEqual(
       expect.arrayContaining(['com.example.web.api.mapper.ContactPointMapper', 'com.example.web.api.mapper.RelatedPartyRefOrValueMapper']),
     );
+
+    const template = readFileSync(new URL('../templates/polymorphic-helper-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(
+      template,
+      {
+        ...partyHelper!,
+        locals: {
+          baseMethodAnnotations: partyHelper?.baseMethodAnnotations,
+          baseResponseMethodAnnotations: partyHelper?.baseResponseMethodAnnotations,
+        },
+      },
+      { filename: 'polymorphic-helper-mapper.java.ejs' },
+    );
+    expect(rendered).toContain('@Autowired\n    @Lazy\n    protected com.example.web.api.mapper.ContactPointMapper contactPointMapper;');
   });
 
-  it('generates direct collection replace semantics when nested collection element has no key expressions', () => {
+  it('generates direct collection replace semantics with a lazy nested mapper dependency', () => {
     const spec: ParsedOpenAPISpec = {
       operations: [
         {
@@ -4297,5 +4311,55 @@ describe('Hybrid mapper generator', () => {
     expect(rendered).toContain('List<com.example.domain.ShipmentItem> replacedItems = new ArrayList<>();');
     expect(rendered).toContain('for (com.example.service.api.dto.ShipmentItemDTO incomingItem : source.getItems())');
     expect(rendered).toContain('target.setItems(replacedItems);');
+    expect(rendered).toContain('@Autowired\n    @Lazy\n    protected com.example.web.api.mapper.ShipmentItemMapper shipmentItemMapper;');
+  });
+
+  it('preserves existing entity values when a PATCH request omits properties', () => {
+    const spec: ParsedOpenAPISpec = {
+      operations: [
+        {
+          path: '/owners/{id}',
+          method: 'PATCH',
+          requestBodySchema: 'OwnerMVO',
+          responseSchema: 'Owner',
+        },
+      ],
+      schemas: {
+        Owner: {
+          type: 'object',
+          properties: {
+            firstName: { type: 'string' },
+            lastName: { type: 'string' },
+          },
+        },
+        OwnerMVO: {
+          type: 'object',
+          properties: {
+            firstName: { type: 'string' },
+          },
+        },
+      },
+    };
+    const entityDefinitions = new Map<string, any>([
+      [
+        'Owner',
+        {
+          name: 'Owner',
+          fields: [
+            { fieldName: 'firstName', fieldType: 'String' },
+            { fieldName: 'lastName', fieldType: 'String' },
+          ],
+        },
+      ],
+    ]);
+
+    const { entityMappers } = generateHybridMappers(spec, 'com.example', undefined, undefined, undefined, entityDefinitions);
+    const ownerMapper = entityMappers.find(entry => entry.entityName === 'Owner');
+    const patchMapping = ownerMapper?.requestMappings.find(entry => entry.sourceSchemaName === 'OwnerMVO');
+    expect(patchMapping?.ignoreNullsOnUpdate).toBe(true);
+
+    const template = readFileSync(new URL('../templates/entity-mapper.java.ejs', import.meta.url), 'utf8');
+    const rendered = ejs.render(template, { ...ownerMapper }, { filename: 'entity-mapper.java.ejs' });
+    expect(rendered).toContain('@BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)');
   });
 });
