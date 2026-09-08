@@ -40,10 +40,7 @@ Java compile for builds and
 applications use the Angular Vitest builder; the direct Angular command avoids
 the optional npm `pretest` hook, and callers can still override
 `ANGULAR_TEST_COMMAND` to target a narrower test command.
-OpenAPI UI tests. This direct Jest invocation avoids the generated `pretest`
-full-tree lint because regression apps are intentionally generated with
-`--skip-prettier`; the separate production build remains the generated Angular
-compile gate. If `node_modules` is missing, the script first runs
+If `node_modules` is missing, the script first runs
 `npm install --no-audit --no-fund --offline`; override with
 `ANGULAR_NPM_INSTALL=skip` to require preinstalled dependencies or
 `ANGULAR_NPM_INSTALL=online` only in network-enabled CI. Use
@@ -51,6 +48,18 @@ compile gate. If `node_modules` is missing, the script first runs
 alternate package-manager commands. Each generation, Java compile, npm install,
 Angular build, Angular test, and artifact total phase prints UTC timestamps and
 duration seconds.
+
+The harness uses the Node version recorded in
+`generators/init/resources/.node-version` when that version is installed with
+nvm and satisfies the generator's `engines.node` range. This keeps a newer
+compatible current runtime from silently replacing the recorded regression
+runtime. Set `GENERATOR_NODE_BIN` to explicitly select another compatible
+runtime; otherwise the harness falls back to the current compatible runtime and
+then other compatible nvm installations. Run the resolver regression test with:
+
+```bash
+test/oas-regression/node-runtime.test.sh
+```
 
 For full-matrix collection runs that should continue after artifact failures,
 use:
@@ -126,6 +135,15 @@ public npm download is allowed. Browser binaries are not downloaded unless
 `FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=online` is set; use
 `PLAYWRIGHT_BROWSERS_PATH=/tmp/playwright-browsers` to keep them outside the
 repo. No browser evidence is uploaded by the harness.
+The Playwright install also provisions the coverage packages listed by
+`FORM_CRUD_GUI_SOURCE_COVERAGE_PACKAGES`; dependency checks fail before the
+browser run when that toolchain is incomplete.
+Run the focused dependency bootstrap regression test with:
+
+```bash
+test/oas-regression/form-crud-gui-dependencies.test.sh
+```
+
 When the current runtime invocation also runs Angular Jest coverage,
 `FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST` defaults to `true` and the bounded
 worker merges the scoped Jest/Istanbul data into `combined`. It defaults to
@@ -170,6 +188,7 @@ FORM_CRUD_GUI_JEST_ENABLED=true
 FORM_CRUD_GUI_JEST_COMMAND="npx ng test --coverage"
 FORM_CRUD_GUI_JEST_NODE_OPTIONS="--max-old-space-size=6144"
 FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS=900
+FORM_CRUD_GUI_NODE_BIN=/path/to/node/bin
 FORM_CRUD_GUI_NODE_OPTIONS="--max-old-space-size=6144"
 FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS=2400
 FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS=30
@@ -195,6 +214,7 @@ FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX=false
 FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED=true
 FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS=true
 FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED=true
+FORM_CRUD_GUI_SOURCE_COVERAGE_PACKAGES="@bcoe/v8-coverage v8-to-istanbul istanbul-lib-coverage istanbul-lib-report istanbul-reports"
 FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=3
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES=67108864
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES=2097152
@@ -257,6 +277,12 @@ RUNTIME_FAIL_FAST=false
 EVOMASTER_PACKAGES_TO_SKIP_INSTRUMENTATION=com.example.evomaster,org.example.optional.
 EVOMASTER_JAVA_OPTS="-Xms512m -Xmx4g"
 ```
+
+The Form CRUD GUI uses the current Node runtime unless
+`FORM_CRUD_GUI_NODE_BIN` explicitly overrides it. When
+`FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=online`, the matching browser is installed by
+default as well; set `FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=skip` only when
+the required browser revision is already available.
 
 Set `FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_OPERATION_ID` and
 `FORM_CRUD_GUI_REFERENCE_PICKER_SOURCE_PATH` to run only matching reference-picker

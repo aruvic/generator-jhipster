@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/node-runtime.sh"
+source "$SCRIPT_DIR/form-crud-gui-dependencies.sh"
 GENERATOR_ROOT="${GENERATOR_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$GENERATOR_ROOT/.." && pwd)}"
 ARTIFACTS="${ARTIFACT_ROOT:-$WORKSPACE_ROOT/oas-to-jdl/artifacts}"
@@ -51,22 +53,6 @@ default_generator_node_heap_mb() {
   fi
 }
 
-resolve_form_crud_node_bin() {
-  if [[ -n "${FORM_CRUD_GUI_NODE_BIN:-}" && -x "${FORM_CRUD_GUI_NODE_BIN}/node" ]]; then
-    printf '%s\n' "$FORM_CRUD_GUI_NODE_BIN"
-    return
-  fi
-
-  local newest_nvm_bin
-  newest_nvm_bin="$(find "$HOME/.nvm/versions/node" -type f -path '*/bin/node' -printf '%h\n' 2> /dev/null | sort -V | tail -n 1)"
-  if [[ -n "$newest_nvm_bin" && -x "$newest_nvm_bin/node" ]]; then
-    printf '%s\n' "$newest_nvm_bin"
-    return
-  fi
-
-  dirname "$(command -v node)"
-}
-
 GENERATOR_NODE_OPTIONS="${GENERATOR_NODE_OPTIONS:---max-old-space-size=$(default_generator_node_heap_mb)}"
 ANGULAR_NODE_OPTIONS="${ANGULAR_NODE_OPTIONS:-$GENERATOR_NODE_OPTIONS}"
 EVOMASTER_ENABLED="${EVOMASTER_ENABLED:-true}"
@@ -88,13 +74,22 @@ FORM_CRUD_GUI_JEST_NODE_OPTIONS="${FORM_CRUD_GUI_JEST_NODE_OPTIONS:-${NODE_OPTIO
 FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_SECONDS:-900}"
 FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_JEST_TIMEOUT_KILL_AFTER_SECONDS:-30}"
 FORM_CRUD_GUI_NODE_OPTIONS="${FORM_CRUD_GUI_NODE_OPTIONS:-${NODE_OPTIONS:-$ANGULAR_NODE_OPTIONS}}"
-FORM_CRUD_GUI_NODE_BIN="$(resolve_form_crud_node_bin)"
+FORM_CRUD_GUI_NODE_BIN="$(resolve_node_bin "${FORM_CRUD_GUI_NODE_BIN:-}")"
 FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS:-2400}"
 FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS:-30}"
 FORM_CRUD_GUI_PLAYWRIGHT_ROOT="${FORM_CRUD_GUI_PLAYWRIGHT_ROOT:-/tmp/playwright-tests}"
 FORM_CRUD_GUI_PLAYWRIGHT_INSTALL="${FORM_CRUD_GUI_PLAYWRIGHT_INSTALL:-offline}"
 FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE="${FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE:-@playwright/test}"
-FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="${FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS:-skip}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_PACKAGES="${FORM_CRUD_GUI_SOURCE_COVERAGE_PACKAGES:-@bcoe/v8-coverage v8-to-istanbul istanbul-lib-coverage istanbul-lib-report istanbul-reports}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER="$SCRIPT_DIR/form-crud-source-coverage.mjs"
+FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="${FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS:-}"
+if [[ -z "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" ]]; then
+  if [[ "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL" == "online" ]]; then
+    FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="online"
+  else
+    FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="skip"
+  fi
+fi
 FORM_CRUD_GUI_PLAYWRIGHT_BROWSER="${FORM_CRUD_GUI_PLAYWRIGHT_BROWSER:-chromium}"
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR="${FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR:-true}"
 FORM_CRUD_GUI_FAIL_ON_HTTP_4XX="${FORM_CRUD_GUI_FAIL_ON_HTTP_4XX:-false}"
@@ -513,64 +508,6 @@ ensure_form_crud_gui_dependencies() {
   timestamped_step "$name" "Form CRUD GUI npm install finished in $(duration_seconds "$install_start" "$install_end")s"
 }
 
-ensure_form_crud_gui_playwright_dependencies() {
-  local name="$1"
-  local install_start install_end browser_start browser_end
-
-  if FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies >/dev/null 2>&1; then
-    if [[ "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" == "skip" ]]; then
-      return 0
-    fi
-  else
-    case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL" in
-      skip)
-        FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies
-        ;;
-      offline|online)
-        install_start="$(now_epoch)"
-        timestamped_step "$name" "Form CRUD GUI Playwright install start ($FORM_CRUD_GUI_PLAYWRIGHT_INSTALL)"
-        mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT"
-        case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL" in
-          offline)
-            env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" --offline < /dev/null
-            ;;
-          online)
-            env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" < /dev/null
-            ;;
-        esac
-        install_end="$(now_epoch)"
-        timestamped_step "$name" "Form CRUD GUI Playwright install finished in $(duration_seconds "$install_start" "$install_end")s"
-        ;;
-      *)
-        echo "Unsupported FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL; use offline, online, or skip." >&2
-        return 2
-        ;;
-    esac
-
-    FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" node "$FORM_CRUD_GUI_SMOKE" --check-dependencies
-  fi
-
-  case "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" in
-    skip)
-      ;;
-    online)
-      browser_start="$(now_epoch)"
-      timestamped_step "$name" "Form CRUD GUI Playwright browser install start ($FORM_CRUD_GUI_PLAYWRIGHT_BROWSER)"
-      if [[ ! -x "${FORM_CRUD_GUI_PLAYWRIGHT_ROOT%/}/node_modules/.bin/playwright" ]]; then
-        mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT"
-        env NO_UPDATE_NOTIFIER=1 npm install --prefix "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" "$FORM_CRUD_GUI_PLAYWRIGHT_PACKAGE" < /dev/null
-      fi
-      env NO_UPDATE_NOTIFIER=1 "${FORM_CRUD_GUI_PLAYWRIGHT_ROOT%/}/node_modules/.bin/playwright" install "$FORM_CRUD_GUI_PLAYWRIGHT_BROWSER" < /dev/null
-      browser_end="$(now_epoch)"
-      timestamped_step "$name" "Form CRUD GUI Playwright browser install finished in $(duration_seconds "$browser_start" "$browser_end")s"
-      ;;
-    *)
-      echo "Unsupported FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS; use online or skip." >&2
-      return 2
-      ;;
-  esac
-}
-
 run_form_crud_gui_jest() {
   local name="$1"
   local app_dir="$2"
@@ -694,7 +631,7 @@ run_form_crud_gui_smoke() {
   mkdir -p "$gui_dir"
   ensure_form_crud_gui_dependencies "$name" "$app_dir"
   run_form_crud_gui_jest "$name" "$app_dir" "$artifact_output_dir" || jest_status=$?
-  ensure_form_crud_gui_playwright_dependencies "$name"
+  ensure_form_crud_gui_playwright_dependencies "$name" "$app_dir"
   cleanup_form_crud_gui_port
 
   gui_start="$(now_epoch)"

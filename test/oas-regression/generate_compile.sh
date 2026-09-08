@@ -7,6 +7,9 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$GENERATOR_ROOT/.." && pwd)}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-$WORKSPACE_ROOT/oas-to-jdl/artifacts}"
 OAS_TO_JDL_JAR="${OAS_TO_JDL_JAR:-$WORKSPACE_ROOT/oas-to-jdl/target/oas-to-jdl-0.1.0-SNAPSHOT.jar}"
 REGRESSION_APP_ROOT="${REGRESSION_APP_ROOT:-$WORKSPACE_ROOT}"
+source "$SCRIPT_DIR/node-runtime.sh"
+GENERATOR_NODE_BIN="$(resolve_generator_node_bin "${GENERATOR_NODE_BIN:-}")"
+export PATH="$GENERATOR_NODE_BIN:$PATH"
 MAVEN_OFFLINE="${MAVEN_OFFLINE:-false}"
 MAVEN_CLI_OPTS="${MAVEN_CLI_OPTS:-}"
 ANGULAR_BUILD_ENABLED="${ANGULAR_BUILD_ENABLED:-false}"
@@ -238,6 +241,7 @@ echo "=== [regression] $(iso_now) ANGULAR_BUILD_COMMAND=$ANGULAR_BUILD_COMMAND =
 echo "=== [regression] $(iso_now) ANGULAR_NPM_INSTALL=$ANGULAR_NPM_INSTALL ==="
 echo "=== [regression] $(iso_now) ANGULAR_NODE_MODULES_CACHE_ENABLED=$ANGULAR_NODE_MODULES_CACHE_ENABLED ==="
 echo "=== [regression] $(iso_now) ANGULAR_NODE_MODULES_CACHE_DIR=$ANGULAR_NODE_MODULES_CACHE_DIR ==="
+echo "=== [regression] $(iso_now) NODE_RUNTIME=$(node --version) ($GENERATOR_NODE_BIN) ==="
 
 while IFS=$'\t' read -r name app_dir jdl_file _yaml_file _db_user _db_name _base_name; do
   if [[ -z "$name" ]]; then

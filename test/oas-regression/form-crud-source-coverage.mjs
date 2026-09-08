@@ -5,19 +5,20 @@ import path from 'node:path';
 
 const manifestFile = process.argv[2];
 if (!manifestFile) {
-  process.stderr.write('Usage: form-crud-source-coverage.mjs <worker-manifest.json>\n');
+  process.stderr.write('Usage: form-crud-source-coverage.mjs <worker-manifest.json> | --check-dependencies [app-dir]\n');
   process.exit(2);
 }
 
-const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+const dependencyCheck = manifestFile === '--check-dependencies';
+const manifest = dependencyCheck ? { appDir: process.argv[3] } : JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
 
 function loadCoverageTools() {
+  const configuredRoots = [process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT, process.env.PLAYWRIGHT_ROOT].filter(Boolean);
   const candidates = [
     manifest.appDir,
-    process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT,
-    process.env.PLAYWRIGHT_ROOT,
+    ...configuredRoots,
     process.cwd(),
-    '/tmp/playwright-tests',
+    ...(configuredRoots.length === 0 ? ['/tmp/playwright-tests'] : []),
   ].filter(Boolean);
   const errors = [];
   for (const candidate of candidates) {
@@ -35,6 +36,11 @@ function loadCoverageTools() {
     }
   }
   throw new Error(`Unable to load Istanbul/V8 coverage dependencies:\n${errors.join('\n')}`);
+}
+
+if (dependencyCheck) {
+  loadCoverageTools();
+  process.exit(0);
 }
 
 function normalizedCoveragePath(rawPath) {

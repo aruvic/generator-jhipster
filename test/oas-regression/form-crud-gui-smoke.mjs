@@ -9,14 +9,11 @@ import { fileURLToPath } from 'node:url';
 import { semanticIdentityValue } from './operation-identity.mjs';
 import { selectPayloadFile } from './operation-payload.mjs';
 import { classifyOperationPreparationFailure, classifyOperationResponse } from './operation-response.mjs';
+import { hasRequiredResourceWorkflowCoverage } from './form-crud-workflow-coverage.mjs';
 
 function loadPlaywright() {
-  const candidates = [
-    process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT,
-    process.env.PLAYWRIGHT_ROOT,
-    process.cwd(),
-    '/tmp/playwright-tests',
-  ].filter(Boolean);
+  const configuredRoots = [process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT, process.env.PLAYWRIGHT_ROOT].filter(Boolean);
+  const candidates = [...configuredRoots, process.cwd(), ...(configuredRoots.length === 0 ? ['/tmp/playwright-tests'] : [])];
   const errors = [];
 
   for (const candidate of candidates) {
@@ -43,13 +40,8 @@ function loadPlaywright() {
 }
 
 function loadV8Coverage(appDir) {
-  const candidates = [
-    appDir,
-    process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT,
-    process.env.PLAYWRIGHT_ROOT,
-    process.cwd(),
-    '/tmp/playwright-tests',
-  ].filter(Boolean);
+  const configuredRoots = [process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT, process.env.PLAYWRIGHT_ROOT].filter(Boolean);
+  const candidates = [appDir, ...configuredRoots, process.cwd(), ...(configuredRoots.length === 0 ? ['/tmp/playwright-tests'] : [])];
   const errors = [];
 
   for (const candidate of candidates) {
@@ -64,7 +56,7 @@ function loadV8Coverage(appDir) {
   throw new Error(
     [
       'Istanbul/V8 conversion dependencies are required for Form CRUD GUI source coverage.',
-      'The generated Angular application normally provides them through its test toolchain.',
+      'Provision them in FORM_CRUD_GUI_PLAYWRIGHT_ROOT through the regression harness setup.',
       ...errors,
     ].join('\n'),
   );
@@ -426,6 +418,13 @@ function pathParameterValue(operation, parameter, options = {}) {
   const semanticResponse = semanticIdentityValue(operation, parameter, records, { origins: ['response'] });
   if (semanticResponse) return semanticResponse;
 
+  const exactRequestValues = [];
+  for (const record of records) {
+    scalarValuesForKeys(record.requestBody, new Set([normalizeName(parameter.name)]), exactRequestValues);
+  }
+  const exactRequest = [...new Set(exactRequestValues.map(value => String(value).trim()).filter(Boolean))][0];
+  if (exactRequest) return exactRequest;
+
   const values = [];
   for (const record of records) {
     const concrete = concretePathParameterFromUrl(record.operation, parameter, record.responseUrl);
@@ -438,13 +437,6 @@ function pathParameterValue(operation, parameter, options = {}) {
   }
   const locationOrUrlIdentity = [...new Set(values.map(value => String(value).trim()).filter(Boolean))][0];
   if (locationOrUrlIdentity) return locationOrUrlIdentity;
-
-  const exactRequestValues = [];
-  for (const record of records) {
-    scalarValuesForKeys(record.requestBody, new Set([normalizeName(parameter.name)]), exactRequestValues);
-  }
-  const exactRequest = [...new Set(exactRequestValues.map(value => String(value).trim()).filter(Boolean))][0];
-  if (exactRequest) return exactRequest;
 
   const semanticRequest = semanticIdentityValue(operation, parameter, records, { origins: ['request'] });
   if (semanticRequest) return semanticRequest;
@@ -2147,8 +2139,10 @@ async function prepareOpenApiOperation(page, select, operation) {
     if (parameter.location === 'path') {
       value =
         pathParameterValue(operation, parameter, {
-          createdByApiOperations: operation.method === 'DELETE',
-        }) ?? '';
+          createdByApiOperations: true,
+        }) ??
+        (operation.method === 'DELETE' ? undefined : pathParameterValue(operation, parameter)) ??
+        '';
       if (!value && operation.method !== 'DELETE') {
         value = requiredOpenApiParameterValue(parameter);
       }
@@ -2835,11 +2829,7 @@ try {
     await exerciseDeleteCreatedItem(page, entry);
   }
 
-  if (
-    requireAllAvailableResourceWorkflows &&
-    (result.coverage.successfulUpdateResources !== result.coverage.plannedUpdateResources ||
-      result.coverage.successfulDeleteResources !== result.coverage.plannedDeleteResources)
-  ) {
+  if (requireAllAvailableResourceWorkflows && !hasRequiredResourceWorkflowCoverage(result.coverage)) {
     throw new Error(
       `Form CRUD resource workflows incomplete: updates ${result.coverage.successfulUpdateResources}/${result.coverage.plannedUpdateResources}, deletes ${result.coverage.successfulDeleteResources}/${result.coverage.plannedDeleteResources}`,
     );
