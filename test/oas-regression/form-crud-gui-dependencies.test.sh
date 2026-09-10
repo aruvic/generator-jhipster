@@ -55,10 +55,16 @@ EOF
   cat > "$fixture/bin/npm" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$INSTALL_LOG"
+mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/node_modules/.bin"
 touch "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/playwright-ready"
 if [[ " $* " == *" @bcoe/v8-coverage "* ]]; then
   touch "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/coverage-ready"
 fi
+cat > "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/node_modules/.bin/playwright" <<'PLAYWRIGHT'
+#!/usr/bin/env bash
+printf 'browser %s\n' "$*" >> "$INSTALL_LOG"
+PLAYWRIGHT
+chmod +x "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/node_modules/.bin/playwright"
 EOF
   chmod +x "$fixture/bin/node" "$fixture/bin/npm"
 }
@@ -110,6 +116,54 @@ test_coverage_packages_are_omitted_when_coverage_is_disabled() {
   assert_not_contains "$INSTALL_LOG" "v8-to-istanbul"
 }
 
+test_online_install_provisions_browser() {
+  local fixture="$TEST_ROOT/online"
+  create_fake_commands "$fixture"
+  configure_fixture "$fixture"
+  FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="false"
+  FORM_CRUD_GUI_PLAYWRIGHT_INSTALL="online"
+  FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS="online"
+
+  ensure_form_crud_gui_playwright_dependencies "fixture" "$fixture/app"
+
+  assert_contains "$INSTALL_LOG" "@playwright/test"
+  assert_not_contains "$INSTALL_LOG" "--offline"
+  assert_contains "$INSTALL_LOG" "browser install chromium"
+}
+
+test_skip_does_not_mark_missing_dependencies_ready() {
+  local fixture="$TEST_ROOT/skip"
+  create_fake_commands "$fixture"
+  configure_fixture "$fixture"
+  FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="false"
+  FORM_CRUD_GUI_PLAYWRIGHT_INSTALL="skip"
+
+  if (ensure_form_crud_gui_playwright_dependencies "fixture" "$fixture/app"); then
+    fail "expected missing Playwright dependencies with install=skip to fail"
+  fi
+  [[ ! -e "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/playwright-ready" ]] ||
+    fail "install=skip created a false Playwright ready marker"
+  [[ ! -e "$INSTALL_LOG" ]] || fail "install=skip invoked npm"
+}
+
+test_invalid_policy_is_rejected_when_dependencies_are_ready() {
+  local fixture="$TEST_ROOT/invalid"
+  create_fake_commands "$fixture"
+  configure_fixture "$fixture"
+  FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="false"
+  FORM_CRUD_GUI_PLAYWRIGHT_INSTALL="automatic"
+  mkdir -p "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT"
+  touch "$FORM_CRUD_GUI_PLAYWRIGHT_ROOT/playwright-ready"
+
+  if (ensure_form_crud_gui_playwright_dependencies "fixture" "$fixture/app"); then
+    fail "expected an unsupported Playwright install policy to fail"
+  fi
+  [[ ! -e "$INSTALL_LOG" ]] || fail "unsupported install policy invoked npm"
+}
+
 test_incomplete_coverage_toolchain_is_provisioned
 test_coverage_packages_are_omitted_when_coverage_is_disabled
+test_online_install_provisions_browser
+test_skip_does_not_mark_missing_dependencies_ready
+test_invalid_policy_is_rejected_when_dependencies_are_ready
 printf 'form-crud-gui dependency tests passed\n'

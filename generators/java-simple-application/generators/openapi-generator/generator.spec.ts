@@ -21,8 +21,8 @@ import { basename, resolve } from 'node:path';
 
 import { shouldSupportFeatures, testBlueprintSupport } from '../../../../test/support/tests.ts';
 
-import Generator from './index.ts';
 import { normalizeOpenApiSpecForGenerator } from './generator.ts';
+import Generator from './index.ts';
 
 import { defaultHelpers as helpers, fromMatrix, result } from '#testing';
 
@@ -70,6 +70,36 @@ describe(`generator - ${generator}`, () => {
     expect(source.components.schemas.Contact.anyOf[0].required).toEqual(['phone']);
   });
 
+  describe('Gradle API-first conventions', () => {
+    const conventionsFile = 'buildSrc/src/main/groovy/jhipster.openapi-generator-conventions.gradle';
+
+    before(async () => {
+      await helpers
+        .runJHipster(generator)
+        .withMockedJHipsterGenerators()
+        .withMockedSource()
+        .withSharedApplication({
+          addOpenapiGeneratorPlugin: true,
+          openApiGeneratorInputFile: 'api-codegen.yml',
+          openApiModelNameMappings: [{ sourceName: 'legacy_name', targetName: 'LegacyName' }],
+        })
+        .withJHipsterConfig({ buildTool: 'gradle' });
+    });
+
+    it('uses Gradle 9 APIs while preserving API-first options', () => {
+      result.assertFileContent(conventionsFile, 'inputSpec = "$rootDir/src/main/resources/swagger/api-codegen.yml".toString()');
+      result.assertFileContent(conventionsFile, 'templateDir = "$rootDir/src/main/openapi-templates".toString()');
+      result.assertFileContent(conventionsFile, 'outputDir = layout.buildDirectory.dir("openapi").get().asFile.toString()');
+      result.assertFileContent(conventionsFile, 'configOptions = [delegatePattern: "true"');
+      result.assertFileContent(conventionsFile, 'generateJsonIncludeAnnotations: "true"');
+      result.assertFileContent(conventionsFile, 'validateSpec = false');
+      result.assertFileContent(conventionsFile, 'modelNameMappings = [legacy_name: "LegacyName"]');
+      result.assertFileContent(conventionsFile, 'srcDir(layout.buildDirectory.dir("openapi/src/main/java"))');
+      result.assertFileContent(conventionsFile, `tasks.named('compileJava').configure { dependsOn("openApiGenerate") }`);
+      result.assertNoFileContent(conventionsFile, /\$buildDir|project\.buildDir|compileJava\.dependsOn/);
+    });
+  });
+
   for (const [name, config] of Object.entries(
     fromMatrix({ buildTool: ['maven' as const, 'gradle' as const], addOpenapiGeneratorPlugin: [true, false] }),
   )) {
@@ -89,6 +119,10 @@ describe(`generator - ${generator}`, () => {
 
       it('should call source snapshot', () => {
         expect(result.sourceCallsArg).toMatchSnapshot();
+      });
+
+      it('should configure spec-honest JSON serialization', () => {
+        expect(JSON.stringify(result.sourceCallsArg)).toContain('<generateJsonIncludeAnnotations>true</generateJsonIncludeAnnotations>');
       });
 
       it('should compose with generators', () => {

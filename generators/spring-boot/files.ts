@@ -203,7 +203,7 @@ const swaggerFiles = asWriteFilesSection<SpringBootApplication>({
     {
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,
       renameTo: moveToJavaPackageSrcDir,
-      templates: ['config/OpenApiConfiguration.java'],
+      templates: ['config/JacksonConfiguration.java', 'config/OpenApiConfiguration.java'],
     },
     {
       path: `${SERVER_MAIN_SRC_DIR}_package_/`,

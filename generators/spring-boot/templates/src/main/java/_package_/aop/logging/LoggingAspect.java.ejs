@@ -18,6 +18,13 @@
 -%>
 package <%- packageName %>.aop.logging;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
+
 import tech.jhipster.config.JHipsterConstants;
 
 import org.aspectj.lang.JoinPoint;
@@ -38,6 +45,8 @@ import reactor.core.publisher.Mono;
 <%_ } _%>
 
 import java.util.Arrays;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Aspect for logging execution of service and repository Spring components.
@@ -52,10 +61,33 @@ import java.util.Arrays;
 @Aspect
 public class LoggingAspect {
 
-    private final Environment env;
+    private static final String REDACTED = "[REDACTED]";
+    private static final String SENSITIVE_NAME_PATTERN =
+        "(?:authorization|proxy[-_. ]?authorization|authentication|cookie|set[-_. ]?cookie|[a-z0-9_.-]*(?:password|passwd|secret|token|credential|credentials|api[-_.]?key|private[-_.]?key|session[-_.]?id))";
+    private static final Pattern QUOTED_SENSITIVE_VALUE_PATTERN = Pattern.compile(
+        "([\"']" + SENSITIVE_NAME_PATTERN + "[\"']\\s*[:=]\\s*[\"'])(.*?)([\"'])",
+        Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern SENSITIVE_VALUE_PATTERN = Pattern.compile(
+        "(\\b" + SENSITIVE_NAME_PATTERN + "\\b\\s*[:=]\\s*)([^,;&}\\]\\r\\n]+)",
+        Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern AUTHORIZATION_VALUE_PATTERN = Pattern.compile(
+        "\\b(?:Bearer|Basic)\\s+[A-Za-z0-9._~+/=-]+",
+        Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern JWT_PATTERN = Pattern.compile("\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b");
+    private static final Pattern URL_USER_INFO_PATTERN = Pattern.compile(
+        "([a-z][a-z\\d+.-]*://)[^/@\\s\"]+@",
+        Pattern.CASE_INSENSITIVE
+    );
 
-    public LoggingAspect(Environment env) {
+    private final Environment env;
+    private final ObjectMapper objectMapper;
+
+    public LoggingAspect(Environment env, ObjectMapper objectMapper) {
         this.env = env;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -122,7 +154,7 @@ public class LoggingAspect {
     public Object logAround(ProceedingJoinPoint joinPoint) throws Throwable {
         var log = logger(joinPoint);
         if (log.isDebugEnabled()) {
-            log.debug("Enter: {}() with argument[s] = {}", joinPoint.getSignature().getName(), Arrays.toString(joinPoint.getArgs()));
+            log.debug("Enter: {}() with argument[s] = {}", joinPoint.getSignature().getName(), safeArguments(joinPoint.getArgs()));
         }
         try {
             Object result = joinPoint.proceed();
@@ -155,7 +187,7 @@ public class LoggingAspect {
 
     private void logExit(Logger log, JoinPoint joinPoint, Object result) {
         if (log.isDebugEnabled()) {
-            log.debug("Exit: {}() with result = {}", joinPoint.getSignature().getName(), result);
+            log.debug("Exit: {}() with result = {}", joinPoint.getSignature().getName(), safeValue(result));
         }
     }
 <%_ if (reactive) { _%>
@@ -171,8 +203,85 @@ public class LoggingAspect {
 
     private void logIllegalArgument(Logger log, JoinPoint joinPoint) {
         if (log.isErrorEnabled()) {
-            log.error("Illegal argument: {} in {}()", Arrays.toString(joinPoint.getArgs()), joinPoint.getSignature().getName());
+            log.error("Illegal argument: {} in {}()", safeArguments(joinPoint.getArgs()), joinPoint.getSignature().getName());
         }
+    }
+
+    private String safeArguments(Object[] arguments) {
+        return Arrays.toString(Arrays.stream(arguments).map(this::safeValue).toArray(String[]::new));
+    }
+
+    private String safeValue(Object value) {
+        if (value == null) {
+            return "null";
+        }
+        if (
+            value instanceof CharSequence ||
+            value instanceof Character ||
+            value instanceof Number ||
+            value instanceof Boolean ||
+            value instanceof Enum<?>
+        ) {
+            return redactText(String.valueOf(value));
+        }
+        try {
+            JsonNode valueTree = objectMapper.valueToTree(value);
+            return objectMapper.writeValueAsString(redact(valueTree));
+        } catch (IllegalArgumentException | JsonProcessingException e) {
+            // Avoid an arbitrary toString() fallback because it may expose the value we failed to inspect.
+            return "<" + value.getClass().getName() + ">";
+        }
+    }
+
+    private JsonNode redact(JsonNode value) {
+        if (value.isObject()) {
+            ObjectNode redacted = objectMapper.createObjectNode();
+            value
+                .fields()
+                .forEachRemaining(field ->
+                    redacted.set(
+                        redactText(field.getKey()),
+                        isSensitiveName(field.getKey()) ? TextNode.valueOf(REDACTED) : redact(field.getValue())
+                    )
+                );
+            return redacted;
+        }
+        if (value.isArray()) {
+            ArrayNode redacted = objectMapper.createArrayNode();
+            value.forEach(item -> redacted.add(redact(item)));
+            return redacted;
+        }
+        if (value.isTextual()) {
+            return TextNode.valueOf(redactText(value.textValue()));
+        }
+        return value;
+    }
+
+    private boolean isSensitiveName(String name) {
+        String normalized = name.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
+        return (
+            normalized.equals("authorization") ||
+            normalized.equals("proxyauthorization") ||
+            normalized.equals("authentication") ||
+            normalized.endsWith("cookie") ||
+            normalized.endsWith("password") ||
+            normalized.endsWith("passwd") ||
+            normalized.endsWith("secret") ||
+            normalized.endsWith("token") ||
+            normalized.endsWith("credential") ||
+            normalized.endsWith("credentials") ||
+            normalized.endsWith("apikey") ||
+            normalized.endsWith("privatekey") ||
+            normalized.endsWith("sessionid")
+        );
+    }
+
+    private String redactText(String value) {
+        String redacted = URL_USER_INFO_PATTERN.matcher(value).replaceAll("$1" + REDACTED + "@");
+        redacted = QUOTED_SENSITIVE_VALUE_PATTERN.matcher(redacted).replaceAll("$1" + REDACTED + "$3");
+        redacted = SENSITIVE_VALUE_PATTERN.matcher(redacted).replaceAll("$1" + REDACTED);
+        redacted = AUTHORIZATION_VALUE_PATTERN.matcher(redacted).replaceAll(REDACTED);
+        return JWT_PATTERN.matcher(redacted).replaceAll(REDACTED);
     }
 
     private void logException(JoinPoint joinPoint, Throwable e) {

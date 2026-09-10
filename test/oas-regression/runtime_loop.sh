@@ -4,19 +4,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/node-runtime.sh"
 source "$SCRIPT_DIR/form-crud-gui-dependencies.sh"
+source "$SCRIPT_DIR/persistence-profile-query.sh"
 GENERATOR_ROOT="${GENERATOR_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$GENERATOR_ROOT/.." && pwd)}"
 ARTIFACTS="${ARTIFACT_ROOT:-$WORKSPACE_ROOT/oas-to-jdl/artifacts}"
 SMOKE="$SCRIPT_DIR/openapi-smoke.mjs"
 FORM_CRUD_GUI_SMOKE="$SCRIPT_DIR/form-crud-gui-smoke.mjs"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE="$SCRIPT_DIR/form-crud-reference-picker-config-service.mjs"
-DB_VERIFY_SQL="$SCRIPT_DIR/tmf683-db-verify.sql"
+PERSISTENCE_PROFILES_FILE="${PERSISTENCE_PROFILES_FILE:-$SCRIPT_DIR/profiles/persistence.json}"
 EVOMASTER_SEED_BUILDER="$SCRIPT_DIR/evomaster-postman-seed.mjs"
 EVOMASTER_OPENAPI_EXAMPLE_BUILDER="$SCRIPT_DIR/evomaster-openapi-smoke-examples.mjs"
 EVOMASTER_FOCUS_PATH_RESOLVER="$SCRIPT_DIR/evomaster-focus-path.mjs"
 EVOMASTER_SEED_FILTER="$SCRIPT_DIR/evomaster-filter-postman-seed.mjs"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/generator-jhipster-regression}"
-TMF_PAYLOAD="${TMF_PAYLOAD:-$GENERATOR_ROOT/party-interaction-full.json}"
 REGRESSION_APP_ROOT="${REGRESSION_APP_ROOT:-$WORKSPACE_ROOT}"
 PORT="${PORT:-8081}"
 LIQUIBASE_CONTEXTS="${LIQUIBASE_CONTEXTS:-dev}"
@@ -107,13 +107,20 @@ FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED="${FORM_CRUD_GUI_API_OPERATIONS_E
 FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX:-false}"
 FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED:-true}"
 FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS="${FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS:-true}"
+FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM="${FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM:-0.5}"
+FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS="${FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS:-5}"
+FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS="${FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS:-500}"
 FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS="${FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS:-true}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="${FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED:-true}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="${FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT:-3}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="${FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT:-1}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES:-67108864}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES:-2097152}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="${FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB:-1024}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="${FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST:-$FORM_CRUD_GUI_JEST_ENABLED}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES:-70}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS:-70}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS:-60}"
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES:-55}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_URL="${FORM_CRUD_REFERENCE_PICKER_CONFIG_URL:-}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN="${FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN:-}"
 FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION="${FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION:-false}"
@@ -530,7 +537,7 @@ run_form_crud_gui_jest() {
   fi
 
   jest_start="$(now_epoch)"
-  timestamped_step "$name" "Form CRUD GUI Angular Jest start"
+  timestamped_step "$name" "Form CRUD GUI Angular Vitest start"
   set +e
   (
     cd "$app_dir"
@@ -540,7 +547,7 @@ run_form_crud_gui_jest() {
   jest_status=$?
   set -e
   jest_end="$(now_epoch)"
-  timestamped_step "$name" "Form CRUD GUI Angular Jest finished in $(duration_seconds "$jest_start" "$jest_end")s"
+  timestamped_step "$name" "Form CRUD GUI Angular Vitest finished in $(duration_seconds "$jest_start" "$jest_end")s"
 
   jq -n \
     --arg artifact "$name" \
@@ -601,6 +608,12 @@ write_form_crud_gui_combined_summary() {
         artifact: ($b.artifact // $j.artifact),
         status: (if ($b.status == "passed" and ($j.status == "passed" or $j.status == "skipped")) then "passed" else "failed" end),
         durationMs: (($b.durationMs // 0) + ($j.durationMs // 0)),
+        workflow: ($b.workflow // {
+          status: "incomplete",
+          complete: false,
+          thresholdEvaluationEligible: false,
+          reasons: [{reasonCode: "browser-workflow-report-unavailable"}]
+        }),
         coverage: ($b.coverage // {}),
         sourceCoverage: ($b.sourceCoverage // {}),
         resourceCount: ($b.resourceCount // $b.coverage.discoveredResources // 0),
@@ -609,9 +622,10 @@ write_form_crud_gui_combined_summary() {
         pageErrors: ($b.pageErrors // []),
         console: ($b.console // []),
         browser: $b,
+        unitTest: $j,
         jest: $j,
         error: (if ($b.status != "passed") then ($b.error // {message: "Form CRUD browser smoke failed or did not run"})
-                elif ($j.status != "passed" and $j.status != "skipped") then {message: "Generated Angular Jest suite failed", log: $j.log}
+                elif ($j.status != "passed" and $j.status != "skipped") then {message: "Generated Angular Vitest suite failed", log: $j.log}
                 else null end)
       }
     ' > "$summary_file"
@@ -671,6 +685,9 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX="$FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX" \
   FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED="$FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED" \
   FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS="$FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS" \
+  FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM="$FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM" \
+  FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS="$FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS" \
+  FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS="$FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS" \
   FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS="$FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED="$FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="$FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT" \
@@ -678,6 +695,10 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="$FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="$FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS" \
+  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES" \
     timeout --kill-after="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS}s" \
       "$FORM_CRUD_GUI_NODE_BIN/node" "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
 
@@ -1975,8 +1996,8 @@ run_evomaster_whitebox() {
   fi
 }
 
-if [[ -f "$TMF_PAYLOAD" ]]; then
-  jq . "$TMF_PAYLOAD" >/dev/null
+if [[ -f "$PERSISTENCE_PROFILES_FILE" ]]; then
+  jq -e 'type == "array"' "$PERSISTENCE_PROFILES_FILE" >/dev/null
 fi
 
 processed_count=0
@@ -2048,14 +2069,22 @@ write_runtime_reports() {
         totalSuccessfulOperations: (map(.coverage.successfulOperations // 0) | add // 0),
         totalApiOperationsPageRenderedOperations: (map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0),
         totalApiOperationsPageSubmittedOperations: (map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0),
-        totalApiOperationsPageSuccessfulOperations: (map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0),
-        totalApiOperationsPageDeclaredResponseOperations: (map(.coverage.apiOperationsPageDeclaredResponseOperations // 0) | add // 0),
-        totalApiOperationsPageContractCoveredOperations: (map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0),
-        totalApiOperationsPageAccountedOperations: (map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0),
+        totalApiOperationsPage2xxSuccesses: (map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0),
+        totalApiOperationsPageExpectedNegatives: (map(.coverage.apiOperationsPageExpectedNegatives // 0) | add // 0),
         totalApiOperationsPageUnexecutableOperations: (map(.coverage.apiOperationsPageUnexecutableOperations // 0) | add // 0),
-        totalApiOperationsPageFailedOperations: (map(.coverage.apiOperationsPageFailedOperations // 0) | add // 0),
+        totalApiOperationsPageHarnessErrors: (map(.coverage.apiOperationsPageHarnessErrors // 0) | add // 0),
+        totalApiOperationsPageUnexpectedFailures: (map(.coverage.apiOperationsPageUnexpectedFailures // 0) | add // 0),
+        totalApiOperationsPageTerminalResults: (map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0),
         totalApiOperationsPageRoundTripChecks: (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0),
         totalApiOperationsPageSuccessfulRoundTripChecks: (map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0),
+        totalApplicableSchemaFields: (map(.coverage.schemaFields.applicable // 0) | add // 0),
+        totalCoveredSchemaFields: (map(.coverage.schemaFields.covered // 0) | add // 0),
+        totalUnavailableSchemaFields: (map(.coverage.schemaFields.unavailable // 0) | add // 0),
+        totalExcludedSchemaFields: (map(.coverage.schemaFields.excluded // 0) | add // 0),
+        totalAccessibleControlsChecked: (map(.coverage.accessibleControlsChecked // 0) | add // 0),
+        totalRequiredValidationChecks: (map(.coverage.requiredValidationChecks // 0) | add // 0),
+        totalKeyboardChecks: (map(.coverage.keyboardChecks // 0) | add // 0),
+        totalDialogAccessibilityChecks: (map(.coverage.dialogAccessibilityChecks // 0) | add // 0),
         totalStructuredObjectOperations: (map(.coverage.structuredObjectOperations // 0) | add // 0),
         totalStructuredArrayOperations: (map(.coverage.structuredArrayOperations // 0) | add // 0),
         totalObjectStringControlFailures: (map(.coverage.objectStringControlFailures // 0) | add // 0),
@@ -2064,10 +2093,10 @@ write_runtime_reports() {
         totalCoveredCombinedSourceLines: (map(.sourceCoverage.combined.lines.covered // 0) | add // 0),
         totalCombinedSourceBranches: (map(.sourceCoverage.combined.branches.total // 0) | add // 0),
         totalCoveredCombinedSourceBranches: (map(.sourceCoverage.combined.branches.covered // 0) | add // 0),
-        angularJestPassed: (map(select((.jest.status // "skipped") == "passed")) | length),
-        angularJestFailed: (map(select((.jest.status // "skipped") == "failed")) | length),
-        angularJestSkipped: (map(select((.jest.status // "skipped") == "skipped")) | length),
-        totalAngularJestDurationMs: (map(.jest.durationMs // 0) | add // 0),
+        angularVitestPassed: (map(select(((.unitTest // .jest).status // "skipped") == "passed")) | length),
+        angularVitestFailed: (map(select(((.unitTest // .jest).status // "skipped") == "failed")) | length),
+        angularVitestSkipped: (map(select(((.unitTest // .jest).status // "skipped") == "skipped")) | length),
+        totalAngularVitestDurationMs: (map((.unitTest // .jest).durationMs // 0) | add // 0),
         createSuccessRatio: ratio((map(.coverage.successfulCreateResources // 0) | add // 0); (map(.coverage.plannedCreateResources // 0) | add // 0)),
         updateSuccessRatio: ratio((map(.coverage.successfulUpdateResources // 0) | add // 0); (map(.coverage.exercisedUpdateResources // 0) | add // 0)),
         deleteSuccessRatio: ratio((map(.coverage.successfulDeleteResources // 0) | add // 0); (map(.coverage.exercisedDeleteResources // 0) | add // 0)),
@@ -2075,10 +2104,10 @@ write_runtime_reports() {
         operationRenderCoverageRatio: ratio((map(.coverage.renderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRenderCoverageRatio: ratio((map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageSuccessCoverageRatio: ratio((map(.coverage.apiOperationsPageSuccessfulOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageContractCoverageRatio: ratio((map(.coverage.apiOperationsPageContractCoveredOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageAccountedCoverageRatio: ratio((map(.coverage.apiOperationsPageAccountedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPage2xxSuccessRatio: ratio((map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageTerminalResultRatio: ratio((map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRoundTripSuccessRatio: ratio((map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0); (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0)),
+        schemaFieldCoverageRatio: ratio((map(.coverage.schemaFields.covered // 0) | add // 0); (map(.coverage.schemaFields.applicable // 0) | add // 0)),
         combinedSourceLineCoverageRatio: ratio((map(.sourceCoverage.combined.lines.covered // 0) | add // 0); (map(.sourceCoverage.combined.lines.total // 0) | add // 0)),
         combinedSourceBranchCoverageRatio: ratio((map(.sourceCoverage.combined.branches.covered // 0) | add // 0); (map(.sourceCoverage.combined.branches.total // 0) | add // 0)),
         artifacts: map({
@@ -2088,7 +2117,7 @@ write_runtime_reports() {
           resourceCount: (.resourceCount // .coverage.discoveredResources // 0),
           coverage,
           sourceCoverage,
-          angularJest: (.jest // null),
+          angularVitest: (.unitTest // .jest // null),
           browserStatus: (.browser.status // .status),
           screenshotCount: ((.screenshots // []) | length),
           failedResponseCount: ((.failedResponses // []) | length),
@@ -2098,6 +2127,7 @@ write_runtime_reports() {
         })
       }
     ' "${form_crud_gui_status_files[@]}" > "$runtime_form_crud_gui_summary_json"
+    node "$SCRIPT_DIR/form-crud-summary-policy.mjs" "$runtime_form_crud_gui_summary_json" "${form_crud_gui_status_files[@]}"
   else
     printf '{"artifactCount":0,"artifacts":[]}\n' > "$runtime_form_crud_gui_summary_json"
   fi
@@ -2340,36 +2370,65 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
       "$EVOMASTER_SEED_BASE_PATH" | tee "$openapi_examples_summary_file"
   fi
 
-  if [[ "$yaml_file" == *"TMF683-Party_Interaction"* && -f "$TMF_PAYLOAD" ]]; then
-    timestamped_step "tmf683" "exact deep PartyInteraction POST"
+  if [[ -f "$PERSISTENCE_PROFILES_FILE" ]]; then
+    while IFS= read -r persistence_profile; do
+      profile_id="$(jq -r '.id' <<< "$persistence_profile")"
+      request_method="$(jq -r '.request.method' <<< "$persistence_profile")"
+      request_path="$(jq -r '.request.path' <<< "$persistence_profile")"
+      request_body_file="$GENERATOR_ROOT/$(jq -r '.request.bodyFile' <<< "$persistence_profile")"
+      database_sql_file="$GENERATOR_ROOT/$(jq -r '.database.sqlFile' <<< "$persistence_profile")"
+      profile_output_dir="$artifact_output_dir/persistence/$profile_id"
+      response_file="$profile_output_dir/response.txt"
+      database_file="$profile_output_dir/database-verification.txt"
+      status_file="$profile_output_dir/status.json"
+      mkdir -p "$profile_output_dir"
+      jq . "$request_body_file" >/dev/null
+
+      timestamped_step "$profile_id" "profile request and database verification"
     TOKEN="$token"
     export TOKEN
-    curl -sS -i -X POST "http://localhost:$PORT/api/partyInteraction" \
+    curl -sS -i -X "$request_method" "http://localhost:$PORT$request_path" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $TOKEN" \
-      --data @"$TMF_PAYLOAD" | tee "$OUTPUT_DIR/tmf683-partyinteraction-response.txt"
-    status=$(awk 'NR==1 {print $2}' "$OUTPUT_DIR/tmf683-partyinteraction-response.txt")
-    if [[ "$status" != "201" ]]; then
+      --data @"$request_body_file" | tee "$response_file"
+    status=$(awk 'NR==1 {print $2}' "$response_file")
+    if ! jq -e --argjson status "$status" '.request.expectedStatuses | index($status) != null' <<< "$persistence_profile" >/dev/null; then
       failure_count=$((failure_count + 1))
-      echo "Expected TMF683 PartyInteraction POST to return 201, got $status" >&2
+      echo "Persistence profile $profile_id returned unexpected HTTP $status" >&2
       tail -n 200 "$log_file" >&2
       jq -n \
         --arg artifact "$name" \
-        --arg phase "tmf683-deep-post" \
+        --arg phase "persistence-profile" \
+        --arg profile "$profile_id" \
         --arg exitCode "1" \
-        --arg responseFile "$OUTPUT_DIR/tmf683-partyinteraction-response.txt" \
+        --arg responseFile "$response_file" \
         --arg appLog "$log_file" \
-        '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), responseFile: $responseFile, appLog: $appLog}' \
+        '{artifact: $artifact, phase: $phase, profile: $profile, exitCode: ($exitCode | tonumber), responseFile: $responseFile, appLog: $appLog}' \
         >> "$failure_summary_lines_file"
-      write_artifact_runtime_status "tmf683-deep-post" "1"
+      write_artifact_runtime_status "persistence-profile" "1"
       write_runtime_reports
       exit 1
     fi
 
-    timestamped_step "tmf683" "database verification snapshot"
     (cd "$app_dir" && docker compose -f src/main/docker/postgresql.yml exec -T postgresql \
       psql -U "$db_user" -d "$db_name" -v ON_ERROR_STOP=1) \
-      < "$DB_VERIFY_SQL" | tee "$OUTPUT_DIR/tmf683-db-verification.txt"
+      < "$database_sql_file" | tee "$database_file"
+      jq -n \
+        --arg artifact "$name" \
+        --arg profile "$profile_id" \
+        --arg requestMethod "$request_method" \
+        --arg requestPath "$request_path" \
+        --arg responseStatus "$status" \
+        --arg responseFile "$response_file" \
+        --arg databaseFile "$database_file" \
+        '{
+          artifact: $artifact,
+          profile: $profile,
+          status: "passed",
+          request: {method: $requestMethod, path: $requestPath, status: ($responseStatus | tonumber), evidence: $responseFile},
+          database: {status: "verified", evidence: $databaseFile}
+        }' > "$status_file"
+    done < <(matching_persistence_profiles "$yaml_file" "$PERSISTENCE_PROFILES_FILE")
   fi
 
   if [[ "$EVOMASTER_ENABLED" == "true" && "$EVOMASTER_REUSE_SMOKE_DB_STATE" == "true" && "$EVOMASTER_PREPARE_LIVE_DB_STATE" == "true" ]]; then

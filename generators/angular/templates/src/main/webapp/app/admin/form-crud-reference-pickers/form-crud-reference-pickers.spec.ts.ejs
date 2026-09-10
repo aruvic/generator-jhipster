@@ -128,4 +128,60 @@ describe('FormCrudReferencePickers', () => {
 
     expect(comp.configs()).toEqual([]);
   });
+
+  it('should keep invalid picker mappings local and expose their editable text values', () => {
+    comp.addConfig();
+    const original = comp.configs()[0];
+    comp.setConfigField(1, 'label', 'ignored');
+    expect(comp.configs()[0]).toBe(original);
+
+    comp.setCopyFields(0, 'id, href:target.href, :ignored');
+
+    expect(comp.displayFieldsText({ ...original, displayFields: undefined })).toBe('');
+    expect(comp.copyFieldsText(comp.configs()[0])).toBe('id:id, href:target.href');
+
+    comp.save();
+
+    httpMock.expectNone(resourceUrl);
+    expect(comp.error()).toContain('source form/schema path');
+    expect(comp.success()).toBe('');
+  });
+
+  it('should restore cached picker mappings when the backend load fails', () => {
+    const cached = [{ id: 'cached', sourcePath: 'references', collectionPath: '/targets' }];
+    localStorage.setItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY, JSON.stringify(cached));
+
+    comp.load();
+    httpMock.expectOne(resourceUrl).flush(
+      { detail: 'Configuration service unavailable', message: 'Retry later' },
+      { status: 503, statusText: 'Service Unavailable' },
+    );
+
+    expect(comp.configs()).toEqual(cached);
+    expect(comp.error()).toContain('Configuration service unavailable');
+    expect(comp.error()).toContain('Retry later');
+  });
+
+  it('should reject malformed cached mappings and retain backend error details', () => {
+    localStorage.setItem(FORM_CRUD_REFERENCE_PICKER_STORAGE_KEY, '{invalid');
+
+    comp.load();
+    httpMock.expectOne(resourceUrl).flush('Configuration unavailable', { status: 503, statusText: 'Service Unavailable' });
+
+    expect(comp.configs()).toEqual([]);
+    expect(comp.error()).toBe('Stored reference picker configuration is not valid JSON.');
+  });
+
+  it('should report save failures without replacing the current picker mapping', () => {
+    comp.addConfig();
+    comp.setConfigField(0, 'sourcePath', 'references');
+    comp.setConfigField(0, 'collectionPath', '/targets');
+    const current = comp.configs();
+
+    comp.save();
+    httpMock.expectOne(resourceUrl).flush({ title: 'Save failed' }, { status: 400, statusText: 'Bad Request' });
+
+    expect(comp.configs()).toEqual(current);
+    expect(comp.error()).toBe('Save failed');
+  });
 });

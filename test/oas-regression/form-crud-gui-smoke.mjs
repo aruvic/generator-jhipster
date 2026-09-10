@@ -6,10 +6,32 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  accessibilityIssues,
+  expandAllNestedAccordions,
+  requiredBodyValidationApplicability,
+  requiredFormlyControlIssues,
+  requiredFormlyControls,
+  requiredValidationResult,
+} from './accessibility-coverage.mjs';
+import { parameterCoverageValue, responseBrowsingFixture } from './form-crud-browser-workflows.mjs';
+import {
+  hasRequiredResourceWorkflowCoverage,
+  requiredWorkflowCompletion,
+  resourceWorkflowCoverage,
+} from './form-crud-workflow-coverage.mjs';
 import { semanticIdentityValue } from './operation-identity.mjs';
 import { selectPayloadFile } from './operation-payload.mjs';
 import { classifyOperationPreparationFailure, classifyOperationResponse } from './operation-response.mjs';
-import { hasRequiredResourceWorkflowCoverage } from './form-crud-workflow-coverage.mjs';
+import { buildOperationSchemaCoverage, evaluateOperationSchemaCoverage } from './operation-schema-coverage.mjs';
+import { captureResponseForAction } from './playwright-response-capture.mjs';
+import {
+  findReferencePickerConfig,
+  findReferencePickerConfigBySemanticKey,
+  referencePickerConfigIdentity,
+  referencePickerConfigsShareSemanticKey,
+  requireReferencePickerConfig,
+} from './reference-picker-admin-state.mjs';
 
 function loadPlaywright() {
   const configuredRoots = [process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT, process.env.PLAYWRIGHT_ROOT].filter(Boolean);
@@ -88,6 +110,11 @@ function compactResponse(response) {
   };
 }
 
+function evidenceHeaders(headers, allowedNames) {
+  const normalized = Object.fromEntries(Object.entries(headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+  return Object.fromEntries(allowedNames.filter(name => normalized[name] !== undefined).map(name => [name, normalized[name]]));
+}
+
 function slug(value) {
   return (
     String(value || 'step')
@@ -106,6 +133,12 @@ function flattenResources(groups = []) {
     }
   }
   return resources;
+}
+
+function resourceWorkflowKey(entry, action) {
+  const resource = entry?.resource;
+  const operation = action === 'update' ? resource?.updateOperation : resource?.deleteOperation;
+  return `${resource?.listOperation?.id ?? resource?.createOperation?.id ?? resource?.label ?? 'resource'}:${action}:${operation?.id ?? 'none'}`;
 }
 
 function normalizeName(value) {
@@ -284,13 +317,17 @@ function operationPathPattern(operation) {
   return new RegExp(`^${escaped}/?$`);
 }
 
-function responseMatchesOperation(response, operation) {
-  if (!operation || response.request().method() !== operation.method) return false;
+function responseMatchesOperationLikeRequest(request, operation) {
+  if (!operation || request.method() !== operation.method) return false;
   try {
-    return operationPathPattern(operation).test(new URL(response.url()).pathname);
+    return operationPathPattern(operation).test(new URL(request.url()).pathname);
   } catch {
     return false;
   }
+}
+
+function responseMatchesOperation(response, operation) {
+  return responseMatchesOperationLikeRequest(response.request(), operation);
 }
 
 function recordOperationResponse(operation, response) {
@@ -403,7 +440,7 @@ function relevantExecutionRecords(operation, { createdByApiOperations = false } 
     .toReversed();
 }
 
-function pathParameterValue(operation, parameter, options = {}) {
+function pathParameterResolution(operation, parameter, options = {}) {
   const records = relevantExecutionRecords(operation, options)
     .filter(record => record.status >= 200 && record.status < 300)
     .sort((left, right) => Number(right.createdByApiOperations) - Number(left.createdByApiOperations));
@@ -413,17 +450,17 @@ function pathParameterValue(operation, parameter, options = {}) {
     scalarValuesForKeys(record.responseBody, new Set([normalizeName(parameter.name)]), exactResponseValues);
   }
   const exactResponse = [...new Set(exactResponseValues.map(value => String(value).trim()).filter(Boolean))][0];
-  if (exactResponse) return exactResponse;
+  if (exactResponse) return { value: exactResponse, source: 'response-exact-field' };
 
   const semanticResponse = semanticIdentityValue(operation, parameter, records, { origins: ['response'] });
-  if (semanticResponse) return semanticResponse;
+  if (semanticResponse) return { value: semanticResponse, source: 'response-semantic-field' };
 
   const exactRequestValues = [];
   for (const record of records) {
     scalarValuesForKeys(record.requestBody, new Set([normalizeName(parameter.name)]), exactRequestValues);
   }
   const exactRequest = [...new Set(exactRequestValues.map(value => String(value).trim()).filter(Boolean))][0];
-  if (exactRequest) return exactRequest;
+  if (exactRequest) return { value: exactRequest, source: 'request-exact-field' };
 
   const values = [];
   for (const record of records) {
@@ -436,10 +473,10 @@ function pathParameterValue(operation, parameter, options = {}) {
     }
   }
   const locationOrUrlIdentity = [...new Set(values.map(value => String(value).trim()).filter(Boolean))][0];
-  if (locationOrUrlIdentity) return locationOrUrlIdentity;
+  if (locationOrUrlIdentity) return { value: locationOrUrlIdentity, source: 'location-or-resource-url' };
 
   const semanticRequest = semanticIdentityValue(operation, parameter, records, { origins: ['request'] });
-  if (semanticRequest) return semanticRequest;
+  if (semanticRequest) return { value: semanticRequest, source: 'request-semantic-field' };
 
   for (const record of records) {
     scalarValuesForKeys(record.responseBody, keyCandidates, values);
@@ -450,7 +487,8 @@ function pathParameterValue(operation, parameter, options = {}) {
       hrefIdentityValues(record.responseBody, values);
     }
   }
-  return [...new Set(values.map(value => String(value).trim()).filter(Boolean))][0];
+  const compatibleValue = [...new Set(values.map(value => String(value).trim()).filter(Boolean))][0];
+  return compatibleValue ? { value: compatibleValue, source: 'compatible-resource-field' } : undefined;
 }
 
 function schemaFieldExample(field, depth = 0) {
@@ -663,18 +701,20 @@ function operationRoundTripResult(record, responseBody = record.responseBody, re
   };
 }
 
-function waitForOperationResponse(pageValue, operation, expectedMethods = undefined, responseTimeoutMs = apiTimeoutMs) {
-  if (operation) {
-    return pageValue
-      .waitForResponse(response => responseMatchesOperation(response, operation), { timeout: responseTimeoutMs })
-      .catch(() => undefined);
-  }
+async function captureOperationResponse(pageValue, operation, action, expectedMethods = undefined, responseTimeoutMs = apiTimeoutMs) {
   const methods = new Set((expectedMethods ?? ['POST', 'PUT', 'PATCH', 'DELETE']).map(method => method.toUpperCase()));
-  return pageValue
-    .waitForResponse(response => methods.has(response.request().method()) && response.url().includes('/api/'), {
+  return captureResponseForAction(
+    pageValue,
+    response =>
+      operation ?
+        responseMatchesOperation(response, operation)
+      : methods.has(response.request().method()) && response.url().includes('/api/'),
+    action,
+    {
       timeout: responseTimeoutMs,
-    })
-    .catch(() => undefined);
+      label: operation?.id ?? [...methods].join('/'),
+    },
+  );
 }
 
 function valueAtPath(source, pathValue) {
@@ -1019,14 +1059,29 @@ const sourceCoveragePrefixes = [
   'src/main/webapp/app/admin/form-crud-reference-pickers/',
   'src/main/webapp/app/openapi-operations/',
 ];
+const sourceCoverageExcludedGeneratedFiles = ['src/main/webapp/app/openapi-operations/openapi-operations.model.ts'];
+const sourceCoverageThresholds = {
+  lines: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES ?? 70),
+  statements: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS ?? 70),
+  functions: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS ?? 60),
+  branches: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES ?? 55),
+};
+const sourceCoverageComponents = [
+  { id: 'form-crud', prefix: sourceCoveragePrefixes[0] },
+  { id: 'reference-picker', prefix: sourceCoveragePrefixes[1] },
+  { id: 'openapi-operations', prefix: sourceCoveragePrefixes[2] },
+];
 const sourceCoverageChunkNames = [
   ...new Set(sourceCoveragePrefixes.map(prefix => prefix.split('/').filter(Boolean).at(-1)).filter(Boolean)),
 ];
 const sourceCoverageMaxScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES ?? 64 * 1024 * 1024);
 const sourceCoverageMaxUnknownScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES ?? 2 * 1024 * 1024);
-const sourceCoverageMergeJest = (process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST ?? 'false') === 'true';
+const sourceCoverageMergeUnitTest = (process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST ?? 'false') === 'true';
+const optionalFieldCoverageMinimum = Number(process.env.FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM ?? 0.5);
 const sourceCoverageWorkerHeapMb = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB ?? 1024);
-const sourceCoverageNavigationsPerSegment = Math.max(1, Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT ?? 3));
+const sourceCoverageNavigationsPerSegment = Math.max(1, Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT ?? 1));
+const persistencePollAttempts = Math.max(1, Number(process.env.FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS ?? 5));
+const persistencePollIntervalMs = Math.max(0, Number(process.env.FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS ?? 500));
 const sourceCoverageWorker = fileURLToPath(new URL('./form-crud-source-coverage.mjs', import.meta.url));
 
 const result = {
@@ -1036,6 +1091,12 @@ const result = {
   endIso: null,
   durationMs: 0,
   status: 'running',
+  workflow: {
+    status: 'running',
+    complete: false,
+    thresholdEvaluationEligible: false,
+    reasons: [],
+  },
   console: [],
   pageErrors: [],
   failedResponses: [],
@@ -1070,35 +1131,52 @@ const result = {
     missingRenderedOperationIds: [],
     apiOperationsPageRenderedOperations: 0,
     apiOperationsPageSubmittedOperations: 0,
-    apiOperationsPageSuccessfulOperations: 0,
+    apiOperationsPage2xxSuccesses: 0,
+    apiOperationsPageExpectedNegatives: 0,
+    apiOperationsPageUnexecutableOperations: 0,
+    apiOperationsPageHarnessErrors: 0,
+    apiOperationsPageUnexpectedFailures: 0,
     apiOperationsPageRenderedOperationIds: [],
     apiOperationsPageSubmittedOperationIds: [],
-    apiOperationsPageSuccessfulOperationIds: [],
-    apiOperationsPageDeclaredResponseOperations: 0,
-    apiOperationsPageDeclaredResponseOperationIds: [],
-    apiOperationsPageContractCoveredOperations: 0,
-    apiOperationsPageContractCoveredOperationIds: [],
-    apiOperationsPageAccountedOperations: 0,
-    apiOperationsPageAccountedOperationIds: [],
-    missingApiOperationsPageAccountedOperationIds: [],
-    missingApiOperationsPageRenderedOperationIds: [],
-    missingApiOperationsPageSubmittedOperationIds: [],
-    missingApiOperationsPageSuccessfulOperationIds: [],
-    apiOperationsPageUnexecutableOperations: 0,
+    apiOperationsPage2xxSuccessOperationIds: [],
+    apiOperationsPageExpectedNegativeOperationIds: [],
     apiOperationsPageUnexecutableOperationIds: [],
-    apiOperationsPageFailedOperations: 0,
-    apiOperationsPageFailedOperationIds: [],
+    apiOperationsPageHarnessErrorOperationIds: [],
+    apiOperationsPageUnexpectedFailureOperationIds: [],
     apiOperationsPageRoundTripChecks: 0,
     apiOperationsPageSuccessfulRoundTripChecks: 0,
+    schemaFields: {},
     structuredObjectOperations: 0,
     structuredArrayOperations: 0,
     objectStringControlFailures: 0,
+    accessibleControlsChecked: 0,
+    requiredValidationChecks: 0,
+    keyboardChecks: 0,
+    dialogAccessibilityChecks: 0,
     responsiveViewportsChecked: 0,
+    adminReferencePickerWorkflows: 0,
+    referencePickerValidationWorkflows: 0,
+    openApiValidationWorkflows: 0,
+    openApiErrorWorkflows: 0,
+    responseBrowsingWorkflows: 0,
+    emptyListFilterWorkflows: 0,
+    persistence: {
+      writeReadChecks: 0,
+      successfulWriteReadChecks: 0,
+      unavailableWriteReadChecks: [],
+      createdIdentityDeletes: 0,
+      postDeleteNotFoundChecks: 0,
+      database: {
+        status: 'unavailable',
+        reasonCode: 'no-generic-runtime-database-capability',
+      },
+    },
   },
   sourceCoverage: {
     enabled: sourceCoverageEnabled,
     scope: sourceCoveragePrefixes,
-    excludedGeneratedFiles: ['src/main/webapp/app/openapi-operations/openapi-operations.model.ts'],
+    excludedGeneratedFiles: sourceCoverageExcludedGeneratedFiles,
+    thresholds: sourceCoverageThresholds,
     maxScriptBytes: sourceCoverageMaxScriptBytes,
     maxUnknownScriptBytes: sourceCoverageMaxUnknownScriptBytes,
     navigationsPerSegment: sourceCoverageNavigationsPerSegment,
@@ -1115,6 +1193,8 @@ let screenshotIndex = 0;
 let apiExchangeIndex = 0;
 let reportWritten = false;
 let declaredOperations = [];
+let requiredValidationExercised = false;
+let reachedWorkflowCoverageGate = false;
 const sourceCoverageScripts = [];
 const sourceCoverageSources = new Map();
 const sourceCoverageSegments = [];
@@ -1124,13 +1204,47 @@ const successfulOperationIds = new Set();
 const apiOperationsPageRenderedOperationIds = new Set();
 const apiOperationsPageSubmittedOperationIds = new Set();
 const apiOperationsPageSuccessfulOperationIds = new Set();
-const apiOperationsPageDeclaredResponseOperationIds = new Set();
-const apiOperationsPageContractCoveredOperationIds = new Set();
+const apiOperationsPageExpectedNegativeOperations = [];
 const apiOperationsPageUnexecutableOperations = [];
-const apiOperationsPageFailedOperations = [];
+const apiOperationsPageHarnessErrors = [];
+const apiOperationsPageUnexpectedFailures = [];
 const operationExecutionRecords = [];
+const identityResolutions = [];
 const structuredObjectOperationIds = new Set();
 const structuredArrayOperationIds = new Set();
+const plannedUpdateResourceKeys = new Set();
+const successfulUpdateResourceKeys = new Set();
+const plannedDeleteResourceKeys = new Set();
+const successfulDeleteResourceKeys = new Set();
+
+function currentTerminalOperationIds() {
+  return [
+    ...new Set([
+      ...apiOperationsPageSuccessfulOperationIds,
+      ...apiOperationsPageExpectedNegativeOperations.map(entry => entry.operationId),
+      ...apiOperationsPageUnexecutableOperations.map(entry => entry.operationId),
+      ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
+      ...apiOperationsPageUnexpectedFailures.map(entry => entry.operationId),
+    ]),
+  ];
+}
+
+function currentWorkflowReport() {
+  return requiredWorkflowCompletion({
+    reachedCoverageGate: reachedWorkflowCoverageGate,
+    declaredOperationIds: declaredOperations.map(operation => operation.id),
+    renderedOperationIds: [...renderedOperationIds],
+    terminalOperationIds: currentTerminalOperationIds(),
+    requireTerminalResults: exerciseApiOperations,
+    resourceCoverage: {
+      plannedUpdateResourceKeys: [...plannedUpdateResourceKeys],
+      successfulUpdateResourceKeys: [...successfulUpdateResourceKeys],
+      plannedDeleteResourceKeys: [...plannedDeleteResourceKeys],
+      successfulDeleteResourceKeys: [...successfulDeleteResourceKeys],
+    },
+    requireResourceCoverage: requireAllAvailableResourceWorkflows,
+  });
+}
 
 function writeResultReport() {
   if (reportWritten) return;
@@ -1146,34 +1260,52 @@ function writeResultReport() {
   result.coverage.missingRenderedOperationIds = declaredIds.filter(operationId => !renderedOperationIds.has(operationId));
   result.coverage.apiOperationsPageRenderedOperations = apiOperationsPageRenderedOperationIds.size;
   result.coverage.apiOperationsPageSubmittedOperations = apiOperationsPageSubmittedOperationIds.size;
-  result.coverage.apiOperationsPageSuccessfulOperations = apiOperationsPageSuccessfulOperationIds.size;
+  result.coverage.apiOperationsPage2xxSuccesses = apiOperationsPageSuccessfulOperationIds.size;
   result.coverage.apiOperationsPageRenderedOperationIds = [...apiOperationsPageRenderedOperationIds].sort();
   result.coverage.apiOperationsPageSubmittedOperationIds = [...apiOperationsPageSubmittedOperationIds].sort();
-  result.coverage.apiOperationsPageSuccessfulOperationIds = [...apiOperationsPageSuccessfulOperationIds].sort();
-  result.coverage.apiOperationsPageDeclaredResponseOperations = apiOperationsPageDeclaredResponseOperationIds.size;
-  result.coverage.apiOperationsPageDeclaredResponseOperationIds = [...apiOperationsPageDeclaredResponseOperationIds].sort();
-  result.coverage.apiOperationsPageContractCoveredOperations = apiOperationsPageContractCoveredOperationIds.size;
-  result.coverage.apiOperationsPageContractCoveredOperationIds = [...apiOperationsPageContractCoveredOperationIds].sort();
+  result.coverage.apiOperationsPage2xxSuccessOperationIds = [...apiOperationsPageSuccessfulOperationIds].sort();
+  result.coverage.apiOperationsPageExpectedNegatives = apiOperationsPageExpectedNegativeOperations.length;
+  result.coverage.apiOperationsPageExpectedNegativeOperationIds = apiOperationsPageExpectedNegativeOperations.map(
+    entry => entry.operationId,
+  );
+  result.coverage.apiOperationsPageUnexecutableOperations = apiOperationsPageUnexecutableOperations.length;
+  result.coverage.apiOperationsPageUnexecutableOperationIds = apiOperationsPageUnexecutableOperations.map(entry => entry.operationId);
+  result.coverage.apiOperationsPageHarnessErrors = apiOperationsPageHarnessErrors.length;
+  result.coverage.apiOperationsPageHarnessErrorOperationIds = apiOperationsPageHarnessErrors.map(entry => entry.operationId);
+  result.coverage.apiOperationsPageUnexpectedFailures = apiOperationsPageUnexpectedFailures.length;
+  result.coverage.apiOperationsPageUnexpectedFailureOperationIds = apiOperationsPageUnexpectedFailures.map(entry => entry.operationId);
+  result.coverage.identityResolutions = identityResolutions;
   result.coverage.missingApiOperationsPageRenderedOperationIds = declaredIds.filter(
     operationId => !apiOperationsPageRenderedOperationIds.has(operationId),
   );
   result.coverage.missingApiOperationsPageSubmittedOperationIds = declaredIds.filter(
     operationId => !apiOperationsPageSubmittedOperationIds.has(operationId),
   );
-  result.coverage.missingApiOperationsPageSuccessfulOperationIds = declaredIds.filter(
+  result.coverage.missingApiOperationsPage2xxSuccessOperationIds = declaredIds.filter(
     operationId => !apiOperationsPageSuccessfulOperationIds.has(operationId),
   );
-  result.coverage.apiOperationsPageUnexecutableOperations = apiOperationsPageUnexecutableOperations.length;
-  result.coverage.apiOperationsPageUnexecutableOperationIds = apiOperationsPageUnexecutableOperations.map(entry => entry.operationId);
-  const accountedIds = new Set([
-    ...apiOperationsPageContractCoveredOperationIds,
-    ...apiOperationsPageUnexecutableOperations.map(entry => entry.operationId),
-  ]);
-  result.coverage.apiOperationsPageAccountedOperations = accountedIds.size;
-  result.coverage.apiOperationsPageAccountedOperationIds = [...accountedIds].sort();
-  result.coverage.missingApiOperationsPageAccountedOperationIds = declaredIds.filter(operationId => !accountedIds.has(operationId));
-  result.coverage.apiOperationsPageFailedOperations = apiOperationsPageFailedOperations.length;
-  result.coverage.apiOperationsPageFailedOperationIds = apiOperationsPageFailedOperations.map(entry => entry.operationId);
+  const terminalIds = new Set(currentTerminalOperationIds());
+  result.coverage.apiOperationsPageTerminalResults = terminalIds.size;
+  result.coverage.missingApiOperationsPageTerminalResultOperationIds = declaredIds.filter(operationId => !terminalIds.has(operationId));
+  result.coverage.plannedUpdateResourceKeys = [...plannedUpdateResourceKeys].sort();
+  result.coverage.successfulUpdateResourceKeys = [...successfulUpdateResourceKeys].sort();
+  result.coverage.plannedDeleteResourceKeys = [...plannedDeleteResourceKeys].sort();
+  result.coverage.successfulDeleteResourceKeys = [...successfulDeleteResourceKeys].sort();
+  Object.assign(result.coverage, resourceWorkflowCoverage(result.coverage));
+  result.workflow = currentWorkflowReport();
+  result.coverage.schemaFields = buildOperationSchemaCoverage(declaredOperations, operationExecutionRecords);
+  result.coverage.schemaFieldGate = evaluateOperationSchemaCoverage(result.coverage.schemaFields, {
+    optionalMinimum: optionalFieldCoverageMinimum,
+    workflowComplete: result.workflow.complete,
+    incompleteReasons: result.workflow.reasons,
+  });
+  result.operationResults = {
+    success2xx: [...apiOperationsPageSuccessfulOperationIds].sort().map(operationId => ({ operationId })),
+    expectedNegative: apiOperationsPageExpectedNegativeOperations,
+    unexecutable: apiOperationsPageUnexecutableOperations,
+    harnessError: apiOperationsPageHarnessErrors,
+    unexpectedFailure: apiOperationsPageUnexpectedFailures,
+  };
   result.coverage.structuredObjectOperations = structuredObjectOperationIds.size;
   result.coverage.structuredArrayOperations = structuredArrayOperationIds.size;
   result.endIso = new Date().toISOString();
@@ -1330,10 +1462,29 @@ async function navigateWithSourceCoverage(targetPage, url, options) {
 async function collectSourceCoverage() {
   if (!sourceCoverageEnabled || !page) return;
   await flushSourceCoverageSegment('final');
+  result.workflow = currentWorkflowReport();
   const sourceCoverageDir = path.join(outputDir, 'source-coverage');
   const workerResultFile = path.join(sourceCoverageDir, 'worker-result.json');
   const workerLogFile = path.join(sourceCoverageDir, 'worker.log');
   const manifestFile = path.join(sourceCoverageDir, 'worker-manifest.json');
+  const sourceFiles = sourceCoverageComponents.map(component => {
+    const directory = path.join(appDir, component.prefix);
+    const files = [];
+    const visit = current => {
+      if (!fs.existsSync(current)) return;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const candidate = path.join(current, entry.name);
+        if (entry.isDirectory()) visit(candidate);
+        else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts')) files.push(candidate);
+      }
+    };
+    visit(directory);
+    return {
+      ...component,
+      sourceFiles: files.filter(file => !sourceCoverageExcludedGeneratedFiles.includes(path.relative(appDir, file).replaceAll('\\', '/'))),
+      thresholds: sourceCoverageThresholds,
+    };
+  });
   fs.writeFileSync(
     manifestFile,
     `${JSON.stringify(
@@ -1342,10 +1493,12 @@ async function collectSourceCoverage() {
         outputDirectory: sourceCoverageDir,
         resultFile: workerResultFile,
         scope: sourceCoveragePrefixes,
-        excludedGeneratedFiles: ['src/main/webapp/app/openapi-operations/openapi-operations.model.ts'],
+        excludedGeneratedFiles: sourceCoverageExcludedGeneratedFiles,
+        components: sourceFiles,
         scripts: sourceCoverageScripts,
-        mergeJest: sourceCoverageMergeJest,
-        jestCoverageFile: path.join(appDir, 'target', 'test-results', 'coverage-final.json'),
+        workflow: result.workflow,
+        mergeUnitTestCoverage: sourceCoverageMergeUnitTest,
+        unitTestCoverageFile: path.join(appDir, 'target', 'test-results', 'coverage-final.json'),
       },
       null,
       2,
@@ -1358,14 +1511,15 @@ async function collectSourceCoverage() {
     maxBuffer: 8 * 1024 * 1024,
   });
   fs.writeFileSync(workerLogFile, `${worker.stdout ?? ''}${worker.stderr ?? ''}`);
-  if (worker.status !== 0 || !fs.existsSync(workerResultFile)) {
+  if (!fs.existsSync(workerResultFile)) {
     throw new Error(`Playwright source coverage worker failed with exit code ${worker.status ?? 'unknown'}; see ${workerLogFile}`);
   }
   const workerReport = JSON.parse(fs.readFileSync(workerResultFile, 'utf8'));
   result.sourceCoverage = {
     enabled: true,
     scope: sourceCoveragePrefixes,
-    excludedGeneratedFiles: ['src/main/webapp/app/openapi-operations/openapi-operations.model.ts'],
+    excludedGeneratedFiles: sourceCoverageExcludedGeneratedFiles,
+    thresholds: sourceCoverageThresholds,
     maxScriptBytes: sourceCoverageMaxScriptBytes,
     maxUnknownScriptBytes: sourceCoverageMaxUnknownScriptBytes,
     workerHeapMb: sourceCoverageWorkerHeapMb,
@@ -1375,6 +1529,9 @@ async function collectSourceCoverage() {
     ...workerReport,
     outputDirectory: sourceCoverageDir,
   };
+  if (worker.status !== 0) {
+    throw new Error(`Playwright source coverage gate failed with exit code ${worker.status ?? 'unknown'}; see ${workerLogFile}`);
+  }
 }
 
 async function handleTermination(signal) {
@@ -1425,6 +1582,145 @@ function formlyStructureStats(fields = []) {
   return stats;
 }
 
+async function accessibleControlSnapshot(root) {
+  return root.locator('input, textarea, select, button').evaluateAll(elements =>
+    elements.map((element, index) => {
+      const labelledBy = (element.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(id => document.getElementById(id)?.textContent?.trim() ?? '')
+        .filter(Boolean)
+        .join(' ');
+      const labels =
+        'labels' in element && element.labels ?
+          Array.from(element.labels)
+            .map(label => label.textContent?.trim() ?? '')
+            .join(' ')
+        : '';
+      const buttonText = element instanceof HTMLButtonElement ? (element.textContent?.trim() ?? '') : '';
+      const rect = element.getBoundingClientRect();
+      const visible = rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden';
+      const nativeRequired = 'required' in element && element.required === true;
+      return {
+        identifier: element.getAttribute('data-cy') ?? element.id ?? element.getAttribute('name') ?? `${element.tagName}-${index}`,
+        elementType: element.tagName.toLowerCase(),
+        name: element.getAttribute('name') ?? '',
+        visible,
+        disabled: 'disabled' in element && element.disabled === true,
+        accessibleName:
+          element.getAttribute('aria-label')?.trim() || labelledBy || labels || buttonText || element.getAttribute('title')?.trim() || '',
+        required: nativeRequired || element.getAttribute('aria-required') === 'true',
+        requiredExposed: nativeRequired || element.getAttribute('aria-required') === 'true',
+      };
+    }),
+  );
+}
+
+async function assertAccessibleControls(page, operation, state) {
+  const form = page.locator('[data-cy="formCrudOperationForm"]').first();
+  const accordionExpansion = await expandAllNestedAccordions(form);
+  const controls = await accessibleControlSnapshot(form);
+  const requiredControls = requiredFormlyControls(state.fields);
+  const issues = [...accessibilityIssues(controls), ...requiredFormlyControlIssues(state.fields, controls)];
+  result.coverage.accessibleControlsChecked += controls.filter(control => control.visible && !control.disabled).length;
+  result.steps.push({
+    name: `accessibility-controls-${operation.id}`,
+    status: issues.length === 0 ? 'ok' : 'failed',
+    checked: controls.length,
+    requiredControls: requiredControls.length,
+    expandedAccordions: accordionExpansion.expanded,
+    issues,
+  });
+  if (issues.length > 0) {
+    throw new Error(
+      `Form CRUD operation ${operation.id} has inaccessible controls: ${issues
+        .map(issue => `${issue.control}:${issue.reasonCode}`)
+        .join(', ')}`,
+    );
+  }
+}
+
+async function exerciseRequiredValidation(page, operation) {
+  if (requiredValidationExercised) return;
+  const applicability = requiredBodyValidationApplicability(operation);
+  if (!applicability.applicable) {
+    result.steps.push({
+      name: `accessibility-required-validation-${operation.id}`,
+      status: 'not-applicable',
+      reasonCode: applicability.reasonCode,
+    });
+    return;
+  }
+  const form = page.locator('[data-cy="formCrudOperationForm"]').first();
+  const candidates = form.locator(
+    'input[required]:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea[required], select[required], input[aria-required="true"]:not([type="checkbox"]):not([type="radio"]):not([type="file"]), textarea[aria-required="true"], select[aria-required="true"]',
+  );
+  const count = await locatorCount(candidates);
+  for (let index = 0; index < count; index += 1) {
+    const control = candidates.nth(index);
+    if (!(await control.isVisible()) || !(await control.isEnabled())) continue;
+    const tagName = await control.evaluate(element => element.tagName.toLowerCase());
+    const originalValue = await control.inputValue();
+    if (tagName === 'select') {
+      const hasEmptyOption = await control.locator('option[value=""]').count();
+      if (!hasEmptyOption) continue;
+      await control.selectOption('');
+    } else {
+      await control.fill('');
+    }
+    await control.blur();
+    const observation = await control.evaluate(element => {
+      const describedBy = (element.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+      return {
+        browserInvalid: 'checkValidity' in element ? !element.checkValidity() : element.getAttribute('aria-invalid') === 'true',
+        ariaInvalid: element.getAttribute('aria-invalid') === 'true',
+        errorAssociated: describedBy.some(id => {
+          const error = document.getElementById(id);
+          return Boolean(error && error.getBoundingClientRect().height > 0 && error.textContent?.trim());
+        }),
+      };
+    });
+    observation.submitDisabled = !(await page.locator('[data-cy="formCrudSubmit"]').first().isEnabled());
+    const validation = requiredValidationResult(observation);
+    if (tagName === 'select') await control.selectOption(originalValue);
+    else await control.fill(originalValue);
+    await control.blur();
+    requiredValidationExercised = true;
+    result.coverage.requiredValidationChecks += 1;
+    result.steps.push({
+      name: `accessibility-required-validation-${operation.id}`,
+      status: validation.passed ? 'ok' : 'failed',
+      ...validation,
+    });
+    if (!validation.passed) {
+      throw new Error(`Form CRUD operation ${operation.id} did not enforce required-field validation`);
+    }
+    return;
+  }
+  result.steps.push({
+    name: `accessibility-required-validation-${operation.id}`,
+    status: 'failed',
+    reasonCode: 'required-body-control-not-rendered',
+  });
+  throw new Error(`Form CRUD operation ${operation.id} did not render a required writable request-body control`);
+}
+
+async function assertAccessibleDialog(modal, stepName) {
+  const observation = await modal.evaluate(element => {
+    const labelledBy = element.getAttribute('aria-labelledby');
+    const labelledByText = labelledBy ? document.getElementById(labelledBy)?.textContent?.trim() : '';
+    return {
+      role: element.getAttribute('role'),
+      modal: element.getAttribute('aria-modal'),
+      accessibleName: element.getAttribute('aria-label')?.trim() || labelledByText || '',
+    };
+  });
+  const passed = observation.role === 'dialog' && observation.modal === 'true' && Boolean(observation.accessibleName);
+  result.coverage.dialogAccessibilityChecks += 1;
+  result.steps.push({ name: stepName, status: passed ? 'ok' : 'failed', ...observation });
+  if (!passed) throw new Error(`${stepName} does not expose a named modal dialog`);
+}
+
 async function assertStructuredOperationForm(page, operation, state) {
   const stats = formlyStructureStats(state.fields ?? []);
   if (stats.objects > 0) structuredObjectOperationIds.add(operation.id);
@@ -1447,6 +1743,8 @@ async function assertStructuredOperationForm(page, operation, state) {
       throw new Error(`Form CRUD operation ${operation.id} did not render its structured object sections as accordions`);
     }
   }
+  await assertAccessibleControls(page, operation, state);
+  await exerciseRequiredValidation(page, operation);
 }
 
 async function exerciseResponsiveLayout(page) {
@@ -1454,6 +1752,7 @@ async function exerciseResponsiveLayout(page) {
   const viewports = [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'tablet', width: 768, height: 1024 },
+    { name: 'mobile', width: 360, height: 800 },
   ];
   try {
     for (const viewport of viewports) {
@@ -1496,6 +1795,9 @@ async function debugState(page) {
 async function gotoOperation(page, operationId) {
   await navigateWithSourceCoverage(page, joinUrl(webBaseUrl, `/form-crud/${operationId}`), { waitUntil: 'domcontentloaded' });
   await page.locator('[data-cy="formCrud"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  if (operationById(operationId)?.method === 'GET') {
+    await page.waitForLoadState('networkidle', { timeout: apiTimeoutMs });
+  }
   return debugState(page);
 }
 
@@ -1507,14 +1809,15 @@ async function submitCurrentOperation(page, stepName, expectedMethods = ['POST',
   }
   const currentState = await debugState(page);
   const submittedOperation = operation ?? operationById(currentState.operationId);
-  const apiResponsePromise = waitForOperationResponse(page, submittedOperation, expectedMethods);
-  await submitButton.click();
-  const apiResponse = await apiResponsePromise;
+  const apiResponse = await captureOperationResponse(page, submittedOperation, () => submitButton.click(), expectedMethods);
   recordOperationResponse(submittedOperation, apiResponse);
   await recordApiExchange(stepName, apiResponse, submittedOperation);
+  if (classifyOperationResponse(submittedOperation?.responseStatusCodes, apiResponse.status()) !== 'success-2xx') {
+    throw new Error(`Happy-path operation ${submittedOperation?.id ?? stepName} returned unexpected HTTP ${apiResponse.status()}`);
+  }
   await page.waitForLoadState('networkidle', { timeout: settleTimeoutMs }).catch(() => undefined);
   await screenshot(page, stepName);
-  result.steps.push({ name: stepName, status: 'submitted', apiExchange: apiResponse ? compactResponse(apiResponse) : undefined });
+  result.steps.push({ name: stepName, status: 'submitted', apiExchange: compactResponse(apiResponse) });
   return true;
 }
 
@@ -1527,8 +1830,10 @@ async function recordApiExchange(stepName, response, operation = undefined, sour
   const fileBase = `${String(++apiExchangeIndex).padStart(2, '0')}-${slug(stepName)}`;
   const requestFile = path.join(outputDir, `${fileBase}-request.txt`);
   const responseFile = path.join(outputDir, `${fileBase}-response.txt`);
+  const exchangeFile = path.join(outputDir, `${fileBase}-exchange.json`);
   const requestText = request.postData() ?? '';
   let responseText;
+  let responseBodyError;
   const exchange = {
     step: stepName,
     operationId: matchedOperation?.id,
@@ -1538,15 +1843,37 @@ async function recordApiExchange(stepName, response, operation = undefined, sour
     status: response.status(),
     requestFile: path.basename(requestFile),
     responseFile: path.basename(responseFile),
+    exchangeFile: path.basename(exchangeFile),
+    capturedAtIso: new Date().toISOString(),
+    requestHeaders: evidenceHeaders(request.headers(), ['accept', 'content-type']),
+    responseHeaders: evidenceHeaders(response.headers(), ['content-type', 'etag', 'last-modified', 'location', 'retry-after']),
   };
   fs.writeFileSync(requestFile, requestText, 'utf8');
+  let responseBodySource = 'network';
+  let networkResponseBodyError;
   try {
     responseText = await response.text();
     fs.writeFileSync(responseFile, responseText, 'utf8');
   } catch (error) {
-    responseText = undefined;
-    fs.writeFileSync(responseFile, `Failed to read response body: ${error.message}`, 'utf8');
+    networkResponseBodyError = error.message;
+    responseText = await renderedResponseBody(response, source);
+    if (responseText === undefined) {
+      responseBodyError = error.message;
+      fs.writeFileSync(responseFile, `Failed to read response body: ${error.message}`, 'utf8');
+    } else {
+      responseBodySource = 'rendered-ui';
+      fs.writeFileSync(responseFile, responseText, 'utf8');
+    }
   }
+  Object.assign(exchange, {
+    requestBodyCaptured: true,
+    responseBodyCaptured: responseBodyError === undefined,
+    responseBodySource,
+    responseBodyBytes: responseText === undefined ? 0 : Buffer.byteLength(responseText),
+    responseBodyError,
+    networkResponseBodyError,
+  });
+  fs.writeFileSync(exchangeFile, `${JSON.stringify(exchange, null, 2)}\n`);
   result.apiExchanges.push(exchange);
   if (matchedOperation) {
     operationExecutionRecords.push({
@@ -1561,7 +1888,35 @@ async function recordApiExchange(stepName, response, operation = undefined, sour
         source === 'api-operations' && matchedOperation.method === 'POST' && response.status() >= 200 && response.status() < 300,
     });
   }
+  if (responseBodyError) {
+    throw new Error(`Failed to persist response body evidence for ${matchedOperation?.id ?? stepName}: ${responseBodyError}`);
+  }
   return exchange;
+}
+
+async function renderedResponseBody(response, source) {
+  if ([204, 205].includes(response.status())) return '';
+  if (source === 'api-operations') {
+    await page.locator('[data-cy="openapiOperationStatus"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+    for (const selector of ['[data-cy="openapiOperationResponse"]', '[data-cy="openapiOperationError"]']) {
+      const candidate = page.locator(selector).first();
+      if ((await locatorCount(candidate)) > 0 && (await candidate.isVisible())) {
+        return (await candidate.textContent()) ?? '';
+      }
+    }
+    return undefined;
+  }
+
+  const state = await debugState(page);
+  if (state.responseRows?.length) return JSON.stringify(state.responseRows.map(row => row.item));
+  if (state.responseDetailModel !== undefined && state.responseDetailModel !== null) {
+    return JSON.stringify(state.responseDetailModel);
+  }
+  const candidate = page.locator('[data-cy="formCrudResponse"]').first();
+  if ((await locatorCount(candidate)) > 0 && (await candidate.isVisible())) {
+    return (await candidate.textContent()) ?? '';
+  }
+  return undefined;
 }
 
 async function saveVisibleDetail(page, stepName, required = false, expectedMutation = undefined, operation = undefined) {
@@ -1587,10 +1942,7 @@ async function saveVisibleDetail(page, stepName, required = false, expectedMutat
     if (required) throw new Error(`Detail form is invalid for ${stepName}`);
     return false;
   }
-  result.coverage.exercisedUpdateResources += 1;
-  const updateResponse = waitForOperationResponse(page, operation, ['PATCH', 'PUT']);
-  await saveButton.click();
-  const response = await updateResponse;
+  const response = await captureOperationResponse(page, operation, () => saveButton.click(), ['PATCH', 'PUT']);
   recordOperationResponse(operation, response);
   await page.waitForLoadState('networkidle', { timeout: settleTimeoutMs }).catch(() => undefined);
   await screenshot(page, stepName);
@@ -1611,7 +1963,6 @@ async function saveVisibleDetail(page, stepName, required = false, expectedMutat
     responseDetailModel: ok ? undefined : state.responseDetailModel,
   });
   if (!ok) throw new Error(`Detail save ${stepName} did not return HTTP 2xx: ${statusText?.trim() || status || 'no status shown'}`);
-  result.coverage.successfulUpdateResources += 1;
   const after = await debugState(page);
   if (!after.responseDetailModel || typeof after.responseDetailModel !== 'object') {
     throw new Error(`Detail save ${stepName} did not repopulate the detail form model`);
@@ -1818,25 +2169,66 @@ async function authenticatedFetch(page, pathValue, options = {}) {
 
 async function configureReferencePickerViaAdmin(page, config) {
   const resourcePath = '/api/form-crud-reference-pickers';
+  const responseMatchesResource = (response, method) => response.url().includes(resourcePath) && response.request().method() === method;
   const clearResponse = await authenticatedFetch(page, resourcePath, { method: 'PUT', body: [] });
   if (clearResponse.status < 200 || clearResponse.status >= 300) {
     throw new Error(`Unable to clear reference picker configuration before GUI setup: HTTP ${clearResponse.status}`);
   }
 
-  await navigateWithSourceCoverage(page, joinUrl(webBaseUrl, '/admin/form-crud-reference-pickers'), {
-    waitUntil: 'domcontentloaded',
-  });
-  await page.locator('[data-cy="formCrudReferencePickers"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  const loaded = await captureResponseForAction(
+    page,
+    response => responseMatchesResource(response, 'GET'),
+    () =>
+      navigateWithSourceCoverage(page, joinUrl(webBaseUrl, '/admin/form-crud-reference-pickers'), {
+        waitUntil: 'domcontentloaded',
+      }),
+    { timeout: apiTimeoutMs, label: 'reference picker admin load' },
+  );
+  if (loaded.status() < 200 || loaded.status() >= 300) {
+    throw new Error(`Reference picker admin load failed: HTTP ${loaded.status()}`);
+  }
+  const root = page.locator('[data-cy="formCrudReferencePickers"]').first();
+  await root.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  await root.locator('[data-cy="formCrudRegisteredForms"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  await root.locator('[data-cy="formCrudRegisteredRestApis"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
   await screenshot(page, 'reference-picker-admin-empty');
 
-  await page.locator('[data-cy="formCrudReferencePickersAdd"]').click();
-  const configPanel = page.locator('[data-cy="formCrudReferencePickerConfig"]').last();
+  await root.locator('[data-cy="formCrudReferencePickersAdd"]').click();
+  const configPanel = root.locator('[data-cy="formCrudReferencePickerConfig"]').last();
   await configPanel.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  const formSelect = configPanel.locator('[data-cy="formCrudReferencePickerFormId"]');
+  const targetSelect = configPanel.locator('[data-cy="formCrudReferencePickerTargetApiId"]');
+  const [registeredForms, registeredTargets] = await Promise.all([
+    formSelect.locator('option').evaluateAll(options => options.map(option => option.value)),
+    targetSelect.locator('option').evaluateAll(options => options.map(option => option.value)),
+  ]);
+  if (!registeredForms.includes(config.formId) || !registeredTargets.includes(config.targetApiId)) {
+    const missing = [
+      !registeredForms.includes(config.formId) && `source form ${config.formId}`,
+      !registeredTargets.includes(config.targetApiId) && `target API ${config.targetApiId}`,
+    ].filter(Boolean);
+    result.steps.push({
+      name: 'reference-picker-admin-workflow',
+      status: 'unexecutable',
+      reasonCode: 'no-compatible-registered-target',
+      reason: `no compatible registered ${missing.join(' or ')}`,
+    });
+    return undefined;
+  }
+
   await configPanel.locator('[data-cy="formCrudReferencePickerLabel"]').fill(config.label ?? '');
-  await configPanel.locator('[data-cy="formCrudReferencePickerFormId"]').selectOption(config.formId ?? '');
-  await configPanel.locator('[data-cy="formCrudReferencePickerSourcePath"]').fill(config.sourcePath);
-  await configPanel.locator('[data-cy="formCrudReferencePickerTargetApiId"]').selectOption(config.targetApiId ?? '');
-  await configPanel.locator('[data-cy="formCrudReferencePickerCollectionPath"]').fill(config.collectionPath);
+  await formSelect.selectOption(config.formId ?? '');
+  await targetSelect.selectOption(config.targetApiId ?? '');
+  const sourcePath = configPanel.locator('[data-cy="formCrudReferencePickerSourcePath"]');
+  const collectionPath = configPanel.locator('[data-cy="formCrudReferencePickerCollectionPath"]');
+  await sourcePath.fill('');
+  await collectionPath.fill('');
+  await root.locator('[data-cy="formCrudReferencePickersSave"]').click();
+  await root.locator('[data-cy="formCrudReferencePickersError"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  result.coverage.referencePickerValidationWorkflows += 1;
+
+  await sourcePath.fill(config.sourcePath);
+  await collectionPath.fill(config.collectionPath);
   await configPanel.locator('[data-cy="formCrudReferencePickerBaseUrl"]').fill(config.targetBaseUrl ?? '');
   await configPanel.locator('[data-cy="formCrudReferencePickerSearchParam"]').fill(config.searchParam ?? '');
   await configPanel.locator('[data-cy="formCrudReferencePickerDisplayFields"]').fill((config.displayFields ?? []).join(', '));
@@ -1849,59 +2241,114 @@ async function configureReferencePickerViaAdmin(page, config) {
     await multipleCheckbox.click();
   }
 
-  const saveResponse = page.waitForResponse(response => response.url().includes(resourcePath) && response.request().method() === 'PUT', {
-    timeout: apiTimeoutMs,
-  });
-  await page.locator('[data-cy="formCrudReferencePickersSave"]').click();
-  const response = await saveResponse;
+  const response = await captureResponseForAction(
+    page,
+    candidate => responseMatchesResource(candidate, 'PUT'),
+    () => root.locator('[data-cy="formCrudReferencePickersSave"]').click(),
+    { timeout: apiTimeoutMs, label: 'reference picker admin save' },
+  );
   if (response.status() < 200 || response.status() >= 300) {
     throw new Error(`Reference picker admin save failed: HTTP ${response.status()}`);
   }
-  let requestedConfig;
+  let requestedBody;
   try {
-    const requestedBody = JSON.parse(response.request().postData() ?? '[]');
-    requestedConfig =
-      Array.isArray(requestedBody) ?
-        requestedBody.find(
-          candidate =>
-            candidate?.formId === config.formId &&
-            candidate?.targetApiId === config.targetApiId &&
-            candidate?.sourcePath === config.sourcePath &&
-            candidate?.collectionPath === config.collectionPath,
-        )
-      : undefined;
-  } catch {
-    requestedConfig = undefined;
+    requestedBody = JSON.parse(response.request().postData() ?? '[]');
+  } catch (error) {
+    throw new Error(`Reference picker admin PUT request was not valid JSON: ${error.message}`, { cause: error });
   }
-  await page.locator('[data-cy="formCrudReferencePickersSuccess"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  if (!findReferencePickerConfigBySemanticKey(requestedBody, config)) {
+    throw new Error('Reference picker admin PUT request did not contain the configured semantic key');
+  }
+  const responseBody = await response.json();
+  const returnedConfig = findReferencePickerConfigBySemanticKey(responseBody, config);
+  if (!returnedConfig) {
+    throw new Error('Reference picker admin PUT response did not return the configured semantic key');
+  }
+
+  await root.locator('[data-cy="formCrudReferencePickersSuccess"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
   await screenshot(page, 'reference-picker-admin-saved');
 
-  const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
-  const saved =
-    Array.isArray(persisted.body) ?
-      persisted.body.find(
-        candidate =>
-          candidate?.formId === config.formId &&
-          candidate?.targetApiId === config.targetApiId &&
-          candidate?.sourcePath === config.sourcePath &&
-          candidate?.collectionPath === config.collectionPath,
-      )
-    : undefined;
-  if (!saved) {
-    throw new Error('Reference picker configuration was not returned by the backend after admin save');
+  const reloadResponse = await captureResponseForAction(
+    page,
+    candidate => responseMatchesResource(candidate, 'GET'),
+    () => page.reload({ waitUntil: 'domcontentloaded' }),
+    { timeout: apiTimeoutMs, label: 'reference picker admin reload' },
+  );
+  if (reloadResponse.status() < 200 || reloadResponse.status() >= 300) {
+    throw new Error(`Reference picker admin reload failed: HTTP ${reloadResponse.status()}`);
   }
-  const requestedIdentity = requestedConfig?.id ?? requestedConfig?.pickerId;
-  const savedIdentity = saved.id ?? saved.pickerId;
-  if (requestedIdentity && savedIdentity !== requestedIdentity) {
-    throw new Error(
-      `Reference picker configuration identity was not preserved after admin save: expected ${requestedIdentity}, got ${savedIdentity}`,
-    );
-  }
-
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.locator('[data-cy="formCrudReferencePickerConfig"]').first().waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  const persistedConfig = requireReferencePickerConfig(await reloadResponse.json(), returnedConfig, 'restored after admin reload');
+  await referencePickerPanel(root, persistedConfig);
   await screenshot(page, 'reference-picker-admin-reloaded');
-  result.steps.push({ name: 'reference-picker-admin-save-load', status: 'ok', sourcePath: config.sourcePath });
+  result.steps.push({
+    name: 'reference-picker-admin-save-load',
+    status: 'ok',
+    sourcePath: config.sourcePath,
+    identity: referencePickerConfigIdentity(persistedConfig),
+  });
+  return persistedConfig;
+}
+
+async function referencePickerPanel(root, config) {
+  const panels = root.locator('[data-cy="formCrudReferencePickerConfig"]');
+  for (let index = 0; index < (await locatorCount(panels)); index += 1) {
+    const panel = panels.nth(index);
+    const [formId, targetApiId, sourcePath, collectionPath] = await Promise.all([
+      panel.locator('[data-cy="formCrudReferencePickerFormId"]').inputValue(),
+      panel.locator('[data-cy="formCrudReferencePickerTargetApiId"]').inputValue(),
+      panel.locator('[data-cy="formCrudReferencePickerSourcePath"]').inputValue(),
+      panel.locator('[data-cy="formCrudReferencePickerCollectionPath"]').inputValue(),
+    ]);
+    if (referencePickerConfigsShareSemanticKey({ formId, targetApiId, sourcePath, collectionPath }, config)) return panel;
+  }
+  throw new Error('Reference picker configuration semantic key was not rendered after admin reload');
+}
+
+async function deleteReferencePickerViaAdmin(page, savedConfig) {
+  const resourcePath = '/api/form-crud-reference-pickers';
+  const responseMatchesResource = (response, method) => response.url().includes(resourcePath) && response.request().method() === method;
+  const loaded = await captureResponseForAction(
+    page,
+    response => responseMatchesResource(response, 'GET'),
+    () =>
+      navigateWithSourceCoverage(page, joinUrl(webBaseUrl, '/admin/form-crud-reference-pickers'), {
+        waitUntil: 'domcontentloaded',
+      }),
+    { timeout: apiTimeoutMs, label: 'reference picker admin deletion load' },
+  );
+  if (loaded.status() < 200 || loaded.status() >= 300) {
+    throw new Error(`Reference picker admin deletion load failed: HTTP ${loaded.status()}`);
+  }
+  requireReferencePickerConfig(await loaded.json(), savedConfig, 'available before admin deletion');
+  const root = page.locator('[data-cy="formCrudReferencePickers"]').first();
+  await root.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  const panel = await referencePickerPanel(root, savedConfig);
+  const removed = await captureResponseForAction(
+    page,
+    response => responseMatchesResource(response, 'PUT'),
+    () => panel.locator('[data-cy="formCrudReferencePickersRemove"]').click(),
+    { timeout: apiTimeoutMs, label: 'reference picker admin deletion' },
+  );
+  if (removed.status() < 200 || removed.status() >= 300) {
+    throw new Error(`Reference picker admin deletion failed: HTTP ${removed.status()}`);
+  }
+  if (findReferencePickerConfig(await removed.json(), savedConfig)) {
+    throw new Error('Reference picker admin deletion response retained the saved configuration identity');
+  }
+  const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
+  if (persisted.status < 200 || persisted.status >= 300) {
+    throw new Error(`Reference picker admin deletion verification failed: HTTP ${persisted.status}`);
+  }
+  if (findReferencePickerConfig(persisted.body, savedConfig)) {
+    throw new Error('Reference picker configuration identity remained persisted after admin deletion');
+  }
+  await screenshot(page, 'reference-picker-admin-workflow');
+  result.coverage.adminReferencePickerWorkflows += 1;
+  result.steps.push({
+    name: 'reference-picker-admin-workflow',
+    status: 'ok',
+    identity: referencePickerConfigIdentity(savedConfig),
+  });
 }
 
 async function seedOperationFromGeneratedForm(page, operation, stepName) {
@@ -1955,14 +2402,17 @@ async function exercisePanel(page) {
   const panel = page.locator('[data-cy="formCrudResourcePanel"]').first();
   const toggle = page.locator('[data-cy="formCrudTogglePanel"]').first();
   if ((await locatorCount(panel)) === 0 || (await locatorCount(toggle)) === 0) return;
-  await toggle.click();
+  await toggle.focus();
+  await page.keyboard.press('Enter');
   await page
     .locator('[data-cy="formCrudResourcePanel"]')
     .waitFor({ state: 'detached', timeout: optionalTimeoutMs })
     .catch(() => undefined);
   await screenshot(page, 'form-crud-panel-collapsed');
-  await toggle.click();
+  await toggle.focus();
+  await page.keyboard.press('Enter');
   await panel.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  result.coverage.keyboardChecks += 2;
   result.steps.push({ name: 'resource-panel-collapse-expand', status: 'ok' });
 }
 
@@ -2051,6 +2501,7 @@ async function exerciseOpenApiOperationsPage(page, operations) {
     });
     return;
   }
+  await exerciseOpenApiOperationsValidationAndError(page, select, safeGet);
   await selectOpenApiOperation(page, select, safeGet);
   for (const parameter of safeGet.parameters ?? []) {
     if (!parameter.required) continue;
@@ -2068,9 +2519,7 @@ async function exerciseOpenApiOperationsPage(page, operations) {
   if (!(await submit.isEnabled())) {
     throw new Error(`API Operations safe GET ${safeGet.id} remained invalid after required parameters were populated`);
   }
-  const responsePromise = waitForOperationResponse(page, safeGet, ['GET']);
-  await submit.click();
-  const response = await responsePromise;
+  const response = await captureOperationResponse(page, safeGet, () => submit.click(), ['GET']);
   const status = response?.status();
   apiOperationsPageSubmittedOperationIds.add(safeGet.id);
   recordOperationResponse(safeGet, response);
@@ -2082,6 +2531,119 @@ async function exerciseOpenApiOperationsPage(page, operations) {
   await page.locator('[data-cy="openapiOperationStatus"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
   await screenshot(page, `api-operations-${safeGet.id}`);
   result.steps.push({ name: 'api-operations-page-safe-get', status: 'ok', operationId: safeGet.id, httpStatus: status });
+}
+
+async function exerciseOpenApiOperationsValidationAndError(page, select, operation) {
+  await selectOpenApiOperation(page, select, operation);
+  const submit = page.locator('[data-cy="openapiOperationSubmit"]').first();
+  const requiredParameter = (operation.parameters ?? []).find(parameter => parameter.required);
+  if (requiredParameter) {
+    const dataCy = `openapi-param-${requiredParameter.location}-${requiredParameter.name}`;
+    const control = page.locator(`[data-cy=${JSON.stringify(dataCy)}]`).first();
+    const originalValue = await control.inputValue();
+    const tagName = await control.evaluate(element => element.tagName.toLowerCase());
+    if (tagName === 'select') {
+      const hasEmptyOption = (await control.locator('option[value=""]').count()) > 0;
+      if (hasEmptyOption) await control.selectOption('');
+    } else {
+      await control.fill('');
+    }
+    await control.blur();
+    await page.waitForFunction(
+      () => document.querySelector('[data-cy="openapiOperationSubmit"]')?.hasAttribute('disabled') === true,
+      undefined,
+      { timeout: optionalTimeoutMs },
+    );
+    if (await submit.isEnabled()) {
+      throw new Error(`API Operations required parameter ${requiredParameter.name} did not disable submission`);
+    }
+    if (tagName === 'select') await control.selectOption(originalValue);
+    else await control.fill(originalValue || requiredOpenApiParameterValue(requiredParameter));
+    result.coverage.openApiValidationWorkflows += 1;
+    result.steps.push({
+      name: `api-operations-required-validation-${operation.id}`,
+      status: 'ok',
+      parameter: requiredParameter.name,
+    });
+  } else {
+    for (const parameter of operation.parameters ?? []) {
+      const dataCy = `openapi-param-${parameter.location}-${parameter.name}`;
+      const control = page.locator(`[data-cy=${JSON.stringify(dataCy)}]`).first();
+      if ((await locatorCount(control)) === 0) continue;
+      const tagName = await control.evaluate(element => element.tagName.toLowerCase());
+      if (tagName === 'select') {
+        if ((await control.locator('option[value=""]').count()) > 0) await control.selectOption('');
+      } else {
+        await control.fill('');
+      }
+    }
+    if (!(await submit.isEnabled())) {
+      throw new Error(`API Operations optional-only form ${operation.id} rejected an empty filter set`);
+    }
+    result.coverage.openApiValidationWorkflows += 1;
+    result.steps.push({
+      name: `api-operations-optional-validation-${operation.id}`,
+      status: 'ok',
+      parameterCount: operation.parameters?.length ?? 0,
+    });
+  }
+
+  for (const parameter of operation.parameters ?? []) {
+    const value = parameterCoverageValue(parameter);
+    if (value === undefined) continue;
+    const dataCy = `openapi-param-${parameter.location}-${parameter.name}`;
+    const control = page.locator(`[data-cy=${JSON.stringify(dataCy)}]`).first();
+    await fillOpenApiParameterControl(control, parameter, value);
+  }
+  if (!(await submit.isEnabled())) {
+    throw new Error(`API Operations error workflow for ${operation.id} remained invalid after user input`);
+  }
+  const errors = [
+    {
+      status: 400,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ title: 'Invalid browser workflow request', detail: 'Review the entered parameters.' }),
+    },
+    { status: 422, contentType: 'text/plain', body: 'The entered parameters could not be processed.' },
+  ];
+  for (const errorResponse of errors) {
+    const routeHandler = async route => {
+      const request = route.request();
+      let matches = request.method() === operation.method;
+      try {
+        matches &&= operationPathPattern(operation).test(new URL(request.url()).pathname);
+      } catch {
+        matches = false;
+      }
+      if (!matches) {
+        await route.continue();
+        return;
+      }
+      await route.fulfill(errorResponse);
+    };
+    await page.route('**/*', routeHandler);
+    try {
+      const responsePromise = page.waitForResponse(
+        candidate => candidate.status() === errorResponse.status && responseMatchesOperation(candidate, operation),
+        { timeout: apiTimeoutMs },
+      );
+      await submit.click();
+      await responsePromise;
+      await page.locator('[data-cy="openapiOperationError"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+      const statusText = await page.locator('[data-cy="openapiOperationStatus"]').textContent();
+      if (!statusText?.includes(String(errorResponse.status))) {
+        throw new Error(`API Operations error workflow did not render HTTP ${errorResponse.status} for ${operation.id}`);
+      }
+    } finally {
+      await page.unroute('**/*', routeHandler);
+    }
+  }
+  result.coverage.openApiErrorWorkflows += 1;
+  result.steps.push({
+    name: `api-operations-error-response-${operation.id}`,
+    status: 'ok',
+    httpStatuses: errors.map(error => error.status),
+  });
 }
 
 function apiOperationExecutionPriority(operation) {
@@ -2119,6 +2681,19 @@ function bodyWithResolvedPathParameters(operation, body, parameterValues) {
   return output;
 }
 
+function concreteOperationPath(operation) {
+  let concretePath = operation.path;
+  const resolutions = [];
+  for (const parameter of operationPathParameters(operation)) {
+    const resolution =
+      pathParameterResolution(operation, parameter, { createdByApiOperations: true }) ?? pathParameterResolution(operation, parameter);
+    if (!resolution) return undefined;
+    concretePath = concretePath.replace(`{${parameter.name}}`, encodeURIComponent(resolution.value));
+    resolutions.push({ parameter: parameter.name, ...resolution });
+  }
+  return { path: apiPath(concretePath), resolutions };
+}
+
 async function fillOpenApiParameterControl(control, parameter, value) {
   const nextValue = parameterControlValue(parameter, value);
   const tagName = await control.evaluate(element => element.tagName.toLowerCase());
@@ -2132,30 +2707,30 @@ async function fillOpenApiParameterControl(control, parameter, value) {
 async function prepareOpenApiOperation(page, select, operation) {
   await selectOpenApiOperation(page, select, operation);
   const parameterValues = {};
+  const identityResolutions = [];
   for (const parameter of operation.parameters ?? []) {
     const dataCy = `openapi-param-${parameter.location}-${parameter.name}`;
     const control = page.locator(`[data-cy=${JSON.stringify(dataCy)}]`).first();
     let value = '';
     if (parameter.location === 'path') {
-      value =
-        pathParameterValue(operation, parameter, {
+      const resolution =
+        pathParameterResolution(operation, parameter, {
           createdByApiOperations: true,
-        }) ??
-        (operation.method === 'DELETE' ? undefined : pathParameterValue(operation, parameter)) ??
-        '';
-      if (!value && operation.method !== 'DELETE') {
-        value = requiredOpenApiParameterValue(parameter);
-      }
+        }) ?? pathParameterResolution(operation, parameter);
+      value = resolution?.value ?? '';
       if (!value) {
         return {
           executable: false,
-          workflowBlocked: operation.method === 'DELETE',
-          reason:
-            operation.method === 'DELETE' ?
-              `no identity created during the API Operations sweep for path parameter ${parameter.name}`
-            : `unable to resolve path parameter ${parameter.name}`,
+          unexecutable: true,
+          reasonCode: 'missing-upstream-resource',
+          reason: `no compatible created identity is available for path parameter ${parameter.name}`,
         };
       }
+      identityResolutions.push({
+        parameter: parameter.name,
+        value,
+        source: resolution.source,
+      });
     } else if (parameter.required) {
       value = requiredOpenApiParameterValue(parameter);
     }
@@ -2168,7 +2743,12 @@ async function prepareOpenApiOperation(page, select, operation) {
     requestBody = bodyWithResolvedPathParameters(operation, bodyForApiOperation(operation), parameterValues);
     const bodyControl = page.locator('[data-cy="openapiRequestBody"]').first();
     if (requestBody === undefined && operation.requestBodyRequired) {
-      return { executable: false, reason: 'required request body could not be synthesized' };
+      return {
+        executable: false,
+        unexecutable: true,
+        reasonCode: 'unsynthesizable-required-body',
+        reason: 'required request body could not be synthesized',
+      };
     }
     const serialized =
       requestBody === undefined ? ''
@@ -2179,9 +2759,13 @@ async function prepareOpenApiOperation(page, select, operation) {
 
   const submit = page.locator('[data-cy="openapiOperationSubmit"]').first();
   if (!(await submit.isEnabled())) {
-    return { executable: false, reason: 'operation form remains invalid after generated values were populated' };
+    return {
+      executable: false,
+      reasonCode: 'ui-control-invalid',
+      reason: 'operation form remains invalid after generated values were populated',
+    };
   }
-  return { executable: true, submit, parameterValues, requestBody };
+  return { executable: true, submit, parameterValues, identityResolutions, requestBody };
 }
 
 function recordApiOperationsRoundTrip(
@@ -2205,9 +2789,11 @@ function recordApiOperationsRoundTrip(
     expected: roundTrip.expected,
     actual: roundTrip.actual,
   });
-  apiOperationsPageFailedOperations.push({
+  apiOperationsPageSuccessfulOperationIds.delete(record.operation.id);
+  apiOperationsPageUnexpectedFailures.push({
     operationId: record.operation.id,
     phase: 'round-trip',
+    reasonCode: 'response-round-trip-mismatch',
     reason: 'response did not contain the writable request payload fields',
   });
   return false;
@@ -2239,6 +2825,77 @@ function verifyCreatedOperationDetailRoundTrips() {
   }
 }
 
+async function verifyWritePersistence(page, record) {
+  if (!record.requestBody || typeof record.requestBody !== 'object') return true;
+  let targetPath;
+  let identityEvidence = [];
+  const detailOperation = declaredOperations.find(
+    candidate =>
+      candidate.method === 'GET' &&
+      operationPathParameters(candidate).length > 0 &&
+      operationStaticPrefix(candidate) === operationStaticPrefix(record.operation),
+  );
+  const location = record.responseHeaders?.location;
+  if (location) {
+    try {
+      const locationUrl = new URL(location, webBaseUrl);
+      targetPath = `${locationUrl.pathname}${locationUrl.search}`;
+      identityEvidence = [{ source: 'location-header', value: targetPath }];
+    } catch {
+      targetPath = location;
+      identityEvidence = [{ source: 'location-header', value: location }];
+    }
+  }
+  if (!targetPath) {
+    const concrete = detailOperation ? concreteOperationPath(detailOperation) : undefined;
+    targetPath = concrete?.path;
+    identityEvidence = concrete?.resolutions ?? [];
+  }
+  if (!targetPath) {
+    result.coverage.persistence.unavailableWriteReadChecks.push({
+      operationId: record.operation.id,
+      reasonCode: 'resource-url-unavailable',
+    });
+    return true;
+  }
+
+  result.coverage.persistence.writeReadChecks += 1;
+  const attempts = record.status === 202 ? persistencePollAttempts : 1;
+  let persisted;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    persisted = await authenticatedFetch(page, targetPath, { method: 'GET' });
+    if (persisted.status >= 200 && persisted.status < 300) break;
+    if (attempt < attempts) await page.waitForTimeout(persistencePollIntervalMs);
+  }
+  const persistedSchema =
+    detailOperation?.responseBodyFields?.length ? detailOperation.responseBodyFields
+    : record.operation.responseBodyFields?.length ? record.operation.responseBodyFields
+    : record.operation.requestBodyFields;
+  const roundTrip = operationRoundTripResult(record, persisted?.body, persistedSchema);
+  const passed = persisted?.status >= 200 && persisted.status < 300 && roundTrip.checked && roundTrip.matched;
+  result.steps.push({
+    name: `persistence-write-read-${record.operation.id}`,
+    status: passed ? 'ok' : 'unexpected-failure',
+    httpStatus: persisted?.status,
+    identityEvidence,
+    roundTripChecked: roundTrip.checked,
+    roundTripMatched: roundTrip.matched,
+    attempts,
+  });
+  if (!passed) {
+    apiOperationsPageSuccessfulOperationIds.delete(record.operation.id);
+    apiOperationsPageUnexpectedFailures.push({
+      operationId: record.operation.id,
+      phase: 'persistence-write-read',
+      reasonCode: 'persisted-resource-mismatch',
+      reason: `written resource could not be read back consistently from ${targetPath}`,
+    });
+    return false;
+  }
+  result.coverage.persistence.successfulWriteReadChecks += 1;
+  return true;
+}
+
 async function exerciseAllOpenApiOperations(page, operations) {
   if (!exerciseApiOperations) {
     result.steps.push({ name: 'api-operations-page-execution-coverage', status: 'skipped', reason: 'execution disabled' });
@@ -2256,48 +2913,90 @@ async function exerciseAllOpenApiOperations(page, operations) {
   for (const operation of ordered) {
     const prepared = await prepareOpenApiOperation(page, select, operation);
     if (!prepared.executable) {
-      const entry = { operationId: operation.id, method: operation.method, path: operation.path, reason: prepared.reason };
-      const preparationClassification = classifyOperationPreparationFailure(prepared);
-      if (preparationClassification === 'workflow-blocked') {
-        apiOperationsPageUnexecutableOperations.push(entry);
-        result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'unexecutable', ...entry });
-      } else {
-        apiOperationsPageFailedOperations.push(entry);
-        result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'failed', ...entry });
-      }
-      continue;
-    }
-
-    const responsePromise = waitForOperationResponse(page, operation, [operation.method], Math.min(apiTimeoutMs, 15000));
-    await prepared.submit.click();
-    apiOperationsPageSubmittedOperationIds.add(operation.id);
-    const response = await responsePromise;
-    recordOperationResponse(operation, response);
-    if (!response) {
       const entry = {
         operationId: operation.id,
         method: operation.method,
         path: operation.path,
-        reason: 'no matching HTTP response was observed',
+        reasonCode: prepared.reasonCode,
+        reason: prepared.reason,
       };
-      apiOperationsPageFailedOperations.push(entry);
-      result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'failed', ...entry });
+      const preparationClassification = classifyOperationPreparationFailure(prepared);
+      if (preparationClassification === 'unexecutable') {
+        apiOperationsPageUnexecutableOperations.push(entry);
+        result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'unexecutable', ...entry });
+      } else {
+        apiOperationsPageHarnessErrors.push(entry);
+        result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'harness-error', ...entry });
+      }
       continue;
     }
+    if (prepared.identityResolutions.length > 0) {
+      const resolutions = prepared.identityResolutions.map(resolution => ({
+        operationId: operation.id,
+        ...resolution,
+      }));
+      identityResolutions.push(...resolutions);
+      result.steps.push({
+        name: `api-operations-identities-${operation.id}`,
+        status: 'resolved',
+        identities: resolutions,
+      });
+    }
+
+    apiOperationsPageSubmittedOperationIds.add(operation.id);
+    let response;
+    try {
+      response = await captureOperationResponse(
+        page,
+        operation,
+        () => prepared.submit.click(),
+        [operation.method],
+        Math.min(apiTimeoutMs, 15000),
+      );
+    } catch (error) {
+      const entry = {
+        operationId: operation.id,
+        method: operation.method,
+        path: operation.path,
+        reasonCode: 'response-capture-failed',
+        reason: error.message,
+      };
+      apiOperationsPageHarnessErrors.push(entry);
+      result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'harness-error', ...entry });
+      continue;
+    }
+    recordOperationResponse(operation, response);
 
     const status = response.status();
-    await recordApiExchange(`api-operations-execute-${operation.id}`, response, operation, 'api-operations');
+    try {
+      await recordApiExchange(`api-operations-execute-${operation.id}`, response, operation, 'api-operations');
+    } catch (error) {
+      const entry = {
+        operationId: operation.id,
+        method: operation.method,
+        path: operation.path,
+        reasonCode: 'response-evidence-failed',
+        reason: error.message,
+      };
+      apiOperationsPageHarnessErrors.push(entry);
+      result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'harness-error', ...entry });
+      continue;
+    }
     await page
       .locator('[data-cy="openapiOperationStatus"]')
       .waitFor({ state: 'visible', timeout: optionalTimeoutMs })
       .catch(() => undefined);
     const responseClassification = classifyOperationResponse(operation.responseStatusCodes, status);
-    if (responseClassification === 'declared-response') {
-      apiOperationsPageDeclaredResponseOperationIds.add(operation.id);
-      apiOperationsPageContractCoveredOperationIds.add(operation.id);
+    if (responseClassification === 'expected-negative') {
+      apiOperationsPageExpectedNegativeOperations.push({
+        operationId: operation.id,
+        method: operation.method,
+        path: operation.path,
+        status,
+      });
       result.steps.push({
         name: `api-operations-execute-${operation.id}`,
-        status: 'declared-response',
+        status: 'expected-negative',
         method: operation.method,
         path: operation.path,
         httpStatus: status,
@@ -2306,27 +3005,25 @@ async function exerciseAllOpenApiOperations(page, operations) {
       });
       continue;
     }
-    if (responseClassification !== 'success') {
+    if (responseClassification !== 'success-2xx') {
       const entry = {
         operationId: operation.id,
         method: operation.method,
         path: operation.path,
         status,
-        reason:
-          responseClassification === 'server-error' ?
-            `HTTP ${status} server error`
-          : `HTTP ${status} is not declared by the OpenAPI operation`,
+        reasonCode: status >= 500 ? 'server-error' : 'unexpected-http-status',
+        reason: `happy-path execution returned unexpected HTTP ${status}`,
       };
-      apiOperationsPageFailedOperations.push(entry);
-      result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'failed', ...entry });
+      apiOperationsPageUnexpectedFailures.push(entry);
+      result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'unexpected-failure', ...entry });
       continue;
     }
 
     apiOperationsPageSuccessfulOperationIds.add(operation.id);
-    apiOperationsPageContractCoveredOperationIds.add(operation.id);
     const executionRecord = operationExecutionRecords.at(-1);
     if (executionRecord?.operation.id === operation.id && ['POST', 'PUT', 'PATCH'].includes(operation.method)) {
       recordApiOperationsRoundTrip(`api-operations-${operation.id}-response-round-trip`, executionRecord);
+      await verifyWritePersistence(page, executionRecord);
     }
     result.steps.push({
       name: `api-operations-execute-${operation.id}`,
@@ -2335,43 +3032,123 @@ async function exerciseAllOpenApiOperations(page, operations) {
       path: operation.path,
       httpStatus: status,
       parameterValues: prepared.parameterValues,
+      identityResolutions: prepared.identityResolutions,
     });
   }
 
   verifyCreatedOperationDetailRoundTrips();
   await screenshot(page, 'api-operations-execution-complete');
   const missing2xx = operations.filter(operation => !apiOperationsPageSuccessfulOperationIds.has(operation.id));
-  const accountedIds = new Set([
-    ...apiOperationsPageContractCoveredOperationIds,
+  const terminalIds = new Set([
+    ...apiOperationsPageSuccessfulOperationIds,
+    ...apiOperationsPageExpectedNegativeOperations.map(entry => entry.operationId),
     ...apiOperationsPageUnexecutableOperations.map(entry => entry.operationId),
+    ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
+    ...apiOperationsPageUnexpectedFailures.map(entry => entry.operationId),
   ]);
-  const missingAccounted = operations.filter(operation => !accountedIds.has(operation.id));
+  const missingTerminal = operations.filter(operation => !terminalIds.has(operation.id));
   result.steps.push({
     name: 'api-operations-page-execution-coverage',
     status:
-      apiOperationsPageFailedOperations.length || missingAccounted.length ? 'failed'
-      : apiOperationsPageUnexecutableOperations.length ? 'ok-with-workflow-blocked'
+      apiOperationsPageHarnessErrors.length || apiOperationsPageUnexpectedFailures.length || missingTerminal.length ? 'failed'
+      : apiOperationsPageUnexecutableOperations.length ? 'ok-with-unexecutable'
       : 'ok',
-    successful: apiOperationsPageSuccessfulOperationIds.size,
-    declaredResponses: apiOperationsPageDeclaredResponseOperationIds.size,
-    workflowBlocked: apiOperationsPageUnexecutableOperations.length,
-    accounted: accountedIds.size,
+    success2xx: apiOperationsPageSuccessfulOperationIds.size,
+    expectedNegative: apiOperationsPageExpectedNegativeOperations.length,
+    unexecutable: apiOperationsPageUnexecutableOperations.length,
+    harnessError: apiOperationsPageHarnessErrors.length,
+    unexpectedFailure: apiOperationsPageUnexpectedFailures.length,
+    terminal: terminalIds.size,
     declared: operations.length,
     missing2xxOperationIds: missing2xx.map(operation => operation.id),
-    missingAccountedOperationIds: missingAccounted.map(operation => operation.id),
+    missingTerminalOperationIds: missingTerminal.map(operation => operation.id),
   });
   if (requireAllApiOperations2xx && missing2xx.length) {
     throw new Error(
       `API Operations page did not complete every declared operation with HTTP 2xx: ${missing2xx.map(operation => operation.id).join(', ')}`,
     );
   }
-  if (requireAllApiOperationsAccounted && (missingAccounted.length || apiOperationsPageFailedOperations.length)) {
+  if (
+    requireAllApiOperationsAccounted &&
+    (missingTerminal.length || apiOperationsPageHarnessErrors.length || apiOperationsPageUnexpectedFailures.length)
+  ) {
     throw new Error(
-      `API Operations contract coverage failed: ${[
-        ...apiOperationsPageFailedOperations.map(entry => entry.operationId),
-        ...missingAccounted.map(operation => operation.id),
+      `API Operations execution gate failed: ${[
+        ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
+        ...apiOperationsPageUnexpectedFailures.map(entry => entry.operationId),
+        ...missingTerminal.map(operation => operation.id),
       ].join(', ')}`,
     );
+  }
+}
+
+async function exerciseResponseBrowsing(page, operations) {
+  const candidates = operations
+    .filter(operation => operation.method === 'GET')
+    .map(operation => ({ operation, fixture: responseBrowsingFixture(operation) }))
+    .filter(candidate => candidate.fixture !== undefined);
+  if (candidates.length === 0) {
+    result.steps.push({ name: 'form-crud-response-browsing', status: 'skipped', reason: 'no GET response schema available' });
+    return;
+  }
+
+  for (const { operation, fixture } of candidates) {
+    await gotoOperation(page, operation.id);
+    const errorRoute = async route => {
+      if (responseMatchesOperationLikeRequest(route.request(), operation)) {
+        await route.fulfill({
+          status: 400,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({ title: 'Invalid filter', detail: 'Review the entered query parameters.' }),
+        });
+      } else {
+        await route.continue();
+      }
+    };
+    await page.route('**/*', errorRoute);
+    try {
+      const errorResponse = page.waitForResponse(
+        candidate => candidate.status() === 400 && responseMatchesOperation(candidate, operation),
+        { timeout: apiTimeoutMs },
+      );
+      await page.locator('[data-cy="formCrudRefreshButton"]').first().click();
+      await errorResponse;
+      await page.locator('[data-cy="formCrudError"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+    } finally {
+      await page.unroute('**/*', errorRoute);
+    }
+
+    const successRoute = async route => {
+      if (responseMatchesOperationLikeRequest(route.request(), operation)) {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) });
+      } else {
+        await route.continue();
+      }
+    };
+    await page.route('**/*', successRoute);
+    try {
+      const response = page.waitForResponse(candidate => responseMatchesOperation(candidate, operation), { timeout: apiTimeoutMs });
+      await page.locator('[data-cy="formCrudRefreshButton"]').first().click();
+      await response;
+      const rows = page.locator('[data-cy="formCrudTableRow"]');
+      await rows.first().waitFor({ state: 'visible', timeout: apiTimeoutMs });
+      const details = rows.first().locator('[data-cy="formCrudDetailsButton"]').first();
+      await details.click();
+      const detailPanel = page.locator('[data-cy="formCrudDetails"]').first();
+      await detailPanel.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+      const accordionCount = await expandAccordions(detailPanel);
+      await screenshot(page, `response-browsing-${operation.id}`);
+      result.coverage.responseBrowsingWorkflows += 1;
+      result.steps.push({
+        name: 'form-crud-response-browsing',
+        status: 'ok',
+        operationId: operation.id,
+        rows: await locatorCount(rows),
+        accordions: accordionCount,
+      });
+    } finally {
+      await page.unroute('**/*', successRoute);
+    }
   }
 }
 
@@ -2386,14 +3163,42 @@ async function exerciseListResource(page, entry) {
   const rows = page.locator('[data-cy="formCrudTableRow"]');
   const rowCount = await locatorCount(rows);
   result.steps.push({ name: `list-${operation.id}-rows`, status: 'ok', count: rowCount });
-  if (rowCount === 0) return;
+  if (rowCount === 0) {
+    await page.locator('[data-cy="formCrudNoResult"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+    const filter = (operation.parameters ?? [])
+      .filter(parameter => parameter.location === 'query' && !parameter.required)
+      .map(parameter => ({ parameter, value: parameterCoverageValue(parameter) }))
+      .find(candidate => candidate.value !== undefined);
+    if (filter) {
+      const control = page.getByLabel(`${filter.parameter.location}: ${filter.parameter.name}`, { exact: true }).first();
+      if ((await locatorCount(control)) > 0 && (await control.isVisible()) && (await control.isEnabled())) {
+        await fillOpenApiParameterControl(control, filter.parameter, filter.value);
+        const emptyResponse = page.waitForResponse(
+          response => {
+            if (!responseMatchesOperation(response, operation)) return false;
+            return new URL(response.url()).searchParams.get(filter.parameter.name) === filter.value;
+          },
+          { timeout: apiTimeoutMs },
+        );
+        await page.locator('[data-cy="formCrudRefreshButton"]').first().click();
+        await emptyResponse;
+        await page.locator('[data-cy="formCrudNoResult"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
+        await fillOpenApiParameterControl(control, filter.parameter, '');
+        result.coverage.emptyListFilterWorkflows += 1;
+        result.steps.push({
+          name: `list-${operation.id}-empty-filter`,
+          status: 'ok',
+          parameter: filter.parameter.name,
+        });
+      }
+    }
+    return;
+  }
 
   const firstRow = rows.first();
   const detailsButton = firstRow.locator('[data-cy="formCrudDetailsButton"]').first();
   if ((await locatorCount(detailsButton)) > 0) {
-    const detailResponsePromise = waitForOperationResponse(page, entry.resource.detailOperation, ['GET']);
-    await detailsButton.click();
-    const detailResponse = await detailResponsePromise;
+    const detailResponse = await captureOperationResponse(page, entry.resource.detailOperation, () => detailsButton.click(), ['GET']);
     recordOperationResponse(entry.resource.detailOperation, detailResponse);
     if (detailResponse) await recordApiExchange(`detail-${operation.id}`, detailResponse, entry.resource.detailOperation);
     await page.locator('[data-cy="formCrudDetails"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
@@ -2409,13 +3214,19 @@ async function exerciseListResource(page, entry) {
 
     const pickerButton = page.locator('[data-cy="formCrudDetails"] [data-cy="formCrudReferencePickerButton"]').first();
     if ((await locatorCount(pickerButton)) > 0 && (await pickerButton.isVisible())) {
-      await pickerButton.click();
+      await pickerButton.focus();
+      await pickerButton.press('Enter');
+      result.coverage.keyboardChecks += 1;
       const modal = page.locator('[data-cy="formCrudReferencePickerModal"]').first();
       await modal.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+      await assertAccessibleDialog(modal, `reference-picker-dialog-${operation.id}`);
       await screenshot(page, `reference-picker-${operation.id}`);
       const pickerRows = page.locator('[data-cy="formCrudReferencePickerRow"]');
       if ((await locatorCount(pickerRows)) > 0) {
-        await pickerRows.first().locator('[data-cy="formCrudReferencePickerSelect"]').click();
+        const selectButton = pickerRows.first().locator('[data-cy="formCrudReferencePickerSelect"]');
+        await selectButton.focus();
+        await selectButton.press('Enter');
+        result.coverage.keyboardChecks += 1;
         await modal.waitFor({ state: 'detached', timeout: apiTimeoutMs });
         await screenshot(page, `reference-picker-${operation.id}-selected`);
         result.steps.push({ name: `reference-picker-select-${operation.id}`, status: 'ok' });
@@ -2427,7 +3238,11 @@ async function exerciseListResource(page, entry) {
 
     if (entry.resource.updateOperation) {
       const mutation = await mutateEditablePrimitiveDetailField(page, `update-${entry.resource.updateOperation.id}`);
-      await saveVisibleDetail(page, `update-${entry.resource.updateOperation.id}`, false, mutation, entry.resource.updateOperation);
+      result.coverage.exercisedUpdateResources += 1;
+      if (await saveVisibleDetail(page, `update-${entry.resource.updateOperation.id}`, false, mutation, entry.resource.updateOperation)) {
+        result.coverage.successfulUpdateResources += 1;
+        successfulUpdateResourceKeys.add(resourceWorkflowKey(entry, 'update'));
+      }
     }
   }
 }
@@ -2484,7 +3299,8 @@ async function exerciseReferencePickerScenarios(page, resources) {
   if (!scenarios.length) {
     result.steps.push({
       name: 'reference-picker-scenario',
-      status: 'skipped',
+      status: 'not-applicable',
+      reasonCode: 'no-compatible-registered-target',
       reason: 'no compatible reference field and target resource discovered',
     });
     return;
@@ -2511,7 +3327,8 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
     multiple: true,
   };
 
-  await configureReferencePickerViaAdmin(page, config);
+  const savedConfig = await configureReferencePickerViaAdmin(page, config);
+  if (!savedConfig) return;
 
   const targetReady = await ensureResourceRows(page, targetEntry, 'reference-picker-target');
   const sourceReady = await ensureResourceRows(page, sourceEntry, 'reference-picker-source');
@@ -2523,6 +3340,7 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
       targetReady,
       sourceReady,
     });
+    await deleteReferencePickerViaAdmin(page, savedConfig);
     return;
   }
 
@@ -2536,12 +3354,16 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
   const rows = page.locator('[data-cy="formCrudTableRow"]');
   if ((await locatorCount(rows)) === 0) {
     result.steps.push({ name: 'reference-picker-select', status: 'skipped', reason: 'source list returned no rows after seeding' });
+    await deleteReferencePickerViaAdmin(page, savedConfig);
     return;
   }
 
-  const detailResponsePromise = waitForOperationResponse(page, sourceEntry.resource.detailOperation, ['GET']);
-  await rows.first().locator('[data-cy="formCrudDetailsButton"]').first().click();
-  const detailResponse = await detailResponsePromise;
+  const detailResponse = await captureOperationResponse(
+    page,
+    sourceEntry.resource.detailOperation,
+    () => rows.first().locator('[data-cy="formCrudDetailsButton"]').first().click(),
+    ['GET'],
+  );
   recordOperationResponse(sourceEntry.resource.detailOperation, detailResponse);
   if (detailResponse) await recordApiExchange('reference-picker-detail', detailResponse, sourceEntry.resource.detailOperation);
   await page.locator('[data-cy="formCrudDetails"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
@@ -2559,9 +3381,12 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
     throw new Error('Configured reference picker button is not visible on the detail form');
   }
 
-  await pickerButton.click();
+  await pickerButton.focus();
+  await pickerButton.press('Enter');
+  result.coverage.keyboardChecks += 1;
   const modal = page.locator('[data-cy="formCrudReferencePickerModal"]').first();
   await modal.waitFor({ state: 'visible', timeout: apiTimeoutMs });
+  await assertAccessibleDialog(modal, 'reference-picker-dialog-configured');
   await screenshot(page, 'reference-picker-modal');
   const pickerRows = page.locator('[data-cy="formCrudReferencePickerRow"]');
   if ((await locatorCount(pickerRows)) === 0) {
@@ -2570,7 +3395,10 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
   }
 
   const selectedItem = await page.evaluate(() => window.__formsDebug.formCrud().referencePickerRows[0]?.item);
-  await pickerRows.first().locator('[data-cy="formCrudReferencePickerSelect"]').click();
+  const selectButton = pickerRows.first().locator('[data-cy="formCrudReferencePickerSelect"]');
+  await selectButton.focus();
+  await selectButton.press('Enter');
+  result.coverage.keyboardChecks += 1;
   await modal.waitFor({ state: 'detached', timeout: apiTimeoutMs });
   await screenshot(page, 'reference-picker-selected');
   const after = await debugState(page);
@@ -2645,6 +3473,7 @@ async function exerciseReferencePickerScenario(page, scenario, scenarioIndex = 0
       }
     }
   }
+  await deleteReferencePickerViaAdmin(page, savedConfig);
 }
 
 async function exerciseCreateResource(page, entry) {
@@ -2694,7 +3523,10 @@ async function exerciseCreateResource(page, entry) {
     throw new Error(`Create operation ${operation.id} did not return HTTP 2xx: ${statusText?.trim() || 'no status shown'}`);
   }
   if (ok) result.coverage.successfulCreateResources += 1;
-  return ok;
+  if (!ok) return undefined;
+  return operationExecutionRecords
+    .filter(record => record.operation.id === operation.id && record.status >= 200 && record.status < 300)
+    .at(-1);
 }
 
 async function exerciseDeleteCreatedItem(page, entry) {
@@ -2704,19 +3536,37 @@ async function exerciseDeleteCreatedItem(page, entry) {
   const rows = page.locator('[data-cy="formCrudTableRow"]');
   const rowCount = await locatorCount(rows);
   if (rowCount === 0) return;
-  const deleteButton = rows.last().locator('[data-cy="formCrudDeleteButton"]').first();
+  const identityCandidates = [];
+  for (const parameter of operationPathParameters(entry.resource.deleteOperation)) {
+    const semanticIdentity = semanticIdentityValue(entry.resource.deleteOperation, parameter, [entry.creationRecord].filter(Boolean));
+    if (semanticIdentity) identityCandidates.push(semanticIdentity);
+    scalarValuesForKeys(entry.creationRecord?.responseBody, new Set([normalizeName(parameter.name)]), identityCandidates);
+    scalarValuesForKeys(entry.creationRecord?.requestBody, new Set([normalizeName(parameter.name)]), identityCandidates);
+  }
+  const location = entry.creationRecord?.responseHeaders?.location;
+  if (location) {
+    const locationIdentity = location.split(/[/?#]/).filter(Boolean).at(-1);
+    if (locationIdentity) identityCandidates.push(decodeURIComponent(locationIdentity));
+  }
+  const stableIdentities = [...new Set(identityCandidates.map(value => String(value).trim()).filter(Boolean))];
+  const rowTexts = await rows.allTextContents();
+  const rowIndex = rowTexts.findIndex(text => stableIdentities.some(identity => text.includes(identity)));
+  if (stableIdentities.length === 0 || rowIndex < 0) {
+    result.steps.push({
+      name: `delete-${entry.resource.listOperation.id}`,
+      status: 'unexecutable',
+      reasonCode: stableIdentities.length === 0 ? 'created-identity-unavailable' : 'created-identity-not-visible-in-list',
+      identityCandidates: stableIdentities,
+    });
+    return;
+  }
+  const targetRow = rows.nth(rowIndex);
+  const deleteButton = targetRow.locator('[data-cy="formCrudDeleteButton"]').first();
   if ((await locatorCount(deleteButton)) === 0 || !(await deleteButton.isEnabled())) return;
-  const deletedRowText = (
-    await rows
-      .last()
-      .textContent()
-      .catch(() => '')
-  ).trim();
+  const deletedRowText = (await targetRow.textContent().catch(() => '')).trim();
   result.coverage.exercisedDeleteResources += 1;
-  const deleteResponse = waitForOperationResponse(page, entry.resource.deleteOperation, ['DELETE']);
   page.once('dialog', dialog => dialog.accept());
-  await deleteButton.click();
-  const response = await deleteResponse;
+  const response = await captureOperationResponse(page, entry.resource.deleteOperation, () => deleteButton.click(), ['DELETE']);
   recordOperationResponse(entry.resource.deleteOperation, response);
   if (response) await recordApiExchange(`delete-${entry.resource.listOperation.id}`, response, entry.resource.deleteOperation);
   await page.waitForLoadState('networkidle', { timeout: settleTimeoutMs }).catch(() => undefined);
@@ -2733,9 +3583,33 @@ async function exerciseDeleteCreatedItem(page, entry) {
     beforeRows: rowCount,
     afterRows: refreshedRowCount,
     removedFromView,
+    identityCandidates: stableIdentities,
   });
   if (!ok) throw new Error(`Delete ${entry.resource.deleteOperation.id} did not remove a visible row with HTTP 2xx`);
   result.coverage.successfulDeleteResources += 1;
+  successfulDeleteResourceKeys.add(resourceWorkflowKey(entry, 'delete'));
+  result.coverage.persistence.createdIdentityDeletes += 1;
+  if (entry.resource.detailOperation) {
+    const responseUrl = new URL(response.url());
+    const postDelete = await authenticatedFetch(page, `${responseUrl.pathname}${responseUrl.search}`, { method: 'GET' });
+    const postDeleteClassification = classifyOperationResponse(entry.resource.detailOperation.responseStatusCodes, postDelete.status, {
+      expectation: 'expected-negative',
+      expectedNegativeStatusCodes: ['404', '410'],
+    });
+    const postDeleteOk = postDeleteClassification === 'expected-negative';
+    result.steps.push({
+      name: `post-delete-${entry.resource.detailOperation.id}`,
+      status: postDeleteOk ? 'expected-negative' : 'unexpected-failure',
+      httpStatus: postDelete.status,
+      expectedStatusCodes: ['404', '410'],
+    });
+    if (!postDeleteOk) {
+      throw new Error(
+        `Deleted resource ${entry.resource.deleteOperation.id} remained readable or returned an unexpected HTTP ${postDelete.status}`,
+      );
+    }
+    result.coverage.persistence.postDeleteNotFoundChecks += 1;
+  }
 }
 
 try {
@@ -2803,9 +3677,9 @@ try {
     result.steps.push({ name: 'create-resource-coverage', status: 'planned', count: createEntries.length });
     for (const entry of createEntries) {
       result.coverage.exercisedCreateResources += 1;
-      const createdCurrent = await exerciseCreateResource(page, entry);
-      if (createdCurrent) {
-        createdEntries.push(entry);
+      const creationRecord = await exerciseCreateResource(page, entry);
+      if (creationRecord) {
+        createdEntries.push({ ...entry, creationRecord });
       }
     }
   }
@@ -2815,7 +3689,9 @@ try {
     maxListResources,
   );
   result.coverage.plannedListResources = listEntries.length;
-  result.coverage.plannedUpdateResources = exerciseUpdate ? listEntries.filter(candidate => candidate.resource.updateOperation).length : 0;
+  const plannedUpdateEntries = exerciseUpdate ? listEntries.filter(candidate => candidate.resource.updateOperation) : [];
+  for (const entry of plannedUpdateEntries) plannedUpdateResourceKeys.add(resourceWorkflowKey(entry, 'update'));
+  result.coverage.plannedUpdateResources = plannedUpdateResourceKeys.size;
   result.steps.push({ name: 'list-resource-coverage', status: 'planned', count: listEntries.length });
   for (const entry of listEntries) {
     await exerciseListResource(page, entry);
@@ -2823,15 +3699,42 @@ try {
 
   await exerciseAllOpenApiOperations(page, declaredOperations);
 
-  result.coverage.plannedDeleteResources =
-    exerciseDelete ? createdEntries.filter(candidate => candidate.resource.listOperation && candidate.resource.deleteOperation).length : 0;
+  const plannedDeleteEntries =
+    exerciseDelete ? createdEntries.filter(candidate => candidate.resource.listOperation && candidate.resource.deleteOperation) : [];
+  for (const entry of plannedDeleteEntries) plannedDeleteResourceKeys.add(resourceWorkflowKey(entry, 'delete'));
+  result.coverage.plannedDeleteResources = plannedDeleteResourceKeys.size;
   for (const entry of createdEntries) {
     await exerciseDeleteCreatedItem(page, entry);
   }
+  await exerciseResponseBrowsing(page, declaredOperations);
 
-  if (requireAllAvailableResourceWorkflows && !hasRequiredResourceWorkflowCoverage(result.coverage)) {
+  const workflowCoverage = resourceWorkflowCoverage({
+    plannedUpdateResourceKeys: [...plannedUpdateResourceKeys],
+    successfulUpdateResourceKeys: [...successfulUpdateResourceKeys],
+    plannedDeleteResourceKeys: [...plannedDeleteResourceKeys],
+    successfulDeleteResourceKeys: [...successfulDeleteResourceKeys],
+  });
+  if (requireAllAvailableResourceWorkflows && !hasRequiredResourceWorkflowCoverage(workflowCoverage)) {
     throw new Error(
-      `Form CRUD resource workflows incomplete: updates ${result.coverage.successfulUpdateResources}/${result.coverage.plannedUpdateResources}, deletes ${result.coverage.successfulDeleteResources}/${result.coverage.plannedDeleteResources}`,
+      `Form CRUD resource workflows incomplete: missing updates ${workflowCoverage.missingUpdateResourceKeys.join(', ') || 'none'}; missing deletes ${workflowCoverage.missingDeleteResourceKeys.join(', ') || 'none'}`,
+    );
+  }
+  reachedWorkflowCoverageGate = true;
+  result.workflow = currentWorkflowReport();
+
+  const schemaFields = buildOperationSchemaCoverage(declaredOperations, operationExecutionRecords);
+  const schemaFieldGate = evaluateOperationSchemaCoverage(schemaFields, {
+    optionalMinimum: optionalFieldCoverageMinimum,
+    workflowComplete: result.workflow.complete,
+    incompleteReasons: result.workflow.reasons,
+  });
+  result.coverage.schemaFields = schemaFields;
+  result.coverage.schemaFieldGate = schemaFieldGate;
+  if (schemaFieldGate.evaluated && !schemaFieldGate.passed) {
+    throw new Error(
+      `Operation schema field coverage failed: ${schemaFieldGate.failures
+        .map(failure => `${failure.operationId ?? 'all'}:${failure.direction ?? 'optional'}:${failure.pointer ?? failure.reasonCode}`)
+        .join(', ')}`,
     );
   }
 

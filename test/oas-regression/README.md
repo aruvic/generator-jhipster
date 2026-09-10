@@ -102,7 +102,7 @@ and runs the deep TMF683
 present. After smoke tests pass it resets PostgreSQL again, starts the generated
 EvoMaster white-box driver, and runs EvoMaster against the generated API.
 
-The Form CRUD GUI regression first runs the generated Angular Jest suite, then
+The Form CRUD GUI regression first runs the generated Angular Vitest suite, then
 starts the generated Angular app locally, logs in as `admin/admin`, opens the
 Form CRUD UI, verifies the resource panel behavior, loads list operations, opens
 detail forms, exercises accordion expansion, submits generated create forms,
@@ -112,14 +112,21 @@ operation through its generated Form CRUD route. The API Operations page then
 submits every declared operation in dependency order, reuses identifiers and
 resources created earlier in the browser run, and records render, submission,
 successful-response, unexecutable, failure, and persistence round-trip coverage
-separately. Generated create forms and API responses are treated as real
+separately. Happy-path operations require HTTP 2xx; a contract-declared 4xx is
+not accepted unless it belongs to an explicitly constructed negative scenario.
+Generated create forms and API responses are treated as real
 regression checks by default: invalid generated defaults, failing generated
 Angular unit tests, unexpected HTTP responses, any 5xx response, or a failed
 request/response round trip fails the GUI phase. Declared non-2xx responses and
-operations blocked by a documented workflow precondition are reported
-separately from successful 2xx coverage and must still account for every
-declared operation. It stores screenshots,
-`angular-jest.log`, `angular-jest.json`,
+operations blocked by a documented workflow precondition are reported as
+expected-negative or unexecutable, separately from 2xx success, harness errors,
+and unexpected failures. It also reports request/response schema fields as
+covered, applicable-but-uncovered, unavailable, or excluded, with facets for
+required/optional, nested objects and arrays, references, enums, formats,
+bounds, and nullability. Required applicable fields must be covered, and
+populated optional fields must meet
+`FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM` (default `0.5`). It stores screenshots,
+`angular-jest.log`, `angular-jest.json` (legacy-compatible filenames),
 `form-crud-gui-smoke.json`, and the combined `form-crud-gui-summary.json` under
 the artifact output folder. With `FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED=true`,
 Chromium V8 coverage is collected in bounded route batches, source-mapped by a
@@ -144,25 +151,41 @@ Run the focused dependency bootstrap regression test with:
 test/oas-regression/form-crud-gui-dependencies.test.sh
 ```
 
-When the current runtime invocation also runs Angular Jest coverage,
+When the current runtime invocation also runs Angular Vitest coverage,
 `FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST` defaults to `true` and the bounded
-worker merges the scoped Jest/Istanbul data into `combined`. It defaults to
-`false` when Jest is skipped, so stale coverage from an older run is not
-reported. Large generated metadata such as `openapi-operations.model.ts` is
-excluded from executable source metrics. Set
+worker requires and merges the scoped Vitest/Istanbul JSON data into `combined`.
+It defaults to `false` when Vitest is skipped, so stale coverage from an older
+run is not reported. A requested merge with missing or malformed JSON is a
+harness failure rather than a browser-only fallback. Large generated metadata
+such as `openapi-operations.model.ts` is excluded from executable source
+metrics. Every applicable handwritten Form CRUD, reference-picker, and API
+Operations component is gated independently; missing source files fail the
+gate instead of disappearing from the denominator. The initial per-component
+minimums are 70% lines/statements, 60% functions, and 55% branches. Override
+them with `FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES`,
+`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS`,
+`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS`, and
+`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES`. Set
 `FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=1` for the lowest peak
 memory use; the default of `3` batches adjacent route loads while remaining
 below the measured large-artifact heap limit.
-`full_matrix.sh` also aggregates those Angular Jest and Playwright reports into
+Schema and source thresholds are evaluated only after all required operation
+routes and configured resource workflows reach terminal coverage. An earlier
+harness or product failure keeps the measurements as incomplete evidence with
+`passed: null`; it does not turn partial execution into a coverage-threshold
+failure. Complete runs retain the same per-component thresholds.
+`full_matrix.sh` also aggregates those Angular Vitest and Playwright reports into
 `full-matrix-form-crud-gui-status.json` and embeds the same data under
 `formCrudGui` in `full-matrix-summary.json`, including resource coverage,
 operation rendering/submission counts, source line and branch coverage,
-create/list exercise counts, generated Angular Jest pass/fail counts, failures,
+create/list exercise counts, generated Angular Vitest pass/fail counts, failures,
 durations, and screenshot counts. Operation-render coverage and source coverage
-are distinct metrics. The summaries also keep 2xx success, declared non-2xx,
-contract-covered, workflow-blocked, and fully accounted operation counts
-separate; a passing CRUD workflow is not reported as 100% 2xx, source-line, or
-branch coverage.
+are distinct metrics. The summaries keep 2xx successes, expected-negative
+results, unexecutable operations, harness errors, unexpected failures, and
+terminal results separate; a passing CRUD workflow is not reported as 100%
+2xx, source-line, or branch coverage. Aggregate coverage ratios use complete
+workflow runs only, while `coverageSemantics` and `incompleteEvidence` identify
+excluded early-stop evidence explicitly.
 
 By default, runtime evidence and generated request payloads are written to
 `/tmp/generator-jhipster-regression`. Set `OUTPUT_DIR` to change that location.
@@ -179,7 +202,7 @@ PORT=8081
 OUTPUT_DIR=/tmp/generator-jhipster-regression
 ANGULAR_NODE_MODULES_CACHE_ENABLED=true
 ANGULAR_NODE_MODULES_CACHE_DIR=/tmp/generator-jhipster-regression/npm-node-modules-cache
-TMF_PAYLOAD=/path/to/party-interaction-full.json
+PERSISTENCE_PROFILES_FILE=/path/to/persistence-profiles.json
 ARTIFACT_INCLUDE=TMF683,oas3v1
 ARTIFACT_EXCLUDE=DCSA_EBL
 EVOMASTER_ENABLED=true
@@ -220,6 +243,13 @@ FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES=67108864
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES=2097152
 FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB=1024
 FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST=true
+FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM=0.5
+FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS=5
+FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS=500
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES=70
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS=70
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS=60
+FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES=55
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR=true
 FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM=true
 FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR=true
@@ -338,20 +368,44 @@ under `$OUTPUT_DIR/form-crud-reference-pickers.json`. Set
 app's local temp-file fallback, or set `FORM_CRUD_REFERENCE_PICKER_CONFIG_URL`
 to point at a generated standalone config app or another compatible service.
 
-Run `test/oas-regression/reference_picker_external_integration.sh` after
-generating the config artifact and a consumer artifact to verify the production
-topology locally. The script starts separate PostgreSQL databases and generated
-Spring applications, confirms the services issue different JWTs, verifies the
-config API rejects unauthenticated access, saves through the consumer's
-same-origin proxy, then starts the generated consumer Angular application.
-Playwright logs in, edits and saves the mapping through the Administration UI,
-reloads it, and verifies the persisted value. The script finally reads through
-both services and checks the standalone configuration database. Set
-`GUI_ENABLED=false` only for a backend-only diagnostic run. Logs, redacted
-responses, screenshots, timestamps, and
-`status.json` are written under
-`/tmp/generator-jhipster-regression/reference-picker-external-integration` by
-default; processes and containers are removed on success or failure.
+Run
+`test/oas-regression/reference_picker_external_integration.sh <topology.json>`
+to verify a real cross-service picker. The topology file has no implicit
+artifact, endpoint, or port choices. It supplies `source` and `target`
+application directories, hosts, ports, health paths, start commands, seed
+requests, identity paths, and distinct PostgreSQL image/container/port/user/name
+settings. It also supplies the UI host/port, authentication and login contract, picker
+administration/config/form paths, explicit source form and Formly field,
+target API/collection, display and copy mappings, mode/cardinality, and explicit
+target-list/source-save/source-read verification paths. An empty target API ID
+selects the administration UI's manual-endpoint option for a cross-service API.
+Run the command with `--validate-only` to check this contract without starting
+resources.
+
+Before starting either database or generated application, the topology runner
+checks Playwright in `FORM_CRUD_GUI_PLAYWRIGHT_ROOT` and provisions
+`@playwright/test` there when needed. The default
+`FORM_CRUD_GUI_PLAYWRIGHT_INSTALL=offline` never contacts the network and
+expects the package to be present in the npm cache; `online` permits the package
+download and installs `FORM_CRUD_GUI_PLAYWRIGHT_BROWSER` unless
+`FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS=skip`. With `skip`, a missing
+dependency fails preflight instead of recording a ready topology.
+
+The helper rejects shared generated application directories, listener ports,
+database container names, or database names, and rejects a `targetBaseUrl` that
+is not the configured target service origin. It starts both generated
+applications and both PostgreSQL containers, records both health responses and
+database identities before browser testing, and then seeds one source and one
+target resource. Playwright creates the mapping through
+`admin/form-crud-reference-pickers`, reloads it, opens the picker on the exact
+configured source Formly field, selects the live cross-origin target row,
+asserts the mapped source model and source write request, and GETs the source
+resource to verify the stable reference. The target request is continued to
+the live service with its test authentication token; it is never mocked or
+rewritten to the source origin. Logs, redacted responses, screenshots,
+preconditions, and `status.json` are written to the configured output
+directory. All application processes and both named database containers are
+removed on success or failure.
 
 The Playwright Form CRUD run renders every declared operation through both
 `/form-crud/:operationId` and `/openapi-operations`. With
@@ -359,12 +413,12 @@ The Playwright Form CRUD run renders every declared operation through both
 operation through the API Operations UI in dependency order: create requests
 seed identifiers for detail/update/delete requests, and DELETE is restricted to
 resources created by that browser sweep. With
-`FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED=true`, any operation that
-is neither submitted nor explicitly classified as workflow-blocked is fatal.
+`FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED=true`, every operation must
+have a terminal result, and any harness error or unexpected failure is fatal.
 Set `FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX=true` only for contracts whose
 workflows make every operation synchronously executable. Failed schema-aware
 persistence round trips remain fatal. The run combines
-Chromium V8 coverage with Angular Jest coverage for generated Form CRUD,
+Chromium V8 coverage with Angular Vitest coverage for generated Form CRUD,
 reference-picker administration, and API Operations TypeScript. Per-artifact
 Istanbul JSON, LCOV, summaries, converted-script metadata, and conversion
 errors are written under

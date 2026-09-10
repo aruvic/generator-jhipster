@@ -11,6 +11,32 @@ exports[`generator - spring-boot addTestSpringFactory should add a test spring f
 
 exports[`generator - spring-boot openapi delegate alignment should align delegate methods and types with OpenAPI generator conventions 1`] = `{}`;
 
+exports[`generator - spring-boot openapi delegate alignment should omit null properties from OpenAPI responses 1`] = `
+{
+  "src/main/java/com/mycompany/myapp/config/JacksonConfiguration.java": {
+    "contents": "package com.mycompany.myapp.config;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+import org.springframework.boot.jackson.autoconfigure.JsonMapperBuilderCustomizer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class JacksonConfiguration {
+
+    @Bean
+    public JsonMapperBuilderCustomizer openApiJsonSerializationCustomizer() {
+        return builder ->
+            builder.changeDefaultPropertyInclusion(inclusion -> inclusion.withValueInclusion(JsonInclude.Include.NON_NULL));
+    }
+}
+",
+    "stateCleared": "modified",
+  },
+}
+`;
+
 exports[`generator - spring-boot source api editJavaFile with springBeans should match file content snapshot 1`] = `
 {
   "src/main/java/com/mycompany/myapp/config/ApplicationProperties.java": {

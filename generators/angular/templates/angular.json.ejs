@@ -139,7 +139,7 @@
             "runner": "vitest",
             "buildTarget": "::development",
             "runnerConfig": true,
-            "coverageReporters": ["text", "lcov"],
+            "coverageReporters": ["text", "lcov", "json"],
             "reporters": [
               "default",
               ["vitest-sonar-reporter", { "outputFile": "./<%- this.relativeDir(clientRootDir, temporaryDir) %>test-results/TESTS-results-sonar-vitest.xml" }]

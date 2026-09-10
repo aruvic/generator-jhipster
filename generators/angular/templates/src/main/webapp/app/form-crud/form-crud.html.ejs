@@ -21,7 +21,7 @@
     <span>Form CRUD</span>
 
     <div class="d-flex justify-content-end">
-      <button class="btn btn-info me-2" type="button" (click)="submit()" [disabled]="isSubmitting()" data-cy="formCrudRefreshButton">
+      <button class="btn btn-info me-2" type="button" (click)="submit()" [disabled]="form.invalid || isSubmitting()" data-cy="formCrudRefreshButton">
         <fa-icon icon="sync" [animation]="isSubmitting() ? 'spin' : undefined" />
         <span>{{ isReadOperation(selectedOperation()) ? 'Refresh list' : 'Submit' }}</span>
       </button>
@@ -140,7 +140,7 @@
         }
 
         <div class="d-flex align-items-center gap-3 mt-3">
-          <button class="btn btn-primary" type="submit" data-cy="formCrudSubmit" [disabled]="isSubmitting()">
+          <button class="btn btn-primary" type="submit" data-cy="formCrudSubmit" [disabled]="form.invalid || isSubmitting()">
             <fa-icon icon="sync" />
             <span>{{ isReadOperation(selectedOperation()) ? 'Load' : 'Submit' }}</span>
           </button>
@@ -237,11 +237,18 @@
   </div>
 
   @if (referencePickerState(); as picker) {
-    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" data-cy="formCrudReferencePickerModal">
+    <div
+      class="modal d-block"
+      tabindex="-1"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="formCrudReferencePickerTitle"
+      data-cy="formCrudReferencePickerModal"
+    >
       <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
-            <h3 class="modal-title h5">Select existing item</h3>
+            <h3 id="formCrudReferencePickerTitle" class="modal-title h5">Select existing item</h3>
             <button type="button" class="btn-close" aria-label="Close" (click)="closeReferencePicker()"></button>
           </div>
           <div class="modal-body">

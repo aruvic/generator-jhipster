@@ -19,10 +19,10 @@
 <%_ if (clientTestFrameworkVitest) { _%>
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 <%_ } _%>
-import { provideHttpClient } from '@angular/common/http';
+import { HttpHeaders, HttpParams, HttpResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { FormArray, FormControl, FormGroup } from '@angular/forms';
+import { FormArray, FormControl, FormGroup, Validators } from '@angular/forms';
 import { convertToParamMap, ActivatedRoute } from '@angular/router';
 import { FaIconLibrary } from '@fortawesome/angular-fontawesome';
 import { faEye, faList, faSave, faSync, faTimes, faTrashAlt } from '@fortawesome/free-solid-svg-icons';
@@ -48,6 +48,18 @@ type MutableFormControl = {
   setValue(value: unknown): void;
   markAsTouched(): void;
   errors: Record<string, unknown> | null;
+};
+
+type TestCrudResource = {
+  key: string;
+  label: string;
+  basePath: string;
+  operations: readonly OpenApiOperationDefinition[];
+  listOperation?: OpenApiOperationDefinition;
+  createOperation?: OpenApiOperationDefinition;
+  detailOperation?: OpenApiOperationDefinition;
+  updateOperation?: OpenApiOperationDefinition;
+  deleteOperation?: OpenApiOperationDefinition;
 };
 
 describe('FormCrud', () => {
@@ -181,6 +193,104 @@ describe('FormCrud', () => {
       invalidControlSummaries(control: unknown): { path: string; errors: Record<string, unknown> }[];
       detailRequiredFieldActive(field: FormlyFieldConfig): boolean;
       sparseDetailBodySource(fields: readonly OpenApiSchemaField[], source: unknown, originalSource: unknown, control: unknown): Record<string, unknown>;
+    };
+  }
+
+  function coverageInternals(component: FormCrud): {
+    generatedParameterValue(parameter: OpenApiOperationDefinition['parameters'][number]): unknown;
+    buildRequest(
+      operation: OpenApiOperationDefinition,
+      options?: { pathValues?: Record<string, unknown>; bodySource?: unknown; fields?: readonly OpenApiSchemaField[] },
+    ): { method: string; url: string; params: HttpParams; headers: HttpHeaders; body: unknown };
+    parseJsonValue(value: unknown): unknown;
+    validJson(value: unknown): boolean;
+    includeValue(field: OpenApiSchemaField, value: unknown, includeEmptyStructures?: boolean): boolean;
+    formatError(value: unknown, status?: number): string;
+    controlPathCandidates(path: string): string[];
+    normalizeFieldPath(path: string): string;
+    pathWithoutArrayIndexes(path: string): string;
+    pathFromBackendMessage(message: string): string;
+    safeString(value: unknown): string;
+    inputType(type: string, format?: string, contentType?: string): string;
+    inputStep(format?: string): number | undefined;
+    actionForMethod(method: string): string;
+    actionForOperation(operation: OpenApiOperationDefinition): string;
+    resourceActionLabel(resource: TestCrudResource, operation: OpenApiOperationDefinition): string;
+    resourcesForOperations(operations: readonly OpenApiOperationDefinition[]): TestCrudResource[];
+    resourceGroupsForResources(resources: readonly TestCrudResource[]): { key: string; resources: readonly TestCrudResource[] }[];
+    collectionPathFor(path: string): string;
+    resourceKey(path: string): string;
+    pathLabel(path: string): string;
+    titleLabel(value: string): string;
+    singularLabel(value: string): string;
+    pathParameterNames(operation: OpenApiOperationDefinition): string[];
+    pathValuesForItem(operation: OpenApiOperationDefinition, item: unknown): Record<string, unknown> | undefined;
+    rowsFromResponse(value: unknown): unknown[];
+    columnsForRows(items: readonly unknown[]): string[];
+    cellsForItem(item: unknown, columns: readonly string[]): Record<string, unknown>;
+    sameItem(left: unknown, right: unknown): boolean;
+    itemIdentity(item: unknown): string | undefined;
+    inferredFieldsFromItem(item: unknown): OpenApiSchemaField[];
+    mergeSchemaFields(
+      primaryFields: readonly OpenApiSchemaField[],
+      secondaryFields: readonly OpenApiSchemaField[],
+    ): OpenApiSchemaField[];
+    refreshList(resource: TestCrudResource, preferredItem?: unknown): void;
+    handleSuccessfulMutation(operation: OpenApiOperationDefinition, response: HttpResponse<string>): void;
+  } {
+    return component as unknown as {
+      generatedParameterValue(parameter: OpenApiOperationDefinition['parameters'][number]): unknown;
+      buildRequest(
+        operation: OpenApiOperationDefinition,
+        options?: { pathValues?: Record<string, unknown>; bodySource?: unknown; fields?: readonly OpenApiSchemaField[] },
+      ): { method: string; url: string; params: HttpParams; headers: HttpHeaders; body: unknown };
+      parseJsonValue(value: unknown): unknown;
+      validJson(value: unknown): boolean;
+      includeValue(field: OpenApiSchemaField, value: unknown, includeEmptyStructures?: boolean): boolean;
+      formatError(value: unknown, status?: number): string;
+      controlPathCandidates(path: string): string[];
+      normalizeFieldPath(path: string): string;
+      pathWithoutArrayIndexes(path: string): string;
+      pathFromBackendMessage(message: string): string;
+      safeString(value: unknown): string;
+      inputType(type: string, format?: string, contentType?: string): string;
+      inputStep(format?: string): number | undefined;
+      actionForMethod(method: string): string;
+      actionForOperation(operation: OpenApiOperationDefinition): string;
+      resourceActionLabel(resource: TestCrudResource, operation: OpenApiOperationDefinition): string;
+      resourcesForOperations(operations: readonly OpenApiOperationDefinition[]): TestCrudResource[];
+      resourceGroupsForResources(resources: readonly TestCrudResource[]): { key: string; resources: readonly TestCrudResource[] }[];
+      collectionPathFor(path: string): string;
+      resourceKey(path: string): string;
+      pathLabel(path: string): string;
+      titleLabel(value: string): string;
+      singularLabel(value: string): string;
+      pathParameterNames(operation: OpenApiOperationDefinition): string[];
+      pathValuesForItem(operation: OpenApiOperationDefinition, item: unknown): Record<string, unknown> | undefined;
+      rowsFromResponse(value: unknown): unknown[];
+      columnsForRows(items: readonly unknown[]): string[];
+      cellsForItem(item: unknown, columns: readonly string[]): Record<string, unknown>;
+      sameItem(left: unknown, right: unknown): boolean;
+      itemIdentity(item: unknown): string | undefined;
+      inferredFieldsFromItem(item: unknown): OpenApiSchemaField[];
+      mergeSchemaFields(
+        primaryFields: readonly OpenApiSchemaField[],
+        secondaryFields: readonly OpenApiSchemaField[],
+      ): OpenApiSchemaField[];
+      refreshList(resource: TestCrudResource, preferredItem?: unknown): void;
+      handleSuccessfulMutation(operation: OpenApiOperationDefinition, response: HttpResponse<string>): void;
+    };
+  }
+
+  function testField(name: string, type = 'string', overrides: Partial<OpenApiSchemaField> = {}): OpenApiSchemaField {
+    return {
+      name,
+      pointer: `/${name}`,
+      path: [name],
+      required: false,
+      nullable: false,
+      type,
+      ...overrides,
     };
   }
 
@@ -908,6 +1018,24 @@ describe('FormCrud', () => {
     expect(formlyField.props?.required).toBe(false);
     expect(formlyField.props?.['requiredIndicator']).toBe(true);
     expect(renderer.valueForField(requiredBooleanField, false)).toBe(false);
+  });
+
+  it('should expose required scalar fields through native and ARIA attributes', () => {
+    const renderer = schemaRenderer(comp);
+    const requiredLocationCode: OpenApiSchemaField = {
+      name: 'UNLocationCode',
+      pointer: '/placeOfIssue/UNLocationCode',
+      path: ['placeOfIssue', 'UNLocationCode'],
+      required: true,
+      nullable: false,
+      type: 'string',
+      minLength: 5,
+      maxLength: 5,
+    };
+    const formlyField = renderer.schemaField(requiredLocationCode);
+
+    expect(formlyField.props?.required).toBe(true);
+    expect(formlyField.props?.attributes).toEqual({ required: 'required', 'aria-required': 'true' });
   });
 
   it('should sanitize empty examples for required arrays by adding a valid generated item', () => {
@@ -3049,5 +3177,393 @@ describe('FormCrud', () => {
     expect(renderer.referencePickerUrl({ targetBaseUrl: 'https://example.invalid/api', collectionPath: '/targets' })).toBe(
       'https://example.invalid/api/targets',
     );
+  });
+
+  it('should build constrained parameter values and normalize request metadata', () => {
+    const internal = coverageInternals(comp);
+    const parameter = (overrides: Partial<OpenApiOperationDefinition['parameters'][number]>) => ({
+      name: 'value',
+      location: 'query' as const,
+      required: true,
+      type: 'string',
+      ...overrides,
+    });
+
+    expect(internal.generatedParameterValue(parameter({ enumValues: ['active'] }))).toBe('active');
+    expect(internal.generatedParameterValue(parameter({ type: 'boolean' }))).toBe(false);
+    expect(internal.generatedParameterValue(parameter({ type: 'integer' }))).toBe(1);
+    expect(internal.generatedParameterValue(parameter({ format: 'uuid' }))).toBe('00000000-0000-4000-8000-000000000000');
+    expect(internal.generatedParameterValue(parameter({ format: 'date' }))).toBe('2026-01-01');
+    expect(internal.generatedParameterValue(parameter({ format: 'date-time' }))).toBe('2026-01-01T00:00:00');
+    expect(internal.generatedParameterValue(parameter({ pattern: '^[A-Z]{2}$', minLength: 2, maxLength: 2 }))).toBe('AA');
+    expect(internal.generatedParameterValue(parameter({ minLength: 3, maxLength: 4 }))).toBe('xxx');
+
+    expect(internal.inputType('integer')).toBe('number');
+    expect(internal.inputType('string', 'date')).toBe('date');
+    expect(internal.inputType('string', 'date-time')).toBe('datetime-local');
+    expect(internal.inputType('string', 'email')).toBe('email');
+    expect(internal.inputType('string', 'binary', 'multipart/form-data')).toBe('file');
+    expect(internal.inputType('string')).toBe('text');
+    expect(internal.inputStep('date-time')).toBe(1);
+    expect(internal.inputStep('date')).toBeUndefined();
+
+    expect(internal.normalizeFieldPath('/items/0/name')).toBe('items.0.name');
+    expect(internal.normalizeFieldPath("$['items'][0]['name']")).toBe('items.0.name');
+    expect(internal.pathWithoutArrayIndexes('items.0.references.1.href')).toBe('items.references.href');
+    expect(internal.controlPathCandidates('body.items[0].name')).toContain('items.0.name');
+    expect(internal.pathFromBackendMessage('Invalid value through reference chain: Root["items"][0]["name"]')).toBe('items.0.name');
+    expect(internal.pathFromBackendMessage('Property displayName must not be blank')).toBe('displayName');
+    expect(internal.safeString({ id: 1 })).toBe('{"id":1}');
+  });
+
+  it('should build complete requests and serialize empty, encoded, and multipart bodies', () => {
+    const internal = coverageInternals(comp);
+    const renderer = schemaRenderer(comp);
+    const bodyFields = [testField('name'), testField('count', 'integer'), testField('enabled', 'boolean')];
+    const operation: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'post-coverage-item',
+      operationId: 'postCoverageItem',
+      method: 'POST',
+      path: 'coverage-items/{id}',
+      parameters: [
+        { name: 'id', location: 'path', required: true, type: 'string' },
+        { name: 'filter', location: 'query', required: false, type: 'string' },
+        { name: 'X-Coverage', location: 'header', required: false, type: 'string' },
+        { name: 'session', location: 'cookie', required: false, type: 'string' },
+      ],
+      requestBodyRequired: true,
+      requestContentType: 'application/json',
+      requestBodyFields: bodyFields,
+    };
+    comp.model = {
+      parameters: {
+        [encodeURIComponent('path:id')]: 'item/1',
+        [encodeURIComponent('query:filter')]: 'active',
+        [encodeURIComponent('header:X-Coverage')]: 'enabled',
+        [encodeURIComponent('cookie:session')]: 'cookie value',
+      },
+      body: { name: 'Coverage', count: '2', enabled: 'true' },
+    };
+
+    const request = internal.buildRequest(operation);
+
+    expect(request.url).toBe('/api/coverage-items/item%2F1');
+    expect(request.params.get('filter')).toBe('active');
+    expect(request.headers.get('X-Coverage')).toBe('enabled');
+    expect(request.headers.get('Content-Type')).toBe('application/json');
+    expect(request.body).toEqual({ name: 'Coverage', count: 2, enabled: true });
+    expect(document.cookie).toContain('session=cookie%20value');
+
+    const encodedOperation = { ...operation, requestContentType: 'application/x-www-form-urlencoded' };
+    expect(renderer.bodyForOperation(encodedOperation, { name: 'Coverage', count: 2 }, bodyFields)).toBe(
+      'name=Coverage&count=2&enabled=false',
+    );
+
+    const multipartOperation = { ...operation, requestContentType: 'multipart/form-data' };
+    const multipart = renderer.bodyForOperation(multipartOperation, { name: 'Coverage', count: 2 }, bodyFields);
+    expect(multipart).toBeInstanceOf(FormData);
+    expect((multipart as FormData).get('name')).toBe('Coverage');
+    expect((multipart as FormData).get('count')).toBe('2');
+
+    expect(internal.parseJsonValue('')).toBeUndefined();
+    expect(internal.parseJsonValue('{"ok":true}')).toEqual({ ok: true });
+    expect(internal.parseJsonValue('{invalid')).toBe('{invalid');
+    expect(internal.validJson(undefined)).toBe(true);
+    expect(internal.validJson({ ok: true })).toBe(true);
+    expect(internal.validJson('{"ok":true}')).toBe(true);
+    expect(internal.validJson('{invalid')).toBe(false);
+    expect(internal.includeValue(testField('optional'), undefined)).toBe(false);
+    expect(internal.includeValue(testField('nullable', 'string', { nullable: true }), null)).toBe(true);
+    expect(internal.includeValue(testField('count', 'number'), Number.NaN)).toBe(false);
+    expect(internal.includeValue(testField('items', 'array'), [], false)).toBe(false);
+    expect(internal.includeValue(testField('items', 'array'), [], true)).toBe(true);
+  });
+
+  it('should resolve CRUD resources, item identities, and response collection shapes', () => {
+    const internal = coverageInternals(comp);
+    const operation = (
+      id: string,
+      method: string,
+      path: string,
+      tag = 'Coverage',
+      parameters: OpenApiOperationDefinition['parameters'] = [],
+    ): OpenApiOperationDefinition => ({
+      ...operationWithBody(),
+      id,
+      operationId: id,
+      method,
+      path,
+      tag,
+      parameters,
+      requestBodyRequired: false,
+      requestContentType: undefined,
+      requestBodyFields: undefined,
+    });
+    const list = operation('get-coverage-items', 'GET', '/coverage-items');
+    const create = operation('post-coverage-items', 'POST', '/coverage-items');
+    const detail = operation('get-coverage-item', 'GET', '/coverage-items/{itemId}', 'Coverage', [
+      { name: 'itemId', location: 'path', required: true, type: 'string' },
+    ]);
+    const update = operation('patch-coverage-item', 'PATCH', '/coverage-items/{itemId}', 'Coverage', detail.parameters);
+    const remove = operation('delete-coverage-item', 'DELETE', '/coverage-items/{itemId}', 'Coverage', detail.parameters);
+    const hub = operation('get-hub', 'GET', '/hub');
+    const event = operation('get-events', 'GET', '/events', 'Events');
+    const resources = internal.resourcesForOperations([list, create, detail, update, remove, hub, event]);
+    const resource = resources.find(candidate => candidate.key === 'coverage-items');
+    (comp.operations as unknown as OpenApiOperationDefinition[]).push(hub, event);
+
+    expect(resource).toMatchObject({ listOperation: list, createOperation: create, detailOperation: detail, updateOperation: update, deleteOperation: remove });
+    expect(internal.resourceGroupsForResources(resources).map(group => group.key)).toContain('integration');
+    expect(internal.collectionPathFor('/coverage-items/{itemId}/history')).toBe('/coverage-items');
+    expect(internal.resourceKey('/Coverage_Items')).toBe('coverage_items');
+    expect(internal.pathLabel('/coverage-items')).toBe('Coverage Items');
+    expect(internal.titleLabel('categorys')).toBe('Categories');
+    expect(internal.singularLabel('Categories')).toBe('Category');
+    expect(internal.actionForMethod('POST')).toBe('Create');
+    expect(internal.actionForMethod('PUT')).toBe('Replace');
+    expect(internal.actionForMethod('PATCH')).toBe('Update');
+    expect(internal.actionForMethod('DELETE')).toBe('Delete');
+    expect(internal.actionForMethod('GET')).toBe('Read');
+    expect(internal.actionForMethod('OPTIONS')).toBe('OPTIONS');
+    expect(internal.actionForOperation(list)).toBe('List');
+    expect(internal.actionForOperation(detail)).toBe('View');
+    expect(internal.resourceActionLabel(resource!, create)).toBe('Coverage Item');
+    expect(internal.resourceActionLabel(resource!, list)).toBe('Coverage Items');
+    expect(internal.pathParameterNames({ ...detail, path: '/coverage-items/{itemId}/{code}', parameters: detail.parameters })).toEqual([
+      'itemId',
+      'code',
+    ]);
+    expect(internal.pathValuesForItem(detail, { id: 'item-1' })).toEqual({ itemId: 'item-1' });
+    expect(internal.pathValuesForItem(operation('get-code', 'GET', '/coverage/{code}', 'Coverage', [
+      { name: 'code', location: 'path', required: true, type: 'string' },
+    ]), { serviceCode: 'ABC' })).toEqual({ code: 'ABC' });
+    expect(internal.pathValuesForItem(detail, {})).toBeUndefined();
+
+    expect(internal.rowsFromResponse([{ id: 1 }])).toEqual([{ id: 1 }]);
+    expect(internal.rowsFromResponse({ content: [{ id: 2 }] })).toEqual([{ id: 2 }]);
+    expect(internal.rowsFromResponse({ nested: [{ id: 3 }] })).toEqual([{ id: 3 }]);
+    expect(internal.rowsFromResponse({ id: 4 })).toEqual([{ id: 4 }]);
+    expect(internal.rowsFromResponse(null)).toEqual([]);
+    expect(internal.rowsFromResponse('value')).toEqual(['value']);
+    expect(internal.columnsForRows([{ id: 1, nested: {}, name: 'One', active: true }])).toEqual(['id', 'name', 'active']);
+    expect(internal.cellsForItem('value', ['value'])).toEqual({ value: 'value' });
+    expect(internal.cellsForItem({ id: 1, name: 'One' }, ['id'])).toEqual({ id: 1 });
+    expect(internal.sameItem({ id: 1 }, { id: 1 })).toBe(true);
+    expect(internal.sameItem({ id: 1 }, { id: 2 })).toBe(false);
+    expect(internal.sameItem('same', 'same')).toBe(true);
+    expect(internal.itemIdentity({ href: '/coverage/1' })).toBe('href:/coverage/1');
+    expect(internal.itemIdentity([])).toBeUndefined();
+    expect(internal.inferredFieldsFromItem({ count: 1, enabled: true, nested: { name: 'One' }, items: [{ id: 1 }] })).toHaveLength(4);
+    expect(internal.inferredFieldsFromItem('value')).toHaveLength(1);
+  });
+
+  it('should keep CRUD detail actions usable when collection responses are empty', () => {
+    const internal = coverageInternals(comp);
+    const idField = testField('id', 'string', { readOnly: true });
+    const nameField = testField('name');
+    const itemSchema = testField('item', 'object', { path: ['0'], fields: [idField, nameField] });
+    const responseBody = testField('body', 'array', { path: [], items: itemSchema });
+    const parameter = { name: 'id', location: 'path' as const, required: true, type: 'string' };
+    const list: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'get-coverage-items',
+      operationId: 'getCoverageItems',
+      method: 'GET',
+      path: '/coverage-items',
+      parameters: [],
+      requestBodyRequired: false,
+      requestContentType: undefined,
+      requestBodyFields: undefined,
+      responseBodyFields: [responseBody],
+    };
+    const create: OpenApiOperationDefinition = {
+      ...list,
+      id: 'post-coverage-items',
+      operationId: 'postCoverageItems',
+      method: 'POST',
+      requestBodyRequired: true,
+      requestContentType: 'application/json',
+      requestBodyFields: [nameField],
+      responseBodyFields: [idField, nameField],
+    };
+    const detail: OpenApiOperationDefinition = {
+      ...list,
+      id: 'get-coverage-item',
+      operationId: 'getCoverageItem',
+      path: '/coverage-items/{id}',
+      parameters: [parameter],
+      responseBodyFields: [idField, nameField],
+    };
+    const update: OpenApiOperationDefinition = {
+      ...detail,
+      id: 'patch-coverage-item',
+      operationId: 'patchCoverageItem',
+      method: 'PATCH',
+      requestBodyRequired: true,
+      requestContentType: 'application/json',
+      requestBodyFields: [idField, nameField],
+    };
+    const remove: OpenApiOperationDefinition = {
+      ...detail,
+      id: 'delete-coverage-item',
+      operationId: 'deleteCoverageItem',
+      method: 'DELETE',
+      responseBodyFields: [],
+    };
+    const resource: TestCrudResource = {
+      key: 'coverage-items',
+      label: 'Coverage Items',
+      basePath: '/coverage-items',
+      operations: [list, create, detail, update, remove],
+      listOperation: list,
+      createOperation: create,
+      detailOperation: detail,
+      updateOperation: update,
+      deleteOperation: remove,
+    };
+    (comp.resources as unknown as TestCrudResource[]).push(resource);
+    const created = { id: 'coverage-1', name: 'Created item' };
+
+    internal.handleSuccessfulMutation(create, new HttpResponse({ status: 201, body: JSON.stringify(created) }));
+    httpMock.expectOne('/api/coverage-items').flush([]);
+
+    expect(comp.selectedOperation()).toBe(list);
+    expect(comp.responseRows()).toEqual([]);
+    expect(comp.selectedResponseItem()).toEqual(created);
+
+    internal.refreshList(resource, created);
+    httpMock.expectOne('/api/coverage-items').flush([created, { id: 'coverage-2', name: 'Second item' }]);
+    expect(comp.selectedResponseItem()).toEqual(created);
+
+    internal.refreshList(resource);
+    httpMock.expectOne('/api/coverage-items').flush([{ id: 'coverage-2', name: 'Second item' }]);
+    expect(comp.selectedResponseItem()).toEqual({ id: 'coverage-2', name: 'Second item' });
+
+    internal.refreshList(resource, created);
+    httpMock.expectOne('/api/coverage-items').flush({ detail: 'List unavailable' }, { status: 503, statusText: 'Service Unavailable' });
+    expect(comp.responseError()).toContain('List unavailable');
+    expect(comp.selectedResponseItem()).toEqual(created);
+  });
+
+  it('should complete detail read, update, and delete requests for a synthetic CRUD resource', () => {
+    const idField = testField('id', 'string', { readOnly: true });
+    const nameField = testField('name');
+    const parameter = { name: 'id', location: 'path' as const, required: true, type: 'string' };
+    const list: OpenApiOperationDefinition = {
+      ...operationWithBody(),
+      id: 'get-direct-items',
+      operationId: 'getDirectItems',
+      method: 'GET',
+      path: '/direct-items',
+      parameters: [],
+      requestBodyRequired: false,
+      requestContentType: undefined,
+      requestBodyFields: undefined,
+      responseBodyFields: [],
+    };
+    const detail: OpenApiOperationDefinition = {
+      ...list,
+      id: 'get-direct-item',
+      operationId: 'getDirectItem',
+      path: '/direct-items/{id}',
+      parameters: [parameter],
+      responseBodyFields: [idField, nameField],
+    };
+    const update: OpenApiOperationDefinition = {
+      ...detail,
+      id: 'patch-direct-item',
+      operationId: 'patchDirectItem',
+      method: 'PATCH',
+      requestBodyRequired: true,
+      requestContentType: 'application/json',
+      requestBodyFields: [idField, nameField],
+    };
+    const remove: OpenApiOperationDefinition = {
+      ...detail,
+      id: 'delete-direct-item',
+      operationId: 'deleteDirectItem',
+      method: 'DELETE',
+      responseBodyFields: [],
+    };
+    const resource: TestCrudResource = {
+      key: 'direct-items',
+      label: 'Direct Items',
+      basePath: '/direct-items',
+      operations: [list, detail, update, remove],
+      listOperation: list,
+      detailOperation: detail,
+      updateOperation: update,
+      deleteOperation: remove,
+    };
+    (comp.resources as unknown as TestCrudResource[]).push(resource);
+    comp.selectedOperation.set(list);
+    const row = { item: { id: 'direct-1', name: 'Original' }, cells: { id: 'direct-1', name: 'Original' } };
+
+    comp.selectResponseItem(row);
+    httpMock.expectOne('/api/direct-items/direct-1').flush({ id: 'direct-1', name: 'Loaded' });
+    fixture.detectChanges();
+    expect(comp.selectedResponseItem()).toEqual({ id: 'direct-1', name: 'Loaded' });
+
+    comp.responseDetailModel.name = 'Updated';
+    comp.responseDetailForm.get('name')?.markAsDirty();
+    comp.saveSelectedItem();
+    const updateRequest = httpMock.expectOne('/api/direct-items/direct-1');
+    expect(updateRequest.request.method).toBe('PATCH');
+    updateRequest.flush({ id: 'direct-1', name: 'Updated' });
+    expect(comp.detailStatus()).toBe(200);
+
+    const originalConfirm = window.confirm;
+    window.confirm = () => true;
+    try {
+      comp.responseRows.set([row]);
+      comp.selectedResponseRow.set(row);
+      comp.deleteResponseItem(row);
+      const deleteRequest = httpMock.expectOne('/api/direct-items/direct-1');
+      expect(deleteRequest.request.method).toBe('DELETE');
+      deleteRequest.flush('', { status: 204, statusText: 'No Content' });
+      expect(comp.responseRows()).toEqual([]);
+      expect(comp.deleteStatus()).toBe(204);
+    } finally {
+      window.confirm = originalConfirm;
+    }
+
+    comp.responseDetailForm = new FormGroup({});
+    comp.responseDetailForm.addControl('name', new FormControl('', Validators.required));
+    comp.selectedResponseRow.set(row);
+    comp.selectedResponseItem.set({});
+    comp.saveSelectedItem();
+    expect(comp.detailError()).toContain('name: required');
+
+    comp.responseDetailForm = new FormGroup({});
+    comp.saveSelectedItem();
+    expect(comp.detailError()).toContain('Unable to determine the item identifier');
+  });
+
+  it('should format nested backend validation details without losing field paths', () => {
+    const internal = coverageInternals(comp);
+    const error = {
+      title: 'Invalid request',
+      detail: 'Payload validation failed',
+      fieldErrors: [{ propertyPath: 'body.items[0].name', defaultMessage: 'must not be blank' }],
+      cause: { message: 'Nested parser failure' },
+    };
+
+    expect(internal.formatError(error, 400)).toContain('Payload validation failed');
+    expect(internal.formatError(error, 400)).toContain('body.items[0].name: must not be blank');
+    expect(internal.formatError(error, 400)).toContain('Nested parser failure');
+    expect(internal.formatError('', 503)).toBe('HTTP 503');
+    expect(schemaRenderer(comp).validationViolations({ message: 'displayName must not be blank' })).toContainEqual({
+      path: 'displayName',
+      message: 'displayName must not be blank',
+    });
+
+    const primary = testField('item', 'object', { fields: [testField('name')] });
+    const secondary = testField('item', 'object', {
+      fields: [testField('name', 'string', { description: 'Server name' }), testField('href')],
+    });
+    const merged = internal.mergeSchemaFields([primary], [secondary]);
+    expect(merged[0].fields?.map(field => field.name)).toEqual(['name', 'href']);
+    expect(merged[0].fields?.find(field => field.name === 'href')?.readOnly).toBe(true);
   });
 });

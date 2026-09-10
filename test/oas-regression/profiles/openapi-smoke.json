@@ -1,0 +1,13 @@
+[
+  {
+    "id": "shipping-instruction-equipment-reference",
+    "method": "POST",
+    "path": "/v3/shipping-instructions",
+    "defaults": [
+      {
+        "pointer": "/utilizedTransportEquipments/0/equipmentReference",
+        "value": "NARU3472484"
+      }
+    ]
+  }
+]

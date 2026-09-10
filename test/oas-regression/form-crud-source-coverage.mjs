@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
+import { evaluateSourceCoverageThresholds } from './source-coverage-policy.mjs';
+
 const manifestFile = process.argv[2];
 if (!manifestFile) {
   process.stderr.write('Usage: form-crud-source-coverage.mjs <worker-manifest.json> | --check-dependencies [app-dir]\n');
@@ -92,6 +94,15 @@ function coverageSummary(coverageMap) {
   };
 }
 
+function coverageMapForComponent(inputMap, prefix, coverageTools) {
+  const outputMap = coverageTools.coverage.createCoverageMap({});
+  for (const file of inputMap.files()) {
+    const relativePath = path.relative(manifest.appDir, file).replaceAll('\\', '/');
+    if (relativePath.startsWith(prefix)) outputMap.addFileCoverage(inputMap.fileCoverageFor(file));
+  }
+  return outputMap;
+}
+
 function writeCoverageMap(coverageMap, directory, coverageTools) {
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, 'coverage-final.json'), `${JSON.stringify(coverageMap.toJSON())}\n`);
@@ -166,29 +177,68 @@ if (browserMap.files().length === 0) {
 const browserSummary = writeCoverageMap(browserMap, path.join(manifest.outputDirectory, 'browser'), coverageTools);
 
 const combinedMap = coverageTools.coverage.createCoverageMap({});
-let jestCoverageMerged = false;
-const jestCoverageAvailable = fs.existsSync(manifest.jestCoverageFile);
-if (manifest.mergeJest && jestCoverageAvailable) {
-  const jestMap = coverageTools.coverage.createCoverageMap(JSON.parse(fs.readFileSync(manifest.jestCoverageFile, 'utf8')));
-  combinedMap.merge(scopedCoverageMap(jestMap, coverageTools));
-  jestCoverageMerged = true;
+let unitTestCoverageMerged = false;
+const unitTestCoverageAvailable = fs.existsSync(manifest.unitTestCoverageFile);
+let mergeError;
+if (manifest.mergeUnitTestCoverage) {
+  if (!unitTestCoverageAvailable) {
+    mergeError = `Vitest coverage merge was requested but ${manifest.unitTestCoverageFile} is unavailable`;
+  } else {
+    const unitTestMap = coverageTools.coverage.createCoverageMap(JSON.parse(fs.readFileSync(manifest.unitTestCoverageFile, 'utf8')));
+    combinedMap.merge(scopedCoverageMap(unitTestMap, coverageTools));
+    unitTestCoverageMerged = true;
+  }
 }
 combinedMap.merge(browserMap);
 const combinedSummary = writeCoverageMap(combinedMap, path.join(manifest.outputDirectory, 'combined'), coverageTools);
 
-fs.writeFileSync(
-  manifest.resultFile,
-  `${JSON.stringify(
+function componentReport(component) {
+  const browserComponentMap = coverageMapForComponent(browserMap, component.prefix, coverageTools);
+  const combinedComponentMap = coverageMapForComponent(combinedMap, component.prefix, coverageTools);
+  const combinedFiles = new Set(combinedComponentMap.files().map(file => path.resolve(file)));
+  return {
+    id: component.id,
+    prefix: component.prefix,
+    applicable: component.sourceFiles.length > 0,
+    sourceFiles: component.sourceFiles.map(file => path.relative(manifest.appDir, file).replaceAll('\\', '/')),
+    missingFiles: component.sourceFiles
+      .filter(file => !combinedFiles.has(path.resolve(file)))
+      .map(file => path.relative(manifest.appDir, file).replaceAll('\\', '/')),
+    thresholds: component.thresholds,
+    browser: coverageSummary(browserComponentMap),
+    summary: coverageSummary(combinedComponentMap),
+  };
+}
+
+const thresholdReport = evaluateSourceCoverageThresholds(
+  (manifest.components ?? []).map(componentReport),
+  manifest.workflow ?
     {
-      browser: browserSummary,
-      combined: combinedSummary,
-      combinedSources: jestCoverageMerged ? ['browser', 'jest'] : ['browser'],
-      jestCoverageAvailable,
-      jestCoverageMerged,
-      convertedScriptCount: convertedScripts.length,
-      conversionErrorCount: conversionErrors.length,
-    },
-    null,
-    2,
-  )}\n`,
+      workflowComplete: manifest.workflow.complete === true,
+      incompleteReasons: manifest.workflow.reasons ?? [],
+    }
+  : undefined,
 );
+const workerReport = {
+  workflow: manifest.workflow,
+  browser: browserSummary,
+  combined: combinedSummary,
+  combinedSources: unitTestCoverageMerged ? ['browser', 'vitest'] : ['browser'],
+  unitTestCoverageAvailable,
+  unitTestCoverageMerged,
+  coverageGate: thresholdReport,
+  convertedScriptCount: convertedScripts.length,
+  conversionErrorCount: conversionErrors.length,
+  mergeError,
+  // Temporary compatibility for existing report consumers.
+  jestCoverageAvailable: unitTestCoverageAvailable,
+  jestCoverageMerged: unitTestCoverageMerged,
+};
+fs.writeFileSync(manifest.resultFile, `${JSON.stringify(workerReport, null, 2)}\n`);
+
+if (mergeError || (thresholdReport.evaluated && !thresholdReport.passed)) {
+  const thresholdFailures = thresholdReport.failures
+    .map(failure => `${failure.component}:${failure.metric} ${failure.actual}<${failure.minimum}`)
+    .join(', ');
+  throw new Error([mergeError, thresholdFailures && `source coverage thresholds failed: ${thresholdFailures}`].filter(Boolean).join('; '));
+}

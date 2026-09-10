@@ -738,6 +738,7 @@ export default class FormCrud implements OnInit, OnDestroy {
       props: {
         label: `${parameter.location}: ${parameter.name}`,
         required: parameter.required,
+        attributes: this.requiredControlAttributes(parameter.required),
         type: this.inputType(parameter.type, parameter.format),
         step: this.inputStep(parameter.format),
         min: parameter.minimum,
@@ -763,6 +764,8 @@ export default class FormCrud implements OnInit, OnDestroy {
     operation: OpenApiOperationDefinition = this.selectedOperation(),
   ): FormlyFieldConfig {
     const disabled = readonly || field.readOnly === true;
+    const required = this.formlyRequired(field);
+    const dynamicDetailRequired = targetForm === this.responseDetailForm && required;
     if (field.type === 'object' && field.fields?.length) {
       return {
         key: field.name,
@@ -821,8 +824,9 @@ export default class FormCrud implements OnInit, OnDestroy {
           : this.initialFieldValue(field),
       props: {
         label: this.fieldLabel(field),
-        required: targetForm === this.responseDetailForm && this.formlyRequired(field) ? false : this.formlyRequired(field),
+        required: dynamicDetailRequired ? false : required,
         requiredIndicator: field.required,
+        attributes: this.requiredControlAttributes(dynamicDetailRequired ? false : required),
         disabled,
         description: field.description,
         type: this.inputType(field.type, field.format, operation.requestContentType),
@@ -835,8 +839,11 @@ export default class FormCrud implements OnInit, OnDestroy {
         options: field.enumValues?.map(value => ({ label: value, value })),
       },
       expressions:
-        targetForm === this.responseDetailForm && this.formlyRequired(field)
-          ? { 'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig) }
+        dynamicDetailRequired
+          ? {
+              'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig),
+              'props.attributes': fieldConfig => this.requiredControlAttributes(this.detailRequiredFieldActive(fieldConfig)),
+            }
           : undefined,
     };
   }
@@ -911,6 +918,8 @@ export default class FormCrud implements OnInit, OnDestroy {
     operation: OpenApiOperationDefinition = this.selectedOperation(),
   ): FormlyFieldConfig {
     const disabled = readonly || field.readOnly === true;
+    const required = this.formlyRequired(field);
+    const dynamicDetailRequired = targetForm === this.responseDetailForm && required;
     const inferredItemFields = this.inferredArrayItemFields(field, arrayField);
     if (inferredItemFields.length && (field.type !== 'object' || !field.fields?.length)) {
       return {
@@ -944,8 +953,9 @@ export default class FormCrud implements OnInit, OnDestroy {
       type: field.enumValues?.length ? 'select' : field.type === 'boolean' ? 'checkbox' : 'input',
       props: {
         label: this.fieldLabel(field),
-        required: targetForm === this.responseDetailForm && this.formlyRequired(field) ? false : this.formlyRequired(field),
+        required: dynamicDetailRequired ? false : required,
         requiredIndicator: field.required,
+        attributes: this.requiredControlAttributes(dynamicDetailRequired ? false : required),
         disabled,
         description: field.description,
         type: this.inputType(field.type, field.format, operation.requestContentType),
@@ -958,8 +968,11 @@ export default class FormCrud implements OnInit, OnDestroy {
         options: field.enumValues?.map(value => ({ label: value, value })),
       },
       expressions:
-        targetForm === this.responseDetailForm && this.formlyRequired(field)
-          ? { 'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig) }
+        dynamicDetailRequired
+          ? {
+              'props.required': fieldConfig => this.detailRequiredFieldActive(fieldConfig),
+              'props.attributes': fieldConfig => this.requiredControlAttributes(this.detailRequiredFieldActive(fieldConfig)),
+            }
           : undefined,
     };
   }
@@ -1969,6 +1982,10 @@ export default class FormCrud implements OnInit, OnDestroy {
 
   private formlyRequired(field: OpenApiSchemaField): boolean {
     return field.required && field.type !== 'boolean';
+  }
+
+  private requiredControlAttributes(required: boolean): Record<string, string> {
+    return required ? { required: 'required', 'aria-required': 'true' } : { 'aria-required': 'false' };
   }
 
   private detailRequiredFieldActive(field: FormlyFieldConfig): boolean {

@@ -1,8 +1,13 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { parse } from 'yaml';
+
+import { semanticIdentityValue } from './operation-identity.mjs';
+import { applyOperationPayloadProfile } from './operation-payload-profile.mjs';
+import { exclusiveMaximum, exclusiveMinimum, validateScalarConstraints } from './schema-scalar-validation.mjs';
 
 const [, , yamlPath, baseUrl, token, appName, outputDir = '.'] = process.argv;
 if (!yamlPath || !baseUrl || !appName) {
@@ -15,6 +20,7 @@ const schemas = doc.components?.schemas ?? {};
 const requestBodies = doc.components?.requestBodies ?? {};
 const results = [];
 const created = [];
+const unexecutableOperations = [];
 const payloadMemo = new Map();
 const propertiesMemo = new Map();
 const requiredMemo = new Map();
@@ -28,6 +34,9 @@ let evidenceSequence = 0;
 const skipDelete = /^(1|true|yes)$/i.test(process.env.OPENAPI_SMOKE_SKIP_DELETE ?? '');
 const schemaCompositionValidationLimit = positiveIntegerEnv('OPENAPI_SMOKE_COMPOSITION_VALIDATION_LIMIT', 4);
 const schemaValidationMaxDepth = positiveIntegerEnv('OPENAPI_SMOKE_SCHEMA_VALIDATION_MAX_DEPTH', 32);
+const defaultProfileFile = fileURLToPath(new URL('./profiles/openapi-smoke.json', import.meta.url));
+const profileFile = process.env.OPENAPI_SMOKE_PROFILE_FILE ?? defaultProfileFile;
+const operationPayloadProfiles = fs.existsSync(profileFile) ? JSON.parse(fs.readFileSync(profileFile, 'utf8')) : [];
 const smokeStats = {
   validationCompositionShortCircuits: 0,
   validationVariantsEvaluated: 0,
@@ -681,13 +690,16 @@ function primitivePayload(schema) {
   if (schema.example !== undefined) return schema.example;
   if (schema.enum?.length) return schema.enum.find(value => value !== null) ?? null;
   if (type === 'integer') {
-    const minimum = schema.minimum ?? (schema.exclusiveMinimum !== undefined ? Number(schema.exclusiveMinimum) + 1 : 1);
-    const maximum = schema.maximum ?? schema.exclusiveMaximum;
+    const minimum = Math.max(schema.minimum ?? 1, (exclusiveMinimum(schema) ?? Number.NEGATIVE_INFINITY) + 1);
+    const maximum = Math.min(schema.maximum ?? Number.POSITIVE_INFINITY, (exclusiveMaximum(schema) ?? Number.POSITIVE_INFINITY) - 1);
     return maximum !== undefined && minimum > maximum ? maximum : minimum;
   }
   if (type === 'number') {
-    const minimum = schema.minimum ?? (schema.exclusiveMinimum !== undefined ? Number(schema.exclusiveMinimum) + 0.5 : 1.5);
-    const maximum = schema.maximum ?? schema.exclusiveMaximum;
+    const minimum = Math.max(schema.minimum ?? 1.5, (exclusiveMinimum(schema) ?? Number.NEGATIVE_INFINITY) + 0.5);
+    const maximum = Math.min(
+      schema.maximum ?? Number.POSITIVE_INFINITY,
+      (exclusiveMaximum(schema) ?? Number.POSITIVE_INFINITY) - 0.5,
+    );
     return maximum !== undefined && minimum > maximum ? maximum : minimum;
   }
   if (type === 'boolean') return true;
@@ -959,6 +971,7 @@ function validateValue(value, schema, options = {}) {
         // Ignore invalid patterns from source specs; the generator cannot enforce them reliably either.
       }
     }
+    errors.push(...validateScalarConstraints(value, schema, pointerFor(pointer)));
   }
   if (type === 'array') {
     if (!Array.isArray(value)) {
@@ -995,7 +1008,6 @@ function validateValue(value, schema, options = {}) {
       }
       for (const [property, propertyValue] of Object.entries(value)) {
         const propertySchema = properties[property];
-        if (propertyValue === null && !required.has(property)) continue;
         if (isRequestPayloadMode(mode) && schemaHasBooleanFlag(propertySchema, 'readOnly')) continue;
         if (mode === 'response' && schemaHasBooleanFlag(propertySchema, 'writeOnly')) continue;
         if (propertySchema)
@@ -1072,7 +1084,13 @@ function allPrimitiveProperties(value, prefix = []) {
   return output;
 }
 
-function identityValueFor(paramName, json, locationHeader) {
+function identityValueFor(paramName, json, locationHeader, operation, requestBody) {
+  const semanticIdentity = semanticIdentityValue(
+    { path: operation.path, tag: operation.tags?.[0] },
+    { name: paramName },
+    [{ responseBody: json, requestBody, createdByApiOperations: true }],
+  );
+  if (semanticIdentity) return semanticIdentity;
   const properties = allPrimitiveProperties(json);
   const normalizedParam = normalizePrimitive(paramName);
   const exact = properties.find(property => normalizePrimitive(property.name) === normalizedParam);
@@ -1203,7 +1221,7 @@ async function request(method, resolvedPath, body, requestHeaders = {}) {
   return { status: response.status, text, json, headers: response.headers };
 }
 
-function rememberCreated(rawPath, resolvedPath, operation, response) {
+function rememberCreated(rawPath, resolvedPath, operation, response, requestBody) {
   if (!response.json || typeof response.json !== 'object') return;
   const params = pathParamsFromResolved(rawPath, resolvedPath);
   const rememberParam = (name, value) => {
@@ -1217,7 +1235,7 @@ function rememberCreated(rawPath, resolvedPath, operation, response) {
     .map(([candidate]) => candidate);
   for (const readPath of readPaths) {
     for (const paramName of readPath.matchAll(/\{([^}]+)\}/g)) {
-      const value = identityValueFor(paramName[1], response.json, location);
+      const value = identityValueFor(paramName[1], response.json, location, { ...operation, path: rawPath }, requestBody);
       rememberParam(paramName[1], value);
     }
   }
@@ -1232,50 +1250,12 @@ function rememberCreated(rawPath, resolvedPath, operation, response) {
       resource: resourceKey(rawPath),
       operationId: operation.operationId,
       params,
+      requestBody,
+      responseBody: response.json,
+      responseStatus: response.status,
+      location,
     });
   }
-}
-
-function smokePathWithoutApiPrefix(rawPath, resolvedPath) {
-  const candidate = String(resolvedPath || rawPath || '').split('?')[0];
-  return candidate.replace(/^\/api(?=\/)/, '');
-}
-
-function ensureShippingInstructionEquipmentReference(payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-
-  const reference = 'NARU3472484';
-
-  if (!Array.isArray(payload.utilizedTransportEquipments)) {
-    payload.utilizedTransportEquipments = [];
-  }
-
-  if (payload.utilizedTransportEquipments.length === 0) {
-    payload.utilizedTransportEquipments.push({});
-  }
-
-  for (const equipment of payload.utilizedTransportEquipments) {
-    if (!equipment || typeof equipment !== 'object' || Array.isArray(equipment)) continue;
-
-    if (equipment.equipmentReference === undefined || equipment.equipmentReference === null || equipment.equipmentReference === '') {
-      equipment.equipmentReference = reference;
-    }
-  }
-
-  return payload;
-}
-
-function fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload) {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-
-  const methodUpper = method.toUpperCase();
-  const normalizedPath = smokePathWithoutApiPrefix(rawPath, resolvedPath);
-
-  if (methodUpper === 'POST' && normalizedPath === '/v3/shipping-instructions') {
-    return ensureShippingInstructionEquipmentReference(payload);
-  }
-
-  return payload;
 }
 
 async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create') {
@@ -1293,7 +1273,7 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
     : undefined;
   const requestHeaders = operationRequestHeaders(pathItem, operation);
   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
-  payload = fixKnownSmokePayload(method, rawPath, resolvedPath, operation, payload);
+  payload = applyOperationPayloadProfile(payload, method, rawPath, operationPayloadProfiles);
   evidenceSequence += 1;
   const key = operationKey(method, rawPath, operation);
   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);
@@ -1438,7 +1418,7 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
       throw new Error(`${appName} ${method.toUpperCase()} ${resolvedPath} response schema errors: ${responseErrors.join('; ')}`);
     }
   }
-  if (method === 'post') rememberCreated(rawPath, resolvedPath, operation, response);
+  if (method === 'post') rememberCreated(rawPath, resolvedPath, operation, response, payload);
   return result;
 }
 
@@ -1448,6 +1428,15 @@ function operationsFor(method) {
     if (pathItem[method]) output.push({ rawPath, pathItem, operation: pathItem[method] });
   }
   return output;
+}
+
+function recordUnexecutable(method, rawPath, operation, reasonCode) {
+  unexecutableOperations.push({
+    operationId: operation.operationId ?? `${method}-${rawPath}`,
+    method: method.toUpperCase(),
+    path: rawPath,
+    reasonCode,
+  });
 }
 
 async function main() {
@@ -1469,17 +1458,22 @@ async function main() {
       createdInPass ||= created.length > before;
     }
   }
+  for (const item of postOperations) {
+    const key = `${item.rawPath}:${item.operation.operationId ?? ''}`;
+    if (!exercisedPosts.has(key)) recordUnexecutable('post', item.rawPath, item.operation, 'missing-upstream-resource');
+  }
 
   for (const item of operationsFor('get').filter(item => /\{[^}]+}/.test(item.rawPath))) {
     if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
       await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
+    else recordUnexecutable('get', item.rawPath, item.operation, 'missing-upstream-resource');
   }
 
   for (const method of ['patch', 'put']) {
     for (const item of operationsFor(method)) {
       if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) {
         await exercise(method, item.rawPath, item.pathItem, item.operation, method === 'patch' ? 'patch' : 'create');
-      }
+      } else recordUnexecutable(method, item.rawPath, item.operation, 'missing-upstream-resource');
     }
   }
 
@@ -1487,6 +1481,7 @@ async function main() {
     for (const item of operationsFor('delete')) {
       if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
         await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
+      else recordUnexecutable('delete', item.rawPath, item.operation, 'missing-upstream-resource');
     }
   }
 
@@ -1526,6 +1521,14 @@ async function main() {
     appName,
     artifact: yamlPath,
     operationCount: results.length,
+    outcomes: {
+      success2xx: results.length,
+      expectedNegative: 0,
+      unexecutable: unexecutableOperations.length,
+      harnessError: 0,
+      unexpectedFailure: 0,
+    },
+    unexecutableOperations,
     totalDurationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
     totalRequestDurationMs: results.reduce((sum, result) => sum + (result.requestDurationMs ?? result.durationMs ?? 0), 0),
     totalOperationDurationMs: results.reduce((sum, result) => sum + (result.operationDurationMs ?? result.durationMs ?? 0), 0),

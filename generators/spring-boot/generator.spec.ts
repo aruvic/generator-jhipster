@@ -206,6 +206,14 @@ describe(`generator - ${generator}`, () => {
       runResult.assertFileContent('src/main/openapi-templates/beanValidation.mustache', '{{^isUuid}}@Valid');
     });
 
+    it('should omit null properties from OpenAPI responses', () => {
+      runResult.assertFileContent(
+        'src/main/java/com/mycompany/myapp/config/JacksonConfiguration.java',
+        'changeDefaultPropertyInclusion(inclusion -> inclusion.withValueInclusion(JsonInclude.Include.NON_NULL))',
+      );
+      expect(runResult.getSnapshot('**/src/main/java/**/config/JacksonConfiguration.java')).toMatchSnapshot();
+    });
+
     it('should generate EvoMaster white-box driver support for OpenAPI apps', () => {
       runResult.assertFile('src/test/java/com/mycompany/myapp/evomaster/EvoMasterController.java');
       runResult.assertFile('src/main/java/com/mycompany/myapp/validation/PatternObjectValidator.java');

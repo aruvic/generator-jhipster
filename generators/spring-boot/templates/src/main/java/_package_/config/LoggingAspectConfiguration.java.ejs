@@ -18,6 +18,8 @@
 -%>
 package <%- packageName %>.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import <%- packageName %>.aop.logging.LoggingAspect;
 
 import tech.jhipster.config.JHipsterConstants;
@@ -31,7 +33,7 @@ public class LoggingAspectConfiguration {
 
     @Bean
     @Profile(JHipsterConstants.SPRING_PROFILE_DEVELOPMENT)
-    public LoggingAspect loggingAspect(Environment env) {
-        return new LoggingAspect(env);
+    public LoggingAspect loggingAspect(Environment env, ObjectMapper objectMapper) {
+        return new LoggingAspect(env, objectMapper);
     }
 }

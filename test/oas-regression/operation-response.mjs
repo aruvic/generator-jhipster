@@ -7,12 +7,25 @@ export function isDeclaredResponseStatus(responseStatusCodes, status) {
   });
 }
 
-export function classifyOperationResponse(responseStatusCodes, status) {
-  if (status >= 200 && status < 300) return 'success';
-  if (status >= 500) return 'server-error';
-  return isDeclaredResponseStatus(responseStatusCodes, status) ? 'declared-response' : 'unexpected-response';
+export function classifyOperationResponse(
+  responseStatusCodes,
+  status,
+  { expectation = 'happy-path', expectedNegativeStatusCodes = [] } = {},
+) {
+  if (status >= 200 && status < 300) {
+    return expectation === 'expected-negative' ? 'unexpected-failure' : 'success-2xx';
+  }
+  if (
+    expectation === 'expected-negative' &&
+    status < 500 &&
+    isDeclaredResponseStatus(responseStatusCodes, status) &&
+    isDeclaredResponseStatus(expectedNegativeStatusCodes, status)
+  ) {
+    return 'expected-negative';
+  }
+  return 'unexpected-failure';
 }
 
 export function classifyOperationPreparationFailure(preparation) {
-  return preparation?.workflowBlocked === true ? 'workflow-blocked' : 'failed';
+  return preparation?.unexecutable === true || preparation?.workflowBlocked === true ? 'unexecutable' : 'harness-error';
 }

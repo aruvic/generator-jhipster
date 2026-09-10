@@ -166,6 +166,7 @@ ${modelNameMappings}
                                 <useBeanValidation>true</useBeanValidation>
                                 <performBeanValidation>true</performBeanValidation>
                                 <containerDefaultToNull>true</containerDefaultToNull>
+                                <generateJsonIncludeAnnotations>true</generateJsonIncludeAnnotations>
                             </configOptions>
                             <typeMappings>
                                 <typeMapping>date=LocalDate</typeMapping>

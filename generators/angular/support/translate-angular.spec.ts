@@ -21,9 +21,26 @@ import { inspect } from 'node:util';
 
 import type { GetWebappTranslationCallback } from '../../client/translation.ts';
 
-import { createTranslationReplacer } from './translate-angular.ts';
+import { createTranslationReplacer, isTranslatedAngularFile } from './translate-angular.ts';
 
 describe('generator - angular - transform', () => {
+  describe('isTranslatedAngularFile', () => {
+    it('should match Angular templates below hidden directories', () => {
+      expect(
+        isTranslatedAngularFile({
+          path: '/workspace/.generated-app/src/main/webapp/app/home/home.html',
+          contents: Buffer.alloc(0),
+        }),
+      ).toBe(true);
+      expect(
+        isTranslatedAngularFile({
+          path: '/workspace/.generated-app/src/main/webapp/app/layouts/profiles/page-ribbon.ts',
+          contents: Buffer.alloc(0),
+        }),
+      ).toBe(true);
+    });
+  });
+
   describe('replaceAngularTranslations', () => {
     let replaceAngularTranslations: ReturnType<typeof createTranslationReplacer>;
     let enabledAngularTranslations: ReturnType<typeof createTranslationReplacer>;

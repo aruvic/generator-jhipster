@@ -1,0 +1,15 @@
+[
+  {
+    "id": "tmf683-party-interaction",
+    "artifactPattern": "TMF683-Party_Interaction",
+    "request": {
+      "method": "POST",
+      "path": "/api/partyInteraction",
+      "bodyFile": "party-interaction-full.json",
+      "expectedStatuses": [201]
+    },
+    "database": {
+      "sqlFile": "test/oas-regression/tmf683-db-verify.sql"
+    }
+  }
+]

@@ -18,6 +18,8 @@
 -%>
 package <%- packageName %>.aop.logging;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -36,6 +38,7 @@ import reactor.core.publisher.Mono;
 <%_ } _%>
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -68,7 +71,7 @@ class LoggingAspectTest {
         appender.start();
         logger.addAppender(appender);
 
-        aspect = new LoggingAspect(env);
+        aspect = new LoggingAspect(env, new ObjectMapper());
     }
 
     @AfterEach
@@ -99,6 +102,50 @@ class LoggingAspectTest {
 
         assertThat(messages()).contains("Illegal argument: [arg] in loggedMethod()");
     }
+
+    @Test
+    void logAroundRecursivelyRedactsCredentialsAndPreservesDiagnostics() throws Throwable {
+        String token = token();
+        String opaqueSecret = "opaque-test-secret";
+        Map<String, Object> arguments = Map.of(
+            "authorization",
+            "Bearer " + token,
+            "requestUrl",
+            "https://example.invalid/items?access_token=" + token + "&visible=true",
+            "nested",
+            List.of(Map.of("apiKey", opaqueSecret, "detail", "visible argument"))
+        );
+        LoggedResponse response = new LoggedResponse(
+            token,
+            "visible result",
+            Map.of("clientSecret", opaqueSecret, "detail", "visible nested result")
+        );
+        when(joinPoint.getArgs()).thenReturn(new Object[] { arguments, List.of("Bearer " + token) });
+        when(joinPoint.proceed()).thenReturn(response);
+
+        aspect.logAround(joinPoint);
+
+        assertThat(String.join("\n", messages()))
+            .doesNotContain(token, opaqueSecret, "Bearer")
+            .contains("[REDACTED]", "visible argument", "visible result", "visible nested result", "visible=true");
+    }
+
+    @Test
+    void logAroundRedactsCredentialsFromIllegalArguments() throws Throwable {
+        String token = token();
+        when(joinPoint.getArgs()).thenReturn(new Object[] { "Bearer " + token });
+        when(joinPoint.proceed()).thenThrow(new IllegalArgumentException("invalid"));
+
+        assertThatThrownBy(() -> aspect.logAround(joinPoint)).isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(String.join("\n", messages())).doesNotContain(token, "Bearer").contains("[REDACTED]");
+    }
+
+    private static String token() {
+        return String.join(".", "eyJfixture_header", "fixture_payload", "fixture_signature");
+    }
+
+    private record LoggedResponse(String accessToken, String detail, Map<String, Object> metadata) {}
 
 <%_ if (reactive) { _%>
     @Test
