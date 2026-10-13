@@ -9,8 +9,10 @@ GENERATOR_ROOT="${GENERATOR_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$GENERATOR_ROOT/.." && pwd)}"
 ARTIFACTS="${ARTIFACT_ROOT:-$WORKSPACE_ROOT/oas-to-jdl/artifacts}"
 SMOKE="$SCRIPT_DIR/openapi-smoke.mjs"
+EXTERNAL_PREREQUISITE_RUNTIME="$SCRIPT_DIR/external-prerequisite-runtime.mjs"
 FORM_CRUD_GUI_SMOKE="$SCRIPT_DIR/form-crud-gui-smoke.mjs"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE="$SCRIPT_DIR/form-crud-reference-picker-config-service.mjs"
+REFERENCE_PICKER_PROOF="$SCRIPT_DIR/reference-picker-proof.mjs"
 PERSISTENCE_PROFILES_FILE="${PERSISTENCE_PROFILES_FILE:-$SCRIPT_DIR/profiles/persistence.json}"
 EVOMASTER_SEED_BUILDER="$SCRIPT_DIR/evomaster-postman-seed.mjs"
 EVOMASTER_OPENAPI_EXAMPLE_BUILDER="$SCRIPT_DIR/evomaster-openapi-smoke-examples.mjs"
@@ -92,7 +94,6 @@ if [[ -z "$FORM_CRUD_GUI_PLAYWRIGHT_INSTALL_BROWSERS" ]]; then
 fi
 FORM_CRUD_GUI_PLAYWRIGHT_BROWSER="${FORM_CRUD_GUI_PLAYWRIGHT_BROWSER:-chromium}"
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR="${FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR:-true}"
-FORM_CRUD_GUI_FAIL_ON_HTTP_4XX="${FORM_CRUD_GUI_FAIL_ON_HTTP_4XX:-false}"
 FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM="${FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM:-true}"
 FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR="${FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR:-true}"
 FORM_CRUD_GUI_MAX_LIST_RESOURCES="${FORM_CRUD_GUI_MAX_LIST_RESOURCES:-all}"
@@ -107,7 +108,7 @@ FORM_CRUD_GUI_API_OPERATIONS_EXECUTION_ENABLED="${FORM_CRUD_GUI_API_OPERATIONS_E
 FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX:-false}"
 FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED="${FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_ACCOUNTED:-true}"
 FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS="${FORM_CRUD_GUI_REQUIRE_ALL_AVAILABLE_RESOURCE_WORKFLOWS:-true}"
-FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM="${FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM:-0.5}"
+FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM="${FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM:-0.75}"
 FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS="${FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS:-5}"
 FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS="${FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS:-500}"
 FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS="${FORM_CRUD_GUI_FULL_PAGE_SCREENSHOTS:-true}"
@@ -116,11 +117,15 @@ FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT="${FORM_CRUD_GUI_SOURCE_CO
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES:-67108864}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES:-2097152}"
 FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="${FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB:-1024}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="${FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST:-$FORM_CRUD_GUI_JEST_ENABLED}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES:-70}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS:-70}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS:-60}"
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES="${FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES:-55}"
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED="${FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED:-$FORM_CRUD_GUI_JEST_ENABLED}"
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES="${FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES:-70}"
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS="${FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS:-70}"
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS="${FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS:-60}"
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES="${FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES:-55}"
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES="${FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES:-70}"
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS="${FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS:-70}"
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS="${FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS:-60}"
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES="${FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES:-55}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_URL="${FORM_CRUD_REFERENCE_PICKER_CONFIG_URL:-}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN="${FORM_CRUD_REFERENCE_PICKER_CONFIG_BEARER_TOKEN:-}"
 FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION="${FORM_CRUD_REFERENCE_PICKER_FORWARD_AUTHORIZATION:-false}"
@@ -129,6 +134,8 @@ FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST="${FORM_CRUD_REFERENCE_PICKER_CON
 FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PUBLIC_HOST:-localhost}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT:-8085}"
 FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE="${FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE:-$OUTPUT_DIR/form-crud-reference-pickers.json}"
+REFERENCE_PICKER_CROSS_SERVICE_PROOF_ROOT="${REFERENCE_PICKER_CROSS_SERVICE_PROOF_ROOT:-$OUTPUT_DIR/reference-picker-proofs}"
+REFERENCE_PICKER_CROSS_SERVICE_REQUIRED="${REFERENCE_PICKER_CROSS_SERVICE_REQUIRED:-false}"
 EVOMASTER_JAR="${EVOMASTER_JAR:-$WORKSPACE_ROOT/tools/evomaster/evomaster-6.0.0.jar}"
 EVOMASTER_MODE="${EVOMASTER_MODE:-coverage}"
 EVOMASTER_SECONDS_PER_API="${EVOMASTER_SECONDS_PER_API:-600}"
@@ -299,6 +306,8 @@ else
 fi
 EVOMASTER_DRIVER_JVM_ARGS="${EVOMASTER_DRIVER_JVM_ARGS:--Djdk.attach.allowAttachSelf=true --add-opens java.base/java.util=ALL-UNNAMED --add-opens java.base/java.util.regex=ALL-UNNAMED --add-opens java.base/java.net=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED -XX:+EnableDynamicAgentLoading}"
 RUNTIME_FAIL_FAST="${RUNTIME_FAIL_FAST:-false}"
+EXTERNAL_PREREQUISITE_PROFILE_FILE="${EXTERNAL_PREREQUISITE_PROFILE_FILE:-$SCRIPT_DIR/profiles/external-prerequisites.json}"
+EXTERNAL_PREREQUISITE_SECRETS_FILE="${EXTERNAL_PREREQUISITE_SECRETS_FILE:-}"
 MAVEN_OFFLINE="${MAVEN_OFFLINE:-false}"
 MAVEN_CLI_OPTS="${MAVEN_CLI_OPTS:-}"
 DOCKER_COMPOSE_UP_ARGS="${DOCKER_COMPOSE_UP_ARGS:-}"
@@ -393,6 +402,64 @@ cleanup_process() {
 cleanup_reference_picker_config_service() {
   local pid="${1:-}"
   cleanup_process "$pid"
+}
+
+record_external_prerequisite_failure() {
+  local exit_code="${1:-1}"
+  local message="${2:-External prerequisite lifecycle failed}"
+  if [[ "${external_prerequisite_failure_recorded:-false}" != "true" ]]; then
+    external_prerequisite_failure_recorded=true
+    failure_count=$((failure_count + 1))
+    jq -n \
+      --arg artifact "$name" \
+      --arg phase "external-prerequisite" \
+      --arg exitCode "$exit_code" \
+      --arg message "$message" \
+      --arg statusFile "$external_prerequisite_status_file" \
+      --arg verifiedResourcesFile "$external_prerequisite_verified_resources_file" \
+      '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), message: $message, statusFile: $statusFile, verifiedResourcesFile: $verifiedResourcesFile}' \
+      >> "$failure_summary_lines_file"
+  fi
+  artifact_phase="external-prerequisite"
+  artifact_exit_code="$exit_code"
+}
+
+cleanup_external_prerequisites() {
+  if [[ "${external_prerequisite_cleanup_pending:-false}" != "true" ]]; then
+    return 0
+  fi
+  external_prerequisite_cleanup_pending=false
+  local args=(
+    cleanup
+    --repository-root "$GENERATOR_ROOT"
+    --output "$external_prerequisite_output_dir"
+  )
+  if [[ -n "$EXTERNAL_PREREQUISITE_SECRETS_FILE" ]]; then
+    args+=(--secrets-file "$EXTERNAL_PREREQUISITE_SECRETS_FILE")
+  fi
+  local cleanup_exit=0
+  timestamped_step "$name" "external prerequisite cleanup"
+  node "$EXTERNAL_PREREQUISITE_RUNTIME" "${args[@]}" < /dev/null || cleanup_exit=$?
+  if [[ "$cleanup_exit" != "0" ]]; then
+    record_external_prerequisite_failure "$cleanup_exit" "External prerequisite cleanup failed"
+  fi
+  return "$cleanup_exit"
+}
+
+cleanup_artifact_on_exit() {
+  local original_exit=$?
+  local external_cleanup_exit=0
+  trap - EXIT
+  cleanup_external_prerequisites || external_cleanup_exit=$?
+  cleanup_driver "${driver_pid:-}"
+  cleanup_app "${app_pid:-}" "${app_dir:-}"
+  cleanup_reference_picker_config_service "${reference_picker_config_service_pid:-}"
+  if [[ "$external_cleanup_exit" != "0" ]]; then
+    write_artifact_runtime_status "external-prerequisite" "$external_cleanup_exit"
+    write_runtime_reports
+    exit "$external_cleanup_exit"
+  fi
+  exit "$original_exit"
 }
 
 should_start_reference_picker_config_service() {
@@ -620,7 +687,10 @@ write_form_crud_gui_combined_summary() {
         screenshots: ($b.screenshots // []),
         failedResponses: ($b.failedResponses // []),
         pageErrors: ($b.pageErrors // []),
+        requestFailures: ($b.requestFailures // []),
         console: ($b.console // []),
+        operationErrorAttribution: ($b.operationErrorAttribution // null),
+        operationErrorAttributionReportFile: ($b.operationErrorAttributionReportFile // null),
         browser: $b,
         unitTest: $j,
         jest: $j,
@@ -670,7 +740,6 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_HEADLESS="$FORM_CRUD_GUI_HEADLESS" \
   FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" \
   FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR="$FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR" \
-  FORM_CRUD_GUI_FAIL_ON_HTTP_4XX="$FORM_CRUD_GUI_FAIL_ON_HTTP_4XX" \
   FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM="$FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM" \
   FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR="$FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR" \
   FORM_CRUD_GUI_MAX_LIST_RESOURCES="$FORM_CRUD_GUI_MAX_LIST_RESOURCES" \
@@ -694,11 +763,16 @@ run_form_crud_gui_smoke() {
   FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES" \
   FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB="$FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB" \
-  FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST="$FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST" \
-  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES" \
-  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS" \
-  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS" \
-  FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES="$FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES" \
+  FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED="$FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED" \
+  FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES="$FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES" \
+  FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS="$FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS" \
+  FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS="$FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS" \
+  FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES="$FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES" \
+  FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES="$FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES" \
+  FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS="$FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS" \
+  FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS="$FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS" \
+  FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES="$FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES" \
+  FORM_CRUD_GUI_EXTERNAL_PREREQUISITE_FILE="$external_prerequisite_operation_results_file" \
     timeout --kill-after="${FORM_CRUD_GUI_RUN_TIMEOUT_KILL_AFTER_SECONDS}s" "${FORM_CRUD_GUI_RUN_TIMEOUT_SECONDS}s" \
       "$FORM_CRUD_GUI_NODE_BIN/node" "$FORM_CRUD_GUI_SMOKE" "$name" "http://$FORM_CRUD_GUI_PUBLIC_HOST:$FORM_CRUD_GUI_PORT" "$gui_dir" < /dev/null || gui_status=$?
 
@@ -2011,6 +2085,7 @@ runtime_summary_json="$OUTPUT_DIR/runtime-summary.json"
 runtime_junit_xml="$OUTPUT_DIR/runtime-junit.xml"
 runtime_form_crud_gui_summary_json="$OUTPUT_DIR/runtime-form-crud-gui-summary.json"
 runtime_evomaster_summary_json="$OUTPUT_DIR/runtime-evomaster-summary.json"
+runtime_reference_picker_proof_summary_json="$OUTPUT_DIR/runtime-reference-picker-proof-summary.json"
 runtime_start_epoch="$(now_epoch)"
 : > "$failure_summary_lines_file"
 : > "$runtime_status_lines_file"
@@ -2029,6 +2104,9 @@ write_runtime_reports() {
   local runtime_end_epoch
   local form_crud_gui_status_files=()
   local evomaster_status_files=()
+  local reference_picker_proof_files=()
+  local reference_picker_summary_args=(summary)
+  local reference_picker_summary_status=0
   runtime_end_epoch="$(now_epoch)"
 
   while IFS= read -r artifact; do
@@ -2042,6 +2120,25 @@ write_runtime_reports() {
       evomaster_status_files+=("$OUTPUT_DIR/$artifact/evomaster/status.json")
     fi
   done < "$processed_artifacts_file"
+
+  if [[ -d "$REFERENCE_PICKER_CROSS_SERVICE_PROOF_ROOT" ]]; then
+    while IFS= read -r proof_file; do
+      reference_picker_proof_files+=("$proof_file")
+    done < <(find "$REFERENCE_PICKER_CROSS_SERVICE_PROOF_ROOT" -name reference-picker-proof.json -type f | sort)
+  fi
+  if [[ "$REFERENCE_PICKER_CROSS_SERVICE_REQUIRED" == "true" ]]; then
+    reference_picker_summary_args+=(--required)
+  elif [[ "$REFERENCE_PICKER_CROSS_SERVICE_REQUIRED" != "false" ]]; then
+    echo "Unsupported REFERENCE_PICKER_CROSS_SERVICE_REQUIRED=$REFERENCE_PICKER_CROSS_SERVICE_REQUIRED; use true or false." >&2
+    return 2
+  fi
+  reference_picker_summary_args+=("${reference_picker_proof_files[@]}")
+  node "$REFERENCE_PICKER_PROOF" "${reference_picker_summary_args[@]}" > "$runtime_reference_picker_proof_summary_json" ||
+    reference_picker_summary_status=$?
+  if [[ "$reference_picker_summary_status" -gt 1 ]]; then
+    echo "Cross-service reference-picker proof summary failed with exit $reference_picker_summary_status" >&2
+    return "$reference_picker_summary_status"
+  fi
 
   jq -s '.' "$runtime_status_lines_file" > "$runtime_status_json"
   jq -s '.' "$failure_summary_lines_file" > "$failure_summary_json"
@@ -2070,6 +2167,10 @@ write_runtime_reports() {
         totalApiOperationsPageRenderedOperations: (map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0),
         totalApiOperationsPageSubmittedOperations: (map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0),
         totalApiOperationsPage2xxSuccesses: (map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0),
+        totalApiOperationsPageEligibleOperations: (map(.coverage.apiOperationsPageEligibleOperations // .coverage.declaredOperations // 0) | add // 0),
+        totalApiOperationsPageBlockedPrerequisiteOperations: (map(.coverage.apiOperationsPageBlockedPrerequisiteOperations // 0) | add // 0),
+        totalApiOperationsPageDisabledOptionalOperations: (map(.coverage.apiOperationsPageDisabledOptionalOperations // 0) | add // 0),
+        totalApiOperationsPageApplicableOperations: (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0),
         totalApiOperationsPageExpectedNegatives: (map(.coverage.apiOperationsPageExpectedNegatives // 0) | add // 0),
         totalApiOperationsPageUnexecutableOperations: (map(.coverage.apiOperationsPageUnexecutableOperations // 0) | add // 0),
         totalApiOperationsPageHarnessErrors: (map(.coverage.apiOperationsPageHarnessErrors // 0) | add // 0),
@@ -2089,10 +2190,6 @@ write_runtime_reports() {
         totalStructuredArrayOperations: (map(.coverage.structuredArrayOperations // 0) | add // 0),
         totalObjectStringControlFailures: (map(.coverage.objectStringControlFailures // 0) | add // 0),
         totalResponsiveViewportsChecked: (map(.coverage.responsiveViewportsChecked // 0) | add // 0),
-        totalCombinedSourceLines: (map(.sourceCoverage.combined.lines.total // 0) | add // 0),
-        totalCoveredCombinedSourceLines: (map(.sourceCoverage.combined.lines.covered // 0) | add // 0),
-        totalCombinedSourceBranches: (map(.sourceCoverage.combined.branches.total // 0) | add // 0),
-        totalCoveredCombinedSourceBranches: (map(.sourceCoverage.combined.branches.covered // 0) | add // 0),
         angularVitestPassed: (map(select(((.unitTest // .jest).status // "skipped") == "passed")) | length),
         angularVitestFailed: (map(select(((.unitTest // .jest).status // "skipped") == "failed")) | length),
         angularVitestSkipped: (map(select(((.unitTest // .jest).status // "skipped") == "skipped")) | length),
@@ -2103,13 +2200,11 @@ write_runtime_reports() {
         referencePickerSaveSuccessRatio: ratio((map(.coverage.successfulReferencePickerSaves // 0) | add // 0); (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0)),
         operationRenderCoverageRatio: ratio((map(.coverage.renderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRenderCoverageRatio: ratio((map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPage2xxSuccessRatio: ratio((map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageTerminalResultRatio: ratio((map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPage2xxSuccessRatio: ratio((map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageTerminalResultRatio: ratio((map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRoundTripSuccessRatio: ratio((map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0); (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0)),
         schemaFieldCoverageRatio: ratio((map(.coverage.schemaFields.covered // 0) | add // 0); (map(.coverage.schemaFields.applicable // 0) | add // 0)),
-        combinedSourceLineCoverageRatio: ratio((map(.sourceCoverage.combined.lines.covered // 0) | add // 0); (map(.sourceCoverage.combined.lines.total // 0) | add // 0)),
-        combinedSourceBranchCoverageRatio: ratio((map(.sourceCoverage.combined.branches.covered // 0) | add // 0); (map(.sourceCoverage.combined.branches.total // 0) | add // 0)),
         artifacts: map({
           artifact,
           status,
@@ -2122,7 +2217,10 @@ write_runtime_reports() {
           screenshotCount: ((.screenshots // []) | length),
           failedResponseCount: ((.failedResponses // []) | length),
           pageErrorCount: ((.pageErrors // []) | length),
+          requestFailureCount: ((.requestFailures // []) | length),
           authenticatedConsoleErrorCount: ((.console // []) | map(select(.type == "error" and .authenticated == true)) | length),
+          operationErrorAttribution,
+          operationErrorAttributionReportFile,
           error: (.error.message // "")
         })
       }
@@ -2176,7 +2274,28 @@ write_runtime_reports() {
     --slurpfile failures "$failure_summary_json" \
     --slurpfile formCrudGui "$runtime_form_crud_gui_summary_json" \
     --slurpfile evomaster "$runtime_evomaster_summary_json" \
-    '($artifacts[0] // []) as $artifactResults |
+    --slurpfile referencePickerCrossService "$runtime_reference_picker_proof_summary_json" \
+    'def attribution_summary($reports; $label):
+      [$reports[] | select(. != null)] as $available |
+      {
+        metricLabel: $label,
+        artifactCount: ($available | length),
+        eventClassCounts: {
+          "frontend-console": ($available | map(.counts["frontend-console"] // 0) | add // 0),
+          "page-error": ($available | map(.counts["page-error"] // 0) | add // 0),
+          "request-failure": ($available | map(.counts["request-failure"] // 0) | add // 0),
+          "http-response": ($available | map(.counts["http-response"] // 0) | add // 0)
+        },
+        attributedExpectedNegative: ($available | map(.counts.attributedExpectedNegative // 0) | add // 0),
+        attributedPostDelete: ($available | map(.counts.attributedPostDelete // 0) | add // 0),
+        unmatchedAuthenticatedHttp: ($available | map(.counts.unmatchedAuthenticated // 0) | add // 0),
+        ambiguousAuthenticatedHttp: ($available | map(.counts.ambiguousAuthenticated // 0) | add // 0),
+        enterpriseGate: {
+          metricLabel: "authenticated-target-http-error-attribution",
+          status: (if ($available | any(.enterpriseGate.status == "failed")) then "failed" else "passed" end)
+        }
+      };
+    ($artifacts[0] // []) as $artifactResults |
       ($failures[0] // []) as $failureResults |
       {
       startEpoch: ($startEpoch | tonumber),
@@ -2187,9 +2306,78 @@ write_runtime_reports() {
       processedCount: ($processedCount | tonumber),
       failureCount: ($failureCount | tonumber),
       artifactFailureCount: ($artifactResults | map(select(.exitCode != 0)) | length),
-      ok: (($failureCount | tonumber) == 0 and (($artifactResults | map(select(.exitCode != 0)) | length) == 0)),
+      ok: (
+        ($failureCount | tonumber) == 0
+        and (($artifactResults | map(select(.exitCode != 0)) | length) == 0)
+        and (($referencePickerCrossService[0].enterpriseGate.status // "passed") != "failed")
+      ),
       failures: $failureResults,
       artifacts: $artifactResults,
+      externalPrerequisite: {
+        declared: ($artifactResults | map(.externalPrerequisite.counts.declared // 0) | add // 0),
+        required: ($artifactResults | map(.externalPrerequisite.counts.required // 0) | add // 0),
+        proven: ($artifactResults | map(.externalPrerequisite.counts.proven // 0) | add // 0),
+        failed: ($artifactResults | map(.externalPrerequisite.counts.failed // 0) | add // 0),
+        cleanupFailed: ($artifactResults | map(.externalPrerequisite.counts.cleanupFailed // 0) | add // 0),
+        disabledOptional: ($artifactResults | map(.externalPrerequisite.counts.disabledOptional // 0) | add // 0),
+        operationReport: {
+          counts: {
+            declared: ($artifactResults | map(.externalPrerequisite.operationReport.counts.declared // 0) | add // 0),
+            required: ($artifactResults | map(.externalPrerequisite.operationReport.counts.required // 0) | add // 0),
+            eligible: ($artifactResults | map(.externalPrerequisite.operationReport.counts.eligible // 0) | add // 0),
+            blockedPrerequisite: ($artifactResults | map(.externalPrerequisite.operationReport.counts.blockedPrerequisite // 0) | add // 0),
+            disabledOptional: ($artifactResults | map(.externalPrerequisite.operationReport.counts.disabledOptional // 0) | add // 0)
+          },
+          denominators: {
+            declared: ($artifactResults | map(.externalPrerequisite.operationReport.denominators.declared // 0) | add // 0),
+            applicable: ($artifactResults | map(.externalPrerequisite.operationReport.denominators.applicable // 0) | add // 0),
+            executionEligible: ($artifactResults | map(.externalPrerequisite.operationReport.denominators.executionEligible // 0) | add // 0),
+            excludedDisabledOptional: ($artifactResults | map(.externalPrerequisite.operationReport.denominators.excludedDisabledOptional // 0) | add // 0)
+          },
+          enterpriseGate: {
+            status: (if ($artifactResults | any(.externalPrerequisite.operationReport.enterpriseGate.status == "failed")) then "failed" else "passed" end),
+            blockedRequiredOperations: ($artifactResults | map(.externalPrerequisite.operationReport.enterpriseGate.blockedRequiredOperations // 0) | add // 0)
+          }
+        },
+        artifacts: ($artifactResults | map(select(.externalPrerequisite != null)) | map({
+          artifact,
+          status: .externalPrerequisite.status,
+          gate: .externalPrerequisite.gate,
+          counts: .externalPrerequisite.counts,
+          operationReport: .externalPrerequisite.operationReport,
+          evidence: .externalPrerequisite.evidence
+        }))
+      },
+      operationErrorAttribution: {
+        metricLabel: "runtime-operation-error-attribution",
+        openapiSmoke: attribution_summary(
+          [$artifactResults[] | .operationErrorAttribution.openapiSmoke];
+          "openapi-smoke-operation-error-attribution"
+        ),
+        formCrudGui: attribution_summary(
+          [$artifactResults[] | .operationErrorAttribution.formCrudGui];
+          "form-crud-gui-operation-error-attribution"
+        ),
+        artifacts: ($artifactResults | map({
+          artifact,
+          openapiSmoke: .operationErrorAttribution.openapiSmoke,
+          formCrudGui: .operationErrorAttribution.formCrudGui
+        }))
+      },
+      referencePickerCrossService: (
+        $referencePickerCrossService[0] // {
+          metricLabel: "cross-service-reference-picker-proof-summary",
+          status: "not-configured",
+          counts: {configured: 0, passed: 0, failed: 0},
+          gateCounts: {},
+          enterpriseGate: {
+            metricLabel: "cross-service-reference-picker-proof-required",
+            status: "passed",
+            reasonCodes: []
+          },
+          reports: []
+        }
+      ),
       formCrudGui: ($formCrudGui[0] // {artifactCount: 0, artifacts: []}),
       evomaster: ($evomaster[0] // {artifactCount: 0, artifacts: []})
     }' > "$runtime_summary_json"
@@ -2216,8 +2404,31 @@ write_artifact_runtime_status() {
   local exit_code="${2:-0}"
   local artifact_end_epoch
   local status_file
+  local external_prerequisite_status
+  local openapi_operation_error_attribution
+  local form_crud_operation_error_attribution
   artifact_end_epoch="$(now_epoch)"
   status_file="$artifact_output_dir/harness/runtime-status.json"
+  external_prerequisite_status=null
+  openapi_operation_error_attribution=null
+  form_crud_operation_error_attribution=null
+  if [[ -f "${external_prerequisite_status_file:-}" ]]; then
+    external_prerequisite_status="$(jq -c . "$external_prerequisite_status_file")"
+  fi
+  if [[ -f "$artifact_output_dir/operation-error-attribution.json" ]]; then
+    openapi_operation_error_attribution="$(
+      jq -c --arg reportFile "$artifact_output_dir/operation-error-attribution.json" \
+        '{counts, enterpriseGate, reportFile: $reportFile}' \
+        "$artifact_output_dir/operation-error-attribution.json"
+    )"
+  fi
+  if [[ -f "$artifact_output_dir/form-crud-gui/operation-error-attribution.json" ]]; then
+    form_crud_operation_error_attribution="$(
+      jq -c --arg reportFile "$artifact_output_dir/form-crud-gui/operation-error-attribution.json" \
+        '{counts, enterpriseGate, reportFile: $reportFile}' \
+        "$artifact_output_dir/form-crud-gui/operation-error-attribution.json"
+    )"
+  fi
   jq -n \
     --arg artifact "$name" \
     --arg phase "$phase" \
@@ -2229,7 +2440,27 @@ write_artifact_runtime_status() {
     --arg durationSeconds "$(duration_seconds "$artifact_start_epoch" "$artifact_end_epoch")" \
     --arg evomasterEnabled "$EVOMASTER_ENABLED" \
     --arg evomasterStatusFile "$artifact_output_dir/evomaster/status.json" \
-    '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), startEpoch: ($startEpoch | tonumber), startIso: $startIso, endEpoch: ($endEpoch | tonumber), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber), evomasterEnabled: ($evomasterEnabled == "true"), evomasterStatusFile: $evomasterStatusFile}' \
+    --argjson externalPrerequisite "$external_prerequisite_status" \
+    --argjson openapiOperationErrorAttribution "$openapi_operation_error_attribution" \
+    --argjson formCrudOperationErrorAttribution "$form_crud_operation_error_attribution" \
+    '{
+      artifact: $artifact,
+      phase: $phase,
+      exitCode: ($exitCode | tonumber),
+      startEpoch: ($startEpoch | tonumber),
+      startIso: $startIso,
+      endEpoch: ($endEpoch | tonumber),
+      endIso: $endIso,
+      durationSeconds: ($durationSeconds | tonumber),
+      evomasterEnabled: ($evomasterEnabled == "true"),
+      evomasterStatusFile: $evomasterStatusFile,
+      externalPrerequisite: $externalPrerequisite,
+      operationErrorAttribution: {
+        metricLabel: "artifact-operation-error-attribution",
+        openapiSmoke: $openapiOperationErrorAttribution,
+        formCrudGui: $formCrudOperationErrorAttribution
+      }
+    }' \
     > "$status_file"
   jq -c . "$status_file" >> "$runtime_status_lines_file"
 }
@@ -2246,6 +2477,12 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   artifact_phase="runtime-loop"
   artifact_exit_code=0
   artifact_output_dir="$OUTPUT_DIR/$name"
+  external_prerequisite_output_dir="$artifact_output_dir/external-prerequisite"
+  external_prerequisite_status_file="$external_prerequisite_output_dir/status.json"
+  external_prerequisite_verified_resources_file="$external_prerequisite_output_dir/verified-resources.json"
+  external_prerequisite_operation_results_file="$external_prerequisite_output_dir/operation-results.json"
+  external_prerequisite_cleanup_pending=false
+  external_prerequisite_failure_recorded=false
   printf '%s\n' "$name" >> "$processed_artifacts_file"
   case "$artifact_output_dir" in
     "$OUTPUT_DIR"/*)
@@ -2271,7 +2508,7 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   fi
   app_pid=""
   driver_pid=""
-  trap 'cleanup_driver "$driver_pid"; cleanup_app "$app_pid" "$app_dir"; cleanup_reference_picker_config_service "$reference_picker_config_service_pid"' EXIT
+  trap cleanup_artifact_on_exit EXIT
 
   timestamped_step "$name" "reset PostgreSQL"
   (cd "$app_dir" && docker compose -f src/main/docker/postgresql.yml down -v --remove-orphans < /dev/null)
@@ -2291,10 +2528,48 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
   token=$(authenticate)
   echo "auth=ok"
 
+  timestamped_step "$name" "external prerequisite provision and canonical proof"
+  external_prerequisite_cleanup_pending=true
+  external_prerequisite_prepare_args=(
+    prepare
+    --profile "$EXTERNAL_PREREQUISITE_PROFILE_FILE"
+    --openapi "$yaml_file"
+    --repository-root "$GENERATOR_ROOT"
+    --output "$external_prerequisite_output_dir"
+    --base-url "http://localhost:$PORT/api"
+  )
+  if [[ -n "$EXTERNAL_PREREQUISITE_SECRETS_FILE" ]]; then
+    external_prerequisite_prepare_args+=(--secrets-file "$EXTERNAL_PREREQUISITE_SECRETS_FILE")
+  fi
+  external_prerequisite_prepare_exit=0
+  EXTERNAL_PREREQUISITE_AUTH_TOKEN="$token" \
+    node "$EXTERNAL_PREREQUISITE_RUNTIME" "${external_prerequisite_prepare_args[@]}" < /dev/null ||
+    external_prerequisite_prepare_exit=$?
+  if [[ "$external_prerequisite_prepare_exit" != "0" ]]; then
+    record_external_prerequisite_failure "$external_prerequisite_prepare_exit" "External prerequisite provision or canonical proof failed"
+    external_prerequisite_cleanup_exit=0
+    cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
+    cleanup_driver "$driver_pid"
+    driver_pid=""
+    cleanup_app "$app_pid" "$app_dir"
+    app_pid=""
+    write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+    trap - EXIT
+    if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+      cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
+      write_runtime_reports
+      exit "$artifact_exit_code"
+    fi
+    echo "Continuing after external prerequisite failure for $name; recorded exit code $artifact_exit_code" >&2
+    continue
+  fi
+
   timestamped_step "$name" "YAML smoke"
   smoke_exit=0
   set +e
-  node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$artifact_output_dir" < /dev/null | tee "$smoke_file"
+  OPENAPI_SMOKE_VERIFIED_RESOURCES_FILE="$external_prerequisite_verified_resources_file" \
+    OPENAPI_SMOKE_EXTERNAL_PREREQUISITE_FILE="$external_prerequisite_operation_results_file" \
+    node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$artifact_output_dir" < /dev/null | tee "$smoke_file"
   smoke_exit="${PIPESTATUS[0]}"
   set -e
   if [[ "$smoke_exit" != "0" ]]; then
@@ -2308,15 +2583,23 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
       --arg appLog "$log_file" \
       '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), smokeFile: $smokeFile, failureFile: $failureFile, appLog: $appLog}' \
       >> "$failure_summary_lines_file"
+    artifact_phase="yaml-smoke"
+    artifact_exit_code="$smoke_exit"
+    external_prerequisite_cleanup_exit=0
+    cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
     cleanup_driver "$driver_pid"
     driver_pid=""
     cleanup_app "$app_pid" "$app_dir"
     app_pid=""
-    write_artifact_runtime_status "yaml-smoke" "$smoke_exit"
+    if [[ "$external_prerequisite_cleanup_exit" == "0" ]]; then
+      write_artifact_runtime_status "yaml-smoke" "$smoke_exit"
+    else
+      write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+    fi
     trap - EXIT
     if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
       write_runtime_reports
-      exit "$smoke_exit"
+      exit "$artifact_exit_code"
     fi
     echo "Continuing after YAML smoke failure for $name; recorded exit code $smoke_exit" >&2
     continue
@@ -2346,9 +2629,21 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
         artifact_exit_code="$form_crud_gui_exit"
       fi
       if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
-        write_artifact_runtime_status "form-crud-gui" "$form_crud_gui_exit"
+        external_prerequisite_cleanup_exit=0
+        cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
+        cleanup_driver "$driver_pid"
+        driver_pid=""
+        cleanup_app "$app_pid" "$app_dir"
+        app_pid=""
+        if [[ "$external_prerequisite_cleanup_exit" == "0" ]]; then
+          write_artifact_runtime_status "form-crud-gui" "$form_crud_gui_exit"
+        else
+          write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+        fi
+        trap - EXIT
+        cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
         write_runtime_reports
-        exit "$form_crud_gui_exit"
+        exit "$artifact_exit_code"
       fi
       echo "Continuing after Form CRUD GUI failure for $name; recorded exit code $form_crud_gui_exit" >&2
     fi
@@ -2405,9 +2700,23 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
         --arg appLog "$log_file" \
         '{artifact: $artifact, phase: $phase, profile: $profile, exitCode: ($exitCode | tonumber), responseFile: $responseFile, appLog: $appLog}' \
         >> "$failure_summary_lines_file"
-      write_artifact_runtime_status "persistence-profile" "1"
+      artifact_phase="persistence-profile"
+      artifact_exit_code=1
+      external_prerequisite_cleanup_exit=0
+      cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
+      cleanup_driver "$driver_pid"
+      driver_pid=""
+      cleanup_app "$app_pid" "$app_dir"
+      app_pid=""
+      if [[ "$external_prerequisite_cleanup_exit" == "0" ]]; then
+        write_artifact_runtime_status "persistence-profile" "1"
+      else
+        write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+      fi
+      trap - EXIT
+      cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
       write_runtime_reports
-      exit 1
+      exit "$artifact_exit_code"
     fi
 
     (cd "$app_dir" && docker compose -f src/main/docker/postgresql.yml exec -T postgresql \
@@ -2437,7 +2746,10 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
     timestamped_step "$name" "prepare live PostgreSQL state for EvoMaster"
     evomaster_db_seed_exit=0
     set +e
-    OPENAPI_SMOKE_SKIP_DELETE=true node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$evomaster_db_seed_dir" < /dev/null | tee "$evomaster_db_seed_file"
+    OPENAPI_SMOKE_SKIP_DELETE=true \
+      OPENAPI_SMOKE_VERIFIED_RESOURCES_FILE="$external_prerequisite_verified_resources_file" \
+      OPENAPI_SMOKE_EXTERNAL_PREREQUISITE_FILE="$external_prerequisite_operation_results_file" \
+      node "$SMOKE" "$yaml_file" "http://localhost:$PORT/api" "$token" "$name" "$evomaster_db_seed_dir" < /dev/null | tee "$evomaster_db_seed_file"
     evomaster_db_seed_exit="${PIPESTATUS[0]}"
     set -e
     if [[ "$evomaster_db_seed_exit" != "0" ]]; then
@@ -2451,15 +2763,23 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
         --arg appLog "$log_file" \
         '{artifact: $artifact, phase: $phase, exitCode: ($exitCode | tonumber), smokeFile: $smokeFile, failureFile: $failureFile, appLog: $appLog}' \
         >> "$failure_summary_lines_file"
+      artifact_phase="evomaster-db-seed-smoke"
+      artifact_exit_code="$evomaster_db_seed_exit"
+      external_prerequisite_cleanup_exit=0
+      cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
       cleanup_driver "$driver_pid"
       driver_pid=""
       cleanup_app "$app_pid" "$app_dir"
       app_pid=""
-      write_artifact_runtime_status "evomaster-db-seed-smoke" "$evomaster_db_seed_exit"
+      if [[ "$external_prerequisite_cleanup_exit" == "0" ]]; then
+        write_artifact_runtime_status "evomaster-db-seed-smoke" "$evomaster_db_seed_exit"
+      else
+        write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+      fi
       trap - EXIT
       if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
         write_runtime_reports
-        exit "$evomaster_db_seed_exit"
+        exit "$artifact_exit_code"
       fi
       echo "Continuing after EvoMaster DB seed smoke failure for $name; recorded exit code $evomaster_db_seed_exit" >&2
       continue
@@ -2480,12 +2800,26 @@ while IFS=$'\t' read -r name app_dir _jdl_file yaml_file db_user db_name _base_n
     fi
   fi
 
+  external_prerequisite_cleanup_exit=0
+  cleanup_external_prerequisites || external_prerequisite_cleanup_exit=$?
   if [[ "$EVOMASTER_ENABLED" == "true" && "$EVOMASTER_REUSE_SMOKE_DB_STATE" == "true" ]]; then
     cleanup_app "$app_pid" ""
   else
     cleanup_app "$app_pid" "$app_dir"
   fi
   app_pid=""
+  if [[ "$external_prerequisite_cleanup_exit" != "0" ]]; then
+    cleanup_app "" "$app_dir"
+    write_artifact_runtime_status "external-prerequisite" "$artifact_exit_code"
+    trap - EXIT
+    if [[ "$RUNTIME_FAIL_FAST" == "true" ]]; then
+      cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
+      write_runtime_reports
+      exit "$artifact_exit_code"
+    fi
+    echo "Continuing after external prerequisite cleanup failure for $name; recorded exit code $artifact_exit_code" >&2
+    continue
+  fi
 
   if [[ "$EVOMASTER_ENABLED" == "true" ]]; then
     if [[ "$EVOMASTER_REUSE_SMOKE_DB_STATE" == "true" ]]; then
@@ -2579,6 +2913,11 @@ fi
 
 cleanup_reference_picker_config_service "$reference_picker_config_service_pid"
 write_runtime_reports
+
+if jq -e '.referencePickerCrossService.enterpriseGate.status == "failed"' "$runtime_summary_json" >/dev/null; then
+  echo "Runtime loop completed without the required cross-service reference-picker proof. See $runtime_reference_picker_proof_summary_json" >&2
+  exit 1
+fi
 
 if [[ "$failure_count" != "0" ]]; then
   echo "Runtime loop completed with $failure_count artifact failure(s). See $runtime_summary_json" >&2

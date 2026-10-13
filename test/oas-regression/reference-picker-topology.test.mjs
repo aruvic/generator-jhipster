@@ -57,6 +57,15 @@ function topology(overrides = {}) {
       identityPath: 'id',
     },
     ui: { host: '127.0.0.1', publicHost: 'localhost', port: 14200 },
+    configurationService: {
+      name: 'reference-picker-configuration',
+      host: '127.0.0.1',
+      publicHost: 'localhost',
+      port: 18085,
+      healthPath: '/management/health',
+      collectionPath: '/api/reference-pickers',
+      storagePath: './output/reference-picker-configurations.json',
+    },
     authentication: {
       loginPath: '/login',
       path: '/api/authenticate',
@@ -76,8 +85,11 @@ function topology(overrides = {}) {
       collectionPath: '/target-resources',
       displayFields: ['id', 'name'],
       copyFields: [
-        { source: 'id', target: 'resource.id' },
-        { source: 'name', target: 'resource.name' },
+        { source: 'id', target: 'party.id' },
+        { source: 'name', target: 'party.name' },
+        { source: '@type', target: 'party.@referredType' },
+        { source: 'relationshipType', target: '@type' },
+        { source: 'relationshipRole', target: 'role' },
       ],
       mode: 'reference',
       multiple: true,
@@ -100,11 +112,26 @@ test('normalizes a distinct two-service topology and derives its cross-service t
   assert.equal(normalized.source.directory, '/work/config/source-app');
   assert.equal(normalized.source.baseUrl, 'http://localhost:18081');
   assert.equal(normalized.target.baseUrl, 'http://localhost:18082');
+  assert.equal(normalized.configurationService.baseUrl, 'http://localhost:18085');
+  assert.equal(normalized.configurationService.storagePath, '/work/config/output/reference-picker-configurations.json');
   assert.equal(normalized.picker.targetBaseUrl, normalized.target.baseUrl);
   assert.equal(normalized.picker.targetApiId, '');
   assert.notEqual(new URL(normalized.picker.targetBaseUrl).origin, new URL(normalized.source.baseUrl).origin);
   assert.notEqual(normalized.source.database.container, normalized.target.database.container);
   assert.notEqual(normalized.source.database.name, normalized.target.database.name);
+});
+
+test('rejects embed mode and arbitrary mappings that do not express a reference relationship', () => {
+  const embedded = topology();
+  embedded.picker.mode = 'embed';
+  assert.throws(() => normalizeReferencePickerTopology(embedded), /must be "reference" for cross-service reference validation/);
+
+  const arbitraryReference = topology();
+  arbitraryReference.picker.copyFields = [
+    { source: 'id', target: 'id' },
+    { source: 'name', target: 'name' },
+  ];
+  assert.throws(() => normalizeReferencePickerTopology(arbitraryReference), /do not prove required reference-referred-type contract/);
 });
 
 test('rejects conflicting application ports', () => {
@@ -123,6 +150,12 @@ test('requires two distinct generated application directories', () => {
   const value = topology();
   value.target.directory = value.source.directory;
   assert.throws(() => normalizeReferencePickerTopology(value), /source\.directory and target\.directory must be distinct/);
+});
+
+test('requires distinct source and target service identities', () => {
+  const value = topology();
+  value.target.name = value.source.name;
+  assert.throws(() => normalizeReferencePickerTopology(value), /source\.name and target\.name must be distinct/);
 });
 
 test('rejects shared database resources', () => {
@@ -151,4 +184,14 @@ test('requires an explicit mapping and source item identity route', () => {
   const noTargetListPath = topology();
   delete noTargetListPath.verification.targetListPath;
   assert.throws(() => normalizeReferencePickerTopology(noTargetListPath), /verification\.targetListPath/);
+});
+
+test('requires a PATCH persistence operation and a configured configuration service', () => {
+  const nonPatch = topology();
+  nonPatch.verification.sourceSaveMethod = 'PUT';
+  assert.throws(() => normalizeReferencePickerTopology(nonPatch), /sourceSaveMethod must be "PATCH"/);
+
+  const noConfigurationService = topology();
+  delete noConfigurationService.configurationService;
+  assert.throws(() => normalizeReferencePickerTopology(noConfigurationService), /configurationService must be an object/);
 });

@@ -48,11 +48,15 @@ function mappingContracts(copyFields, targetIdentityPath) {
     throw new Error(`Reference-picker copy mappings do not map target identity path ${JSON.stringify(targetIdentityPath)}`);
   }
 
-  const referenceRoots = [...new Set(identityMappings.map(mapping => {
-    const segments = normalizePath(mapping.target).split('.');
-    segments.pop();
-    return segments.join('.');
-  }))];
+  const referenceRoots = [
+    ...new Set(
+      identityMappings.map(mapping => {
+        const segments = normalizePath(mapping.target).split('.');
+        segments.pop();
+        return segments.join('.');
+      }),
+    ),
+  ];
 
   const contracts = copyFields.map(mapping => {
     if (identityMappings.includes(mapping)) {
@@ -83,6 +87,32 @@ function mappingContracts(copyFields, targetIdentityPath) {
   return { contracts, referenceRoots };
 }
 
+export function assertReferencePickerMappingContract(copyFields, targetIdentityPath) {
+  const { contracts, referenceRoots } = mappingContracts(copyFields, targetIdentityPath);
+  for (const requiredContract of ['reference-referred-type', 'relationship-type', 'relationship-role']) {
+    if (!contracts.some(({ contract }) => contract === requiredContract)) {
+      throw new Error(`Reference-picker copy mappings do not prove required ${requiredContract} contract`);
+    }
+  }
+
+  let hrefContract = contracts.find(({ contract }) => contract === 'reference-href');
+  if (!hrefContract) {
+    if (referenceRoots.length !== 1) {
+      throw new Error('Reference-picker copy mappings do not identify one automatic reference href target');
+    }
+    const target = referenceRoots[0] ? `${referenceRoots[0]}.href` : 'href';
+    hrefContract = {
+      mapping: { source: null, target },
+      contract: 'reference-href',
+      classification: 'automatic-resolver',
+      requiredOnReadback: true,
+    };
+    contracts.splice(contracts.findLastIndex(({ contract }) => contract === 'identity') + 1, 0, hrefContract);
+  }
+
+  return { contracts, hrefContract };
+}
+
 function targetItemHref(collectionUrl, identity) {
   if (identity === undefined || identity === null || identity === '') {
     throw new Error('Selected target identity is required to prove the automatic reference href');
@@ -108,35 +138,13 @@ function valuePresent(value) {
 }
 
 export function assertPersistedReference(value, requestReference, picker, targetSelection, phase) {
-  const { contracts, referenceRoots } = mappingContracts(picker.copyFields, targetSelection.identityPath);
-  for (const requiredContract of ['reference-referred-type', 'relationship-type', 'relationship-role']) {
-    if (!contracts.some(({ contract }) => contract === requiredContract)) {
-      throw new Error(`Reference-picker copy mappings do not prove required ${requiredContract} contract`);
-    }
-  }
+  const { contracts, hrefContract } = assertReferencePickerMappingContract(picker.copyFields, targetSelection.identityPath);
 
   const identityContracts = contracts.filter(({ contract }) => contract === 'identity');
   if (
-    identityContracts.some(
-      ({ mapping }) => !isDeepStrictEqual(valueAtPath(requestReference, mapping.target), targetSelection.identity),
-    )
+    identityContracts.some(({ mapping }) => !isDeepStrictEqual(valueAtPath(requestReference, mapping.target), targetSelection.identity))
   ) {
     throw new Error(`${phase} request did not map the selected target identity`);
-  }
-
-  let hrefContract = contracts.find(({ contract }) => contract === 'reference-href');
-  if (!hrefContract) {
-    if (referenceRoots.length !== 1) {
-      throw new Error('Reference-picker copy mappings do not identify one automatic reference href target');
-    }
-    const target = referenceRoots[0] ? `${referenceRoots[0]}.href` : 'href';
-    hrefContract = {
-      mapping: { source: null, target },
-      contract: 'reference-href',
-      classification: 'automatic-resolver',
-      requiredOnReadback: true,
-    };
-    contracts.splice(contracts.findLastIndex(({ contract }) => contract === 'identity') + 1, 0, hrefContract);
   }
 
   const expectedHref = targetItemHref(targetSelection.collectionUrl, targetSelection.identity);
@@ -157,11 +165,10 @@ export function assertPersistedReference(value, requestReference, picker, target
     const getValue = valueAtPath(reference, mapping.target);
     const preserved = isDeepStrictEqual(getValue, patchValue);
     const proven =
-      contract === 'reference-href'
-        ? hrefMatches(patchValue, expectedHref) && hrefMatches(getValue, expectedHref)
-        : contract === 'identity'
-          ? preserved || (valuePresent(getValue) && hrefMatches(valueAtPath(reference, hrefContract.mapping.target), expectedHref))
-          : preserved;
+      contract === 'reference-href' ? hrefMatches(patchValue, expectedHref) && hrefMatches(getValue, expectedHref)
+      : contract === 'identity' ?
+        preserved || (valuePresent(getValue) && hrefMatches(valueAtPath(reference, hrefContract.mapping.target), expectedHref))
+      : preserved;
     return {
       source: mapping.source,
       target: mapping.target,

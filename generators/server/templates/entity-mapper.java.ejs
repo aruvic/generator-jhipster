@@ -12,11 +12,15 @@ package <%- packageName %>;
 <%_ const hasResponseCollectionMappings = responseMappings.some(mapping => Array.isArray(mapping.responseCollectionFields) && mapping.responseCollectionFields.length > 0); _%>
 <%_ const hasInlineElementMappings = requestMappings.some(mapping => (mapping.collectionFields ?? []).some(field => field.useInlineElementMapping)); _%>
 <%_ const hasNamedHelperMethods = hasInlineElementMappings || hasResponseCollectionMappings; _%>
+<%_ const needsCycleSafeProxy = typeof requiresMapperProxy !== 'undefined' && requiresMapperProxy; _%>
 <%_ const needsOpenApiPrimitiveMapperField = [...requestMappings, ...responseMappings].some(mapping =>
       (mapping.annotations ?? []).some(annotation => annotation.includes('openApiPrimitiveMapper.')),
     );
 _%>
 
+<%_ if (needsCycleSafeProxy) { _%>
+import org.mapstruct.AnnotateWith;
+<%_ } _%>
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 import org.mapstruct.BeanMapping;
@@ -26,6 +30,10 @@ import org.mapstruct.NullValuePropertyMappingStrategy;
 import org.mapstruct.ReportingPolicy;
 import org.mapstruct.AfterMapping;
 import org.springframework.context.annotation.Lazy;
+<%_ if (needsCycleSafeProxy) { _%>
+import org.springframework.context.annotation.Scope;
+import org.springframework.context.annotation.ScopedProxyMode;
+<%_ } _%>
 import org.springframework.beans.factory.annotation.Autowired;
 <%_ if (objectFactories && objectFactories.length > 0) { _%>
 import org.mapstruct.ObjectFactory;
@@ -64,6 +72,12 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 <%_ } _%>
 
+<%_ if (needsCycleSafeProxy) { _%>
+@AnnotateWith(
+  value = Scope.class,
+  elements = @AnnotateWith.Element(name = "proxyMode", enumClass = ScopedProxyMode.class, enums = "TARGET_CLASS")
+)
+<%_ } _%>
 @Lazy
 @Mapper(
   componentModel = "spring",
@@ -89,8 +103,9 @@ public abstract class <%- mapperName %> {
 
     // ========== Request Mappings (DTO -> Domain) ==========
 <%_ for (const mapping of requestMappings) { _%>
-  <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
-    <%_ for (const annotation of mapping.annotations) { _%>
+  <%_ const createAnnotations = mapping.createAnnotations ?? mapping.annotations; _%>
+  <%_ if (createAnnotations && createAnnotations.length > 0) { _%>
+    <%_ for (const annotation of createAnnotations) { _%>
     <%- annotation %>
     <%_ } _%>
   <%_ } _%>
@@ -112,7 +127,44 @@ public abstract class <%- mapperName %> {
   <%_ if (!hasIdIgnore) { _%>
     @Mapping(target = "id", ignore = true)
   <%_ } _%>
+  <%_ const updateMethodName = mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}`;
+      const concreteUpdateTargets = mapping.concreteUpdateTargets ?? [];
+  _%>
+  <%_ if (concreteUpdateTargets.length > 0) { _%>
+    protected abstract void <%- updateMethodName %>Base(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
+
+    public void <%- updateMethodName %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source) {
+        if (target == null || source == null) {
+            return;
+        }
+    <%_ for (const concreteTarget of concreteUpdateTargets) { _%>
+        if (target instanceof <%- concreteTarget.targetType %> concreteTarget) {
+            <%- concreteTarget.methodName %>(concreteTarget, source);
+            return;
+        }
+    <%_ } _%>
+        <%- updateMethodName %>Base(target, source);
+    }
+
+    <%_ for (const concreteTarget of concreteUpdateTargets) { _%>
+    @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.<%- mapping.ignoreNullsOnUpdate ? 'IGNORE' : 'SET_TO_NULL' %>)
+      <%_ if (mapping.annotations && mapping.annotations.length > 0) { _%>
+        <%_ for (const annotation of mapping.annotations) { _%>
+    <%- annotation %>
+        <%_ } _%>
+      <%_ } _%>
+      <%_ for (const field of mapping.generatedUuidFields ?? []) { _%>
+    @Mapping(target = "<%- field.fieldName %>", nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+      <%_ } _%>
+      <%_ if (!hasIdIgnore) { _%>
+    @Mapping(target = "id", ignore = true)
+      <%_ } _%>
+    protected abstract void <%- concreteTarget.methodName %>(@MappingTarget <%- concreteTarget.targetType %> target, <%- mapping.sourceType %> source);
+
+    <%_ } _%>
+  <%_ } else { _%>
     public abstract void <%- mapping.updateMethodName || `update${mapping.methodName.replace(/^to/, '')}From${mapping.sourceType.split('.').pop()}` %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source);
+  <%_ } _%>
 
 <%_ } _%>
 
@@ -281,9 +333,7 @@ public abstract class <%- mapperName %> {
         );
         target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);
       <%_ } else { _%>
-        if (source.get<%- field.sourceGetter %>() == null) {
-            target.<%- field.targetSetter %>(null);
-        } else {
+        if (source.get<%- field.sourceGetter %>() != null) {
             List<<%- field.elementDomainType %>> replaced<%- field.targetGetter %> = new ArrayList<>();
             for (<%- field.elementDtoType %> incomingItem : source.get<%- field.sourceGetter %>()) {
                 if (incomingItem != null) {
@@ -297,6 +347,10 @@ public abstract class <%- mapperName %> {
                 }
             }
             target.<%- field.targetSetter %>(replaced<%- field.targetGetter %>);
+      <%_ if (!mapping.ignoreNullsOnUpdate) { _%>
+        } else {
+            target.<%- field.targetSetter %>(null);
+      <%_ } _%>
         }
       <%_ } _%>
     <%_ } _%>

@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 import { parse } from 'yaml';
 
+import { externalPrerequisiteIdentityValue, normalizeExternalPrerequisiteRecord } from './external-prerequisite-records.mjs';
+import { buildOperationErrorAttributionReport } from './operation-error-attribution.mjs';
 import { semanticIdentityValue } from './operation-identity.mjs';
+import { buildOperationOutcomeReport, classifyOperationPrerequisite } from './operation-outcome-report.mjs';
 import { applyOperationPayloadProfile } from './operation-payload-profile.mjs';
 import { exclusiveMaximum, exclusiveMinimum, validateScalarConstraints } from './schema-scalar-validation.mjs';
 
@@ -21,6 +24,11 @@ const requestBodies = doc.components?.requestBodies ?? {};
 const results = [];
 const created = [];
 const unexecutableOperations = [];
+const blockedPrerequisiteOperations = [];
+const disabledOptionalOperations = [];
+const operationErrorEvents = [];
+const operationErrorAssertions = [];
+const prerequisiteDispositionKeys = new Set();
 const payloadMemo = new Map();
 const propertiesMemo = new Map();
 const requiredMemo = new Map();
@@ -37,6 +45,24 @@ const schemaValidationMaxDepth = positiveIntegerEnv('OPENAPI_SMOKE_SCHEMA_VALIDA
 const defaultProfileFile = fileURLToPath(new URL('./profiles/openapi-smoke.json', import.meta.url));
 const profileFile = process.env.OPENAPI_SMOKE_PROFILE_FILE ?? defaultProfileFile;
 const operationPayloadProfiles = fs.existsSync(profileFile) ? JSON.parse(fs.readFileSync(profileFile, 'utf8')) : [];
+const verifiedResourcesFile = process.env.OPENAPI_SMOKE_VERIFIED_RESOURCES_FILE;
+const externalPrerequisiteFile = process.env.OPENAPI_SMOKE_EXTERNAL_PREREQUISITE_FILE;
+const externalPrerequisiteRecords =
+  verifiedResourcesFile ?
+    JSON.parse(fs.readFileSync(verifiedResourcesFile, 'utf8')).map((record, index) => {
+      const normalized = normalizeExternalPrerequisiteRecord(record);
+      if (!normalized) throw new Error(`Verified external prerequisite record ${index} does not contain complete canonical proof`);
+      return normalized;
+    })
+  : [];
+const externalPrerequisiteReport =
+  externalPrerequisiteFile && fs.existsSync(externalPrerequisiteFile) ?
+    JSON.parse(fs.readFileSync(externalPrerequisiteFile, 'utf8'))
+  : undefined;
+const operationErrorReportFile = path.resolve(
+  outputDir,
+  process.env.OPENAPI_SMOKE_OPERATION_ERROR_REPORT_FILE ?? 'operation-error-attribution.json',
+);
 const smokeStats = {
   validationCompositionShortCircuits: 0,
   validationVariantsEvaluated: 0,
@@ -696,10 +722,7 @@ function primitivePayload(schema) {
   }
   if (type === 'number') {
     const minimum = Math.max(schema.minimum ?? 1.5, (exclusiveMinimum(schema) ?? Number.NEGATIVE_INFINITY) + 0.5);
-    const maximum = Math.min(
-      schema.maximum ?? Number.POSITIVE_INFINITY,
-      (exclusiveMaximum(schema) ?? Number.POSITIVE_INFINITY) - 0.5,
-    );
+    const maximum = Math.min(schema.maximum ?? Number.POSITIVE_INFINITY, (exclusiveMaximum(schema) ?? Number.POSITIVE_INFINITY) - 0.5);
     return maximum !== undefined && minimum > maximum ? maximum : minimum;
   }
   if (type === 'boolean') return true;
@@ -1031,8 +1054,26 @@ function operationKey(method, rawPath, operation) {
 }
 
 function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
   return filePath;
+}
+
+function writeOperationErrorAttributionReport(report = undefined) {
+  const operationErrorAttribution =
+    report ??
+    buildOperationErrorAttributionReport({
+      events: operationErrorEvents,
+      assertions: operationErrorAssertions,
+    });
+  writeJson(operationErrorReportFile, {
+    ...operationErrorAttribution,
+    source: {
+      events: operationErrorEvents,
+      assertions: operationErrorAssertions,
+    },
+  });
+  return operationErrorAttribution;
 }
 
 function pathTemplateBase(rawPath) {
@@ -1085,11 +1126,9 @@ function allPrimitiveProperties(value, prefix = []) {
 }
 
 function identityValueFor(paramName, json, locationHeader, operation, requestBody) {
-  const semanticIdentity = semanticIdentityValue(
-    { path: operation.path, tag: operation.tags?.[0] },
-    { name: paramName },
-    [{ responseBody: json, requestBody, createdByApiOperations: true }],
-  );
+  const semanticIdentity = semanticIdentityValue({ path: operation.path, tag: operation.tags?.[0] }, { name: paramName }, [
+    { responseBody: json, requestBody, createdByApiOperations: true },
+  ]);
   if (semanticIdentity) return semanticIdentity;
   const properties = allPrimitiveProperties(json);
   const normalizedParam = normalizePrimitive(paramName);
@@ -1130,11 +1169,23 @@ function createdRecordForPath(rawPath) {
     .find(record => record.base === base || rawPath.startsWith(`${record.base}/`) || record.resource === resource);
 }
 
-function resolvePath(rawPath, pathItem, operation, allowDefault = false) {
+function resolvePath(method, rawPath, pathItem, operation, allowDefault = false) {
   const record = createdRecordForPath(rawPath);
   let resolved = true;
   const pathname = rawPath.replace(/\{([^}]+)\}/g, (_, paramName) => {
-    const value = record?.params?.[paramName] ?? record?.params?.[normalizePrimitive(paramName)];
+    const value =
+      record?.params?.[paramName] ??
+      record?.params?.[normalizePrimitive(paramName)] ??
+      externalPrerequisiteIdentityValue(
+        externalPrerequisiteRecords,
+        {
+          method: method.toUpperCase(),
+          path: rawPath,
+          operationId: operation.operationId,
+          tag: operation.tags?.[0],
+        },
+        { name: paramName },
+      );
     if (value !== undefined) return encodeURIComponent(String(value));
     resolved = false;
     return allowDefault ? '1' : `{${paramName}}`;
@@ -1259,7 +1310,7 @@ function rememberCreated(rawPath, resolvedPath, operation, response, requestBody
 }
 
 async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create') {
-  const resolvedPath = resolvePath(rawPath, pathItem, operation, false);
+  const resolvedPath = resolvePath(method, rawPath, pathItem, operation, false);
   if (!resolvedPath) return undefined;
   const operationStartEpochMs = Date.now();
   const payloadPreparationStartEpochMs = Date.now();
@@ -1275,6 +1326,7 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
   mergePathParamsIntoPayload(payload, schema, pathParamsFromResolved(rawPath, resolvedPath));
   payload = applyOperationPayloadProfile(payload, method, rawPath, operationPayloadProfiles);
   evidenceSequence += 1;
+  const requestId = `openapi-request-${evidenceSequence}`;
   const key = operationKey(method, rawPath, operation);
   const requestFile = payload === undefined ? undefined : writeJson(path.join(outputDir, 'payloads', `${key}.json`), payload);
   const headersFile =
@@ -1315,6 +1367,21 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
     const requestEndEpochMs = Date.now();
     const operationEndEpochMs = requestEndEpochMs;
     const networkError = serializeError(error);
+    operationErrorEvents.push({
+      classification: 'request-failure',
+      authenticated: Boolean(token && token !== '-'),
+      target: true,
+      authContext: { authenticated: Boolean(token && token !== '-'), target: true },
+      method: method.toUpperCase(),
+      url: urlFor(resolvedPath),
+      path: resolvedPath,
+      requestId,
+      correlation: { requestId },
+      evidenceRef: `${operationErrorReportFile}#/source/events/${operationErrorEvents.length}`,
+      capturedAtIso: new Date().toISOString(),
+      error: networkError,
+    });
+    writeOperationErrorAttributionReport();
     writeJson(path.join(outputDir, 'failure.json'), {
       appName,
       artifact: yamlPath,
@@ -1354,7 +1421,9 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
   });
   const expected = successStatuses(operation, method);
   const result = {
+    operationId: operation.operationId,
     method: method.toUpperCase(),
+    pathTemplate: rawPath,
     path: resolvedPath,
     status: response.status,
     expected,
@@ -1384,6 +1453,24 @@ async function exercise(method, rawPath, pathItem, operation, bodyMode = 'create
     requestDurationMs: requestEndEpochMs - requestStartEpochMs,
   };
   results.push(result);
+  if (response.status >= 400 && response.status <= 599) {
+    operationErrorEvents.push({
+      classification: 'http-response',
+      authenticated: Boolean(token && token !== '-'),
+      target: true,
+      authContext: { authenticated: Boolean(token && token !== '-'), target: true },
+      method: method.toUpperCase(),
+      url: urlFor(resolvedPath),
+      path: resolvedPath,
+      status: response.status,
+      requestId,
+      correlation: { requestId },
+      evidenceRef: `${operationErrorReportFile}#/source/events/${operationErrorEvents.length}`,
+      evidenceRefs: [responseFile],
+      capturedAtIso: new Date().toISOString(),
+    });
+    writeOperationErrorAttributionReport();
+  }
   if (response.status >= 500 || !expected.includes(response.status)) {
     writeJson(path.join(outputDir, 'failure.json'), {
       appName,
@@ -1430,6 +1517,36 @@ function operationsFor(method) {
   return output;
 }
 
+function operationDescriptor(method, rawPath, operation) {
+  return {
+    operationId: operation.operationId ?? `${method}-${rawPath}`,
+    method: method.toUpperCase(),
+    path: rawPath,
+  };
+}
+
+function prerequisiteDisposition(method, rawPath, operation) {
+  return classifyOperationPrerequisite(externalPrerequisiteReport, operationDescriptor(method, rawPath, operation));
+}
+
+function operationIsEligible(method, rawPath, operation) {
+  const disposition = prerequisiteDisposition(method, rawPath, operation);
+  if (disposition.classification === 'eligible') return true;
+  const key = `${method.toUpperCase()}\0${rawPath}`;
+  if (prerequisiteDispositionKeys.has(key)) return false;
+  prerequisiteDispositionKeys.add(key);
+  const entry = {
+    ...operationDescriptor(method, rawPath, operation),
+    required: disposition.required,
+    reasonCode: disposition.reasonCode,
+    evidencePaths: disposition.evidencePaths ?? [],
+    prerequisites: disposition.prerequisites ?? [],
+  };
+  if (disposition.classification === 'blocked-prerequisite') blockedPrerequisiteOperations.push(entry);
+  else disabledOptionalOperations.push(entry);
+  return false;
+}
+
 function recordUnexecutable(method, rawPath, operation, reasonCode) {
   unexecutableOperations.push({
     operationId: operation.operationId ?? `${method}-${rawPath}`,
@@ -1441,7 +1558,9 @@ function recordUnexecutable(method, rawPath, operation, reasonCode) {
 
 async function main() {
   for (const item of operationsFor('get').filter(item => !/\{[^}]+}/.test(item.rawPath))) {
-    await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
+    if (operationIsEligible('get', item.rawPath, item.operation)) {
+      await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
+    }
   }
 
   let createdInPass = true;
@@ -1451,7 +1570,12 @@ async function main() {
     createdInPass = false;
     for (const item of postOperations) {
       const key = `${item.rawPath}:${item.operation.operationId ?? ''}`;
-      if (exercisedPosts.has(key) || !resolvePath(item.rawPath, item.pathItem, item.operation, false)) continue;
+      if (
+        exercisedPosts.has(key) ||
+        !operationIsEligible('post', item.rawPath, item.operation) ||
+        !resolvePath('post', item.rawPath, item.pathItem, item.operation, false)
+      )
+        continue;
       const before = created.length;
       await exercise('post', item.rawPath, item.pathItem, item.operation, 'create');
       exercisedPosts.add(key);
@@ -1460,18 +1584,22 @@ async function main() {
   }
   for (const item of postOperations) {
     const key = `${item.rawPath}:${item.operation.operationId ?? ''}`;
-    if (!exercisedPosts.has(key)) recordUnexecutable('post', item.rawPath, item.operation, 'missing-upstream-resource');
+    if (!exercisedPosts.has(key) && operationIsEligible('post', item.rawPath, item.operation)) {
+      recordUnexecutable('post', item.rawPath, item.operation, 'missing-upstream-resource');
+    }
   }
 
   for (const item of operationsFor('get').filter(item => /\{[^}]+}/.test(item.rawPath))) {
-    if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
+    if (!operationIsEligible('get', item.rawPath, item.operation)) continue;
+    if (resolvePath('get', item.rawPath, item.pathItem, item.operation, false))
       await exercise('get', item.rawPath, item.pathItem, item.operation, 'none');
     else recordUnexecutable('get', item.rawPath, item.operation, 'missing-upstream-resource');
   }
 
   for (const method of ['patch', 'put']) {
     for (const item of operationsFor(method)) {
-      if (resolvePath(item.rawPath, item.pathItem, item.operation, false)) {
+      if (!operationIsEligible(method, item.rawPath, item.operation)) continue;
+      if (resolvePath(method, item.rawPath, item.pathItem, item.operation, false)) {
         await exercise(method, item.rawPath, item.pathItem, item.operation, method === 'patch' ? 'patch' : 'create');
       } else recordUnexecutable(method, item.rawPath, item.operation, 'missing-upstream-resource');
     }
@@ -1479,7 +1607,8 @@ async function main() {
 
   if (!skipDelete) {
     for (const item of operationsFor('delete')) {
-      if (resolvePath(item.rawPath, item.pathItem, item.operation, false))
+      if (!operationIsEligible('delete', item.rawPath, item.operation)) continue;
+      if (resolvePath('delete', item.rawPath, item.pathItem, item.operation, false))
         await exercise('delete', item.rawPath, item.pathItem, item.operation, 'none');
       else recordUnexecutable('delete', item.rawPath, item.operation, 'missing-upstream-resource');
     }
@@ -1517,6 +1646,25 @@ async function main() {
         endIso,
       }),
     );
+  const declaredOperations = ['get', 'post', 'patch', 'put', ...(skipDelete ? [] : ['delete'])].flatMap(method =>
+    operationsFor(method).map(item => operationDescriptor(method, item.rawPath, item.operation)),
+  );
+  const operationReport = buildOperationOutcomeReport({
+    operations: declaredOperations,
+    prerequisiteReport: externalPrerequisiteReport,
+    outcomes: {
+      'success-2xx': results,
+      'expected-negative': [],
+      unexecutable: unexecutableOperations,
+      'harness-error': [],
+      'unexpected-failure': [],
+    },
+    operationErrorEvidence: {
+      events: operationErrorEvents,
+      assertions: operationErrorAssertions,
+    },
+  });
+  const operationErrorAttribution = writeOperationErrorAttributionReport(operationReport.operationErrorAttribution);
   const summary = {
     appName,
     artifact: yamlPath,
@@ -1524,10 +1672,18 @@ async function main() {
     outcomes: {
       success2xx: results.length,
       expectedNegative: 0,
+      eligible: operationReport.counts.eligible,
+      blockedPrerequisite: blockedPrerequisiteOperations.length,
+      disabledOptional: disabledOptionalOperations.length,
       unexecutable: unexecutableOperations.length,
       harnessError: 0,
       unexpectedFailure: 0,
     },
+    operationReport,
+    operationErrorAttribution,
+    operationErrorAttributionReportFile: operationErrorReportFile,
+    blockedPrerequisiteOperations,
+    disabledOptionalOperations,
     unexecutableOperations,
     totalDurationMs: results.reduce((sum, result) => sum + (result.durationMs ?? 0), 0),
     totalRequestDurationMs: results.reduce((sum, result) => sum + (result.requestDurationMs ?? result.durationMs ?? 0), 0),
@@ -1543,6 +1699,9 @@ async function main() {
   };
   writeJson(path.join(outputDir, 'summary.json'), summary);
   console.log(JSON.stringify(summary, null, 2));
+  if (operationReport.enterpriseGate.status === 'failed' || operationErrorAttribution.enterpriseGate.status === 'failed') {
+    process.exitCode = 1;
+  }
 }
 
 main().catch(error => {

@@ -3,7 +3,14 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { evaluateSourceCoverageThresholds } from './source-coverage-policy.mjs';
+import { combineIndependentCoverageMaps } from './source-coverage-combination.mjs';
+import {
+  SOURCE_COVERAGE_METRIC_LABELS,
+  buildSourceCoverageMetricReport,
+  classifyBrowserSourceCoverageEvidence,
+  evaluateIndependentSourceCoverageGates,
+  evaluateSourceCoverageThresholds,
+} from './source-coverage-policy.mjs';
 
 const manifestFile = process.argv[2];
 if (!manifestFile) {
@@ -171,74 +178,235 @@ fs.writeFileSync(path.join(manifest.outputDirectory, 'v8-scripts.json'), `${JSON
 fs.writeFileSync(path.join(manifest.outputDirectory, 'conversion-errors.json'), `${JSON.stringify(conversionErrors, null, 2)}\n`);
 
 const browserMap = scopedCoverageMap(convertedMap, coverageTools);
-if (browserMap.files().length === 0) {
-  throw new Error('Playwright V8 coverage did not map any executable generated Form CRUD TypeScript sources');
-}
 const browserSummary = writeCoverageMap(browserMap, path.join(manifest.outputDirectory, 'browser'), coverageTools);
 
-const combinedMap = coverageTools.coverage.createCoverageMap({});
-let unitTestCoverageMerged = false;
-const unitTestCoverageAvailable = fs.existsSync(manifest.unitTestCoverageFile);
-let mergeError;
-if (manifest.mergeUnitTestCoverage) {
-  if (!unitTestCoverageAvailable) {
-    mergeError = `Vitest coverage merge was requested but ${manifest.unitTestCoverageFile} is unavailable`;
-  } else {
-    const unitTestMap = coverageTools.coverage.createCoverageMap(JSON.parse(fs.readFileSync(manifest.unitTestCoverageFile, 'utf8')));
-    combinedMap.merge(scopedCoverageMap(unitTestMap, coverageTools));
-    unitTestCoverageMerged = true;
+const collectUnitTestCoverage = manifest.collectUnitTestCoverage ?? manifest.mergeUnitTestCoverage ?? false;
+const unitTestCoverageAvailable = Boolean(manifest.unitTestCoverageFile && fs.existsSync(manifest.unitTestCoverageFile));
+let unitTestMap = coverageTools.coverage.createCoverageMap({});
+let unitTestSummary;
+let unitTestCoverageError;
+if (collectUnitTestCoverage && unitTestCoverageAvailable) {
+  try {
+    const rawUnitTestMap = coverageTools.coverage.createCoverageMap(JSON.parse(fs.readFileSync(manifest.unitTestCoverageFile, 'utf8')));
+    unitTestMap = scopedCoverageMap(rawUnitTestMap, coverageTools);
+    unitTestSummary = writeCoverageMap(unitTestMap, path.join(manifest.outputDirectory, 'vitest'), coverageTools);
+  } catch (error) {
+    unitTestCoverageError = { message: error.message, stack: error.stack };
   }
 }
-combinedMap.merge(browserMap);
-const combinedSummary = writeCoverageMap(combinedMap, path.join(manifest.outputDirectory, 'combined'), coverageTools);
 
-function componentReport(component) {
-  const browserComponentMap = coverageMapForComponent(browserMap, component.prefix, coverageTools);
-  const combinedComponentMap = coverageMapForComponent(combinedMap, component.prefix, coverageTools);
-  const combinedFiles = new Set(combinedComponentMap.files().map(file => path.resolve(file)));
+let coverageCombination = combineIndependentCoverageMaps(browserMap.toJSON(), unitTestMap.toJSON());
+if (conversionErrors.length > 0) {
+  coverageCombination = {
+    ...coverageCombination,
+    status: 'unavailable',
+    coverage: null,
+    reasonCode: 'browser-source-map-conversion-failed',
+  };
+} else if (!collectUnitTestCoverage) {
+  coverageCombination = {
+    ...coverageCombination,
+    reasonCode: 'vitest-source-coverage-not-collected',
+  };
+} else if (!unitTestCoverageAvailable) {
+  coverageCombination = {
+    ...coverageCombination,
+    reasonCode: 'vitest-source-coverage-unavailable',
+  };
+} else if (unitTestCoverageError) {
+  coverageCombination = {
+    ...coverageCombination,
+    reasonCode: 'vitest-source-coverage-malformed',
+  };
+}
+
+function relativeSourcePath(file) {
+  return path.relative(manifest.appDir, file).replaceAll('\\', '/');
+}
+
+function componentThresholds(component, source) {
+  return component.thresholds?.[source] ?? component.thresholds;
+}
+
+function componentReport(component, source, coverageMap) {
+  const componentMap = coverageMapForComponent(coverageMap, component.prefix, coverageTools);
+  const coveredFiles = new Set(componentMap.files().map(file => path.resolve(file)));
   return {
     id: component.id,
     prefix: component.prefix,
     applicable: component.sourceFiles.length > 0,
-    sourceFiles: component.sourceFiles.map(file => path.relative(manifest.appDir, file).replaceAll('\\', '/')),
-    missingFiles: component.sourceFiles
-      .filter(file => !combinedFiles.has(path.resolve(file)))
-      .map(file => path.relative(manifest.appDir, file).replaceAll('\\', '/')),
-    thresholds: component.thresholds,
-    browser: coverageSummary(browserComponentMap),
-    summary: coverageSummary(combinedComponentMap),
+    sourceFiles: component.sourceFiles.map(relativeSourcePath),
+    missingFiles: component.sourceFiles.filter(file => !coveredFiles.has(path.resolve(file))).map(relativeSourcePath),
+    thresholds: componentThresholds(component, source),
+    summary: coverageSummary(componentMap),
   };
 }
 
-const thresholdReport = evaluateSourceCoverageThresholds(
-  (manifest.components ?? []).map(componentReport),
+const workflowOptions =
   manifest.workflow ?
     {
       workflowComplete: manifest.workflow.complete === true,
       incompleteReasons: manifest.workflow.reasons ?? [],
+      declaredOperations: manifest.declaredOperations ?? [],
     }
-  : undefined,
+  : { declaredOperations: manifest.declaredOperations ?? [] };
+const browserComponents = (manifest.components ?? []).map(component => componentReport(component, 'browser', browserMap));
+const vitestComponents = (manifest.components ?? []).map(component => componentReport(component, 'vitest', unitTestMap));
+const { status: browserEvidenceStatus, reasonCode: browserEvidenceReasonCode } = classifyBrowserSourceCoverageEvidence({
+  conversionErrorCount: conversionErrors.length,
+  mappedFileCount: browserMap.files().length,
+});
+const browserCoverageGate = evaluateSourceCoverageThresholds(browserComponents, {
+  ...workflowOptions,
+  source: 'browser',
+  evidenceStatus: browserEvidenceStatus,
+  evidenceReasonCode: browserEvidenceReasonCode,
+  evidence: {
+    conversionErrorCount: conversionErrors.length,
+    incompatibleFiles: coverageCombination.incompatibleFiles?.map(relativeSourcePath) ?? [],
+  },
+});
+let vitestEvidenceStatus = 'available';
+let vitestEvidenceReasonCode;
+if (!collectUnitTestCoverage) {
+  vitestEvidenceStatus = 'not-collected';
+  vitestEvidenceReasonCode = 'vitest-source-coverage-not-collected';
+} else if (unitTestCoverageError) {
+  vitestEvidenceStatus = 'malformed';
+  vitestEvidenceReasonCode = 'vitest-source-coverage-malformed';
+} else if (!unitTestCoverageAvailable || unitTestMap.files().length === 0) {
+  vitestEvidenceStatus = 'unavailable';
+  vitestEvidenceReasonCode = 'vitest-source-coverage-unavailable';
+}
+const vitestCoverageGate = evaluateSourceCoverageThresholds(vitestComponents, {
+  ...workflowOptions,
+  source: 'vitest',
+  evidenceStatus: vitestEvidenceStatus,
+  evidenceReasonCode: vitestEvidenceReasonCode,
+  evidence: {
+    requestedCoverageFile: manifest.unitTestCoverageFile,
+    error: unitTestCoverageError ?? null,
+  },
+});
+
+const expectedFiles = [...new Set((manifest.components ?? []).flatMap(component => component.sourceFiles.map(relativeSourcePath)))].sort();
+const browserFiles = browserMap.files().map(relativeSourcePath).sort();
+const vitestFiles = unitTestMap.files().map(relativeSourcePath).sort();
+const browserMissingFiles = [...new Set(browserComponents.flatMap(component => component.missingFiles))].sort();
+const vitestMissingFiles = [...new Set(vitestComponents.flatMap(component => component.missingFiles))].sort();
+const browserReport = buildSourceCoverageMetricReport({
+  source: 'browser',
+  status: browserEvidenceStatus,
+  summary: browserSummary,
+  evidenceFiles: {
+    coverageMap: 'browser/coverage-final.json',
+    lcov: 'browser/lcov.info',
+    summary: 'browser/coverage-summary.json',
+    convertedScripts: 'v8-scripts.json',
+    conversionErrors: 'conversion-errors.json',
+  },
+  expectedFiles,
+  instrumentedFiles: browserFiles,
+  missingFiles: browserMissingFiles,
+  thresholds: manifest.browserThresholds ?? manifest.components?.[0]?.thresholds?.browser ?? manifest.components?.[0]?.thresholds,
+  coverageGate: browserCoverageGate,
+  reasonCode: browserEvidenceReasonCode,
+  evidence: {
+    convertedScriptCount: convertedScripts.length,
+    conversionErrorCount: conversionErrors.length,
+  },
+});
+const vitestReport = buildSourceCoverageMetricReport({
+  source: 'vitest',
+  status: vitestEvidenceStatus,
+  summary: unitTestSummary ?? null,
+  evidenceFiles: {
+    inputCoverageMap: manifest.unitTestCoverageFile,
+    scopedCoverageMap: unitTestSummary ? 'vitest/coverage-final.json' : null,
+    lcov: unitTestSummary ? 'vitest/lcov.info' : null,
+    summary: unitTestSummary ? 'vitest/coverage-summary.json' : null,
+  },
+  expectedFiles,
+  instrumentedFiles: vitestFiles,
+  missingFiles: vitestMissingFiles,
+  thresholds: manifest.vitestThresholds ?? manifest.components?.[0]?.thresholds?.vitest ?? manifest.components?.[0]?.thresholds,
+  coverageGate: vitestCoverageGate,
+  reasonCode: vitestEvidenceReasonCode,
+  evidence: {
+    requested: collectUnitTestCoverage,
+    inputAvailable: unitTestCoverageAvailable,
+    error: unitTestCoverageError ?? null,
+  },
+});
+const sourceCoverageGate = evaluateIndependentSourceCoverageGates(
+  { browser: browserReport, vitest: vitestReport },
+  { vitestRequired: collectUnitTestCoverage },
 );
+
+let compatibleUnionSummary;
+let compatibleUnionFiles = [];
+if (coverageCombination.status === 'available') {
+  const compatibleUnionMap = coverageTools.coverage.createCoverageMap(coverageCombination.coverage);
+  compatibleUnionSummary = writeCoverageMap(compatibleUnionMap, path.join(manifest.outputDirectory, 'compatible-union'), coverageTools);
+  compatibleUnionFiles = compatibleUnionMap.files().map(relativeSourcePath).sort();
+}
+const compatibleUnionReport = {
+  metricLabel: SOURCE_COVERAGE_METRIC_LABELS.compatibleUnion,
+  status: coverageCombination.status,
+  sources: coverageCombination.sources,
+  evidenceFiles:
+    coverageCombination.status === 'available' ?
+      {
+        coverageMap: 'compatible-union/coverage-final.json',
+        lcov: 'compatible-union/lcov.info',
+        summary: 'compatible-union/coverage-summary.json',
+      }
+    : null,
+  denominator:
+    coverageCombination.status === 'available' ?
+      {
+        kind: 'compatible-instrumentation-union',
+        fileCount: compatibleUnionFiles.length,
+        files: compatibleUnionFiles,
+        metrics: {
+          lines: compatibleUnionSummary.lines.total,
+          statements: compatibleUnionSummary.statements.total,
+          functions: compatibleUnionSummary.functions.total,
+          branches: compatibleUnionSummary.branches.total,
+        },
+      }
+    : null,
+  summary: compatibleUnionSummary ?? null,
+  ...(coverageCombination.reasonCode ? { reasonCode: coverageCombination.reasonCode } : {}),
+  instrumentationEvidence: {
+    files: coverageCombination.files.map(file => ({
+      ...file,
+      file: relativeSourcePath(file.file),
+    })),
+    incompatibleFiles: coverageCombination.incompatibleFiles?.map(relativeSourcePath) ?? [],
+  },
+};
+
 const workerReport = {
   workflow: manifest.workflow,
-  browser: browserSummary,
-  combined: combinedSummary,
-  combinedSources: unitTestCoverageMerged ? ['browser', 'vitest'] : ['browser'],
-  unitTestCoverageAvailable,
-  unitTestCoverageMerged,
-  coverageGate: thresholdReport,
+  browser: browserReport,
+  vitest: vitestReport,
+  compatibleUnion: compatibleUnionReport,
+  coverageGate: sourceCoverageGate,
   convertedScriptCount: convertedScripts.length,
   conversionErrorCount: conversionErrors.length,
-  mergeError,
-  // Temporary compatibility for existing report consumers.
-  jestCoverageAvailable: unitTestCoverageAvailable,
-  jestCoverageMerged: unitTestCoverageMerged,
 };
 fs.writeFileSync(manifest.resultFile, `${JSON.stringify(workerReport, null, 2)}\n`);
 
-if (mergeError || (thresholdReport.evaluated && !thresholdReport.passed)) {
-  const thresholdFailures = thresholdReport.failures
-    .map(failure => `${failure.component}:${failure.metric} ${failure.actual}<${failure.minimum}`)
+if (sourceCoverageGate.passed === false) {
+  const thresholdFailures = sourceCoverageGate.failures
+    .flatMap(({ source, gate }) =>
+      gate.failures.map(failure =>
+        failure.metric === 'workflow' || failure.metric === 'evidence' || failure.reasonCode ?
+          `${source}:${failure.component}:${failure.reasonCode}`
+        : `${source}:${failure.component}:${failure.metric} ${failure.actual}<${failure.minimum}`,
+      ),
+    )
     .join(', ');
-  throw new Error([mergeError, thresholdFailures && `source coverage thresholds failed: ${thresholdFailures}`].filter(Boolean).join('; '));
+  throw new Error(`source coverage gate failed: ${thresholdFailures}`);
 }

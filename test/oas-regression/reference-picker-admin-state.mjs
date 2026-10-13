@@ -33,3 +33,16 @@ export function requireReferencePickerConfig(configs, expected, phase) {
   const key = semanticKeyFields.map(field => `${field}=${normalizedValue(expected?.[field])}`).join(', ');
   throw new Error(`Reference picker configuration ${identity ? `identity ${identity}` : `semantic key (${key})`} was not ${phase}`);
 }
+
+export function requireReferencePickerIdentityMapping(saved, external, sourceReadback) {
+  const sourceId = normalizedValue(saved?.id);
+  const externalPickerId = normalizedValue(external?.pickerId);
+  const sourceReadbackId = normalizedValue(sourceReadback?.id);
+  if (!sourceId || !externalPickerId || !sourceReadbackId) {
+    throw new Error('Reference picker identity mapping requires source id, external pickerId, and source readback id');
+  }
+  if (sourceId !== externalPickerId || sourceId !== sourceReadbackId) {
+    throw new Error('Reference picker source id did not map to the persisted external pickerId');
+  }
+  return { sourceId, externalPickerId, sourceReadbackId };
+}

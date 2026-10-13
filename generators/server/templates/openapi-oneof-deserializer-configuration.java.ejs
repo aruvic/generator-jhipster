@@ -126,40 +126,74 @@ public class OpenApiOneOfDeserializerConfiguration {
 
         private Class<?> selectTargetType(JsonNode node) {
             if (!node.isObject()) {
-                return implementations.size() == 1 ? implementations.get(0) : null;
+                return null;
             }
 
             Set<String> incomingProperties = new LinkedHashSet<>();
             node.propertyNames().forEach(incomingProperties::add);
-            Class<?> bestType = null;
-            int bestScore = -1;
-            for (Class<?> implementation : implementations) {
-                Set<String> candidateProperties = propertiesByImplementation.getOrDefault(implementation, Set.of());
-                int score = 0;
-                for (String property : incomingProperties) {
+            if (incomingProperties.isEmpty()) {
+                return null;
+            }
+
+            Class<?> exactMatch = selectClosestType(incomingProperties);
+            if (exactMatch != null) {
+                return exactMatch;
+            }
+
+            Set<String> evidencedProperties = new LinkedHashSet<>();
+            for (String property : incomingProperties) {
+                JsonNode value = node.get(property);
+                if (value == null || value.isNull()) {
+                    continue;
+                }
+                for (Set<String> candidateProperties : propertiesByImplementation.values()) {
                     if (candidateProperties.contains(property)) {
-                        score++;
+                        evidencedProperties.add(property);
+                        break;
                     }
                 }
-                if (score == incomingProperties.size() && score > 0) {
-                    return implementation;
+            }
+            return selectClosestType(evidencedProperties);
+        }
+
+        private Class<?> selectClosestType(Set<String> incomingProperties) {
+            if (incomingProperties.isEmpty()) {
+                return null;
+            }
+            Class<?> matchingType = null;
+            int fewestAdditionalProperties = Integer.MAX_VALUE;
+            boolean ambiguous = false;
+            for (Class<?> implementation : implementations) {
+                Set<String> candidateProperties = propertiesByImplementation.get(implementation);
+                if (candidateProperties == null || !candidateProperties.containsAll(incomingProperties)) {
+                    continue;
                 }
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestType = implementation;
+                int additionalProperties = candidateProperties.size() - incomingProperties.size();
+                if (additionalProperties < fewestAdditionalProperties) {
+                    matchingType = implementation;
+                    fewestAdditionalProperties = additionalProperties;
+                    ambiguous = false;
+                } else if (additionalProperties == fewestAdditionalProperties) {
+                    ambiguous = true;
                 }
             }
-            return bestScore > 0 ? bestType : (implementations.size() == 1 ? implementations.get(0) : null);
+            return ambiguous ? null : matchingType;
         }
 
         private static Set<String> collectJsonProperties(Class<?> type) {
             Set<String> properties = new LinkedHashSet<>();
-            for (Field field : type.getDeclaredFields()) {
-                JsonProperty jsonProperty = field.getAnnotation(JsonProperty.class);
-                if (jsonProperty != null && !jsonProperty.value().isBlank()) {
-                    properties.add(jsonProperty.value());
+            for (Class<?> currentType = type; currentType != null && currentType != Object.class; currentType = currentType.getSuperclass()) {
+                for (Field field : currentType.getDeclaredFields()) {
+                    if (Modifier.isStatic(field.getModifiers())) {
+                        continue;
+                    }
+                    JsonProperty jsonProperty = field.getAnnotation(JsonProperty.class);
+                    if (jsonProperty != null && !jsonProperty.value().isBlank()) {
+                        properties.add(jsonProperty.value());
+                    } else {
+                        properties.add(field.getName());
+                    }
                 }
-                properties.add(field.getName());
             }
             for (Method method : type.getMethods()) {
                 JsonProperty jsonProperty = method.getAnnotation(JsonProperty.class);

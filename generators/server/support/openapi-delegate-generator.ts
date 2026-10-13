@@ -211,6 +211,7 @@ const dependencyKey = (value: string): string => value.replace(/[^A-Za-z0-9]/g, 
 
 type MapperMethodSignature = {
   name: string;
+  visibility: 'public' | 'protected' | 'private' | 'package';
   returnType: string;
   returnSimple: string;
   parameterTypes: string[];
@@ -464,6 +465,62 @@ function buildGeneratedStringIdentityExpression(fieldName: string, field: any | 
   return 'java.util.UUID.randomUUID().toString()';
 }
 
+function identityDomainTokens(fieldName: string): Set<string> {
+  return new Set(
+    fieldName
+      .replaceAll(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+      .split(/[^A-Za-z0-9]+/)
+      .map(token => token.toLowerCase())
+      .filter(token => token && !['id', 'identifier', 'reference', 'ref', 'uuid'].includes(token)),
+  );
+}
+
+function schemaPropertyForField(properties: SchemaProperties, fieldName: string): any | undefined {
+  return properties[fieldName] ?? properties[toOpenApiPropertyName(fieldName)] ?? properties[toDomainPropertyName(fieldName)];
+}
+
+function findCompatibleStringIdentityAccessor(
+  targetFieldName: string,
+  fields: any[],
+  sourceProperties: SchemaProperties,
+): string | undefined {
+  const targetIsReference = isReferenceFieldName(targetFieldName);
+  const targetIsIdentifier = isIdentifierFieldName(targetFieldName);
+  const targetTokens = identityDomainTokens(targetFieldName);
+  const candidates = fields
+    .map(field => {
+      const fieldName = field?.fieldName ?? field?.name;
+      const sourceSchema = fieldName ? schemaPropertyForField(sourceProperties, fieldName) : undefined;
+      const fieldType = String(field?.fieldType ?? fieldTypeFromSchema(sourceSchema)).toLowerCase();
+      const sameIdentityKind = targetIsReference ? isReferenceFieldName(fieldName) : targetIsIdentifier && isIdentifierFieldName(fieldName);
+      if (
+        !fieldName ||
+        fieldName === targetFieldName ||
+        fieldType !== 'string' ||
+        !sourceSchema ||
+        sourceSchema.readOnly === true ||
+        !sameIdentityKind
+      ) {
+        return undefined;
+      }
+      const sourceTokens = identityDomainTokens(fieldName);
+      const score = Array.from(targetTokens).filter(token => sourceTokens.has(token)).length;
+      return { accessor: pascalize(toDomainPropertyName(fieldName)), score };
+    })
+    .filter((candidate): candidate is { accessor: string; score: number } => Boolean(candidate));
+
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const bestScore = Math.max(...candidates.map(candidate => candidate.score));
+  const bestCandidates = candidates.filter(candidate => candidate.score === bestScore);
+  if (bestScore === 0 && candidates.length !== 1) {
+    return undefined;
+  }
+  return bestCandidates.length === 1 ? bestCandidates[0].accessor : undefined;
+}
+
 function addGeneratedUuidInitializer(initializers: GeneratedUuidInitializer[], seen: Set<string>, fieldName: string | undefined): void {
   if (!fieldName || !isIdentifierFieldName(fieldName)) {
     return;
@@ -579,8 +636,13 @@ function buildSchemaBackedDefaultInitializers(
     if (!validationRules.includes('required') && !requiredBySchema.has(fieldName)) {
       continue;
     }
+    const generatedIdentityExpression = buildGeneratedStringIdentityExpression(rawFieldName, field, schema);
+    const fallbackAccessor =
+      generatedIdentityExpression ? findCompatibleStringIdentityAccessor(rawFieldName, fields, sourceProperties) : undefined;
     const valueExpression =
-      buildGeneratedStringIdentityExpression(rawFieldName, field, schema) ?? buildSchemaDefaultValueExpression(field, schema);
+      generatedIdentityExpression && fallbackAccessor ?
+        `entity.get${fallbackAccessor}() != null ? entity.get${fallbackAccessor}() : ${generatedIdentityExpression}`
+      : (generatedIdentityExpression ?? buildSchemaDefaultValueExpression(field, schema));
     if (!valueExpression) {
       continue;
     }
@@ -1168,6 +1230,8 @@ function parseMapperMethods(content: string): MapperMethodSignature[] {
     if (!methodName || !returnType) {
       continue;
     }
+    const declarationPrefix = match[0].slice(0, match[0].indexOf('('));
+    const visibility = declarationPrefix.match(/\b(public|protected|private)\b/)?.[1] ?? 'package';
     const paramsStr = match[3] ?? '';
     const parameterTypes: string[] = [];
     const parameterAnnotations: string[][] = [];
@@ -1190,6 +1254,7 @@ function parseMapperMethods(content: string): MapperMethodSignature[] {
 
     methods.push({
       name: methodName,
+      visibility: visibility as MapperMethodSignature['visibility'],
       returnType,
       returnSimple: extractSimpleType(returnType) ?? returnType,
       parameterTypes,
@@ -1322,6 +1387,9 @@ function resolveRequestMapperUpdateMethod(
   const matchesSource = (type: string): boolean => matchesTypeSignature(type, requestTypeFqcn, requestTypeSimple);
 
   for (const method of methods) {
+    if (method.visibility !== 'public') {
+      continue;
+    }
     if (!method.name.startsWith('update')) {
       continue;
     }

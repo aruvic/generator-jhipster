@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { persistenceReadIdentity } from './form-crud-persistence.mjs';
 import { identityTokens, semanticIdentityValue } from './operation-identity.mjs';
 
 test('tokenizes camel-case resource identifiers and singularizes path resources', () => {
@@ -81,4 +82,30 @@ test('prefers a top-level resource identity over nested related identities', () 
   );
 
   assert.equal(value, 'root-reference');
+});
+
+test('does not let a nested expected value override a wrong canonical identity', () => {
+  const readOperation = {
+    method: 'GET',
+    path: '/resources/{resourceReference}',
+    tag: 'Resources',
+    parameters: [{ name: 'resourceReference', location: 'path', required: true }],
+  };
+
+  assert.deepEqual(
+    persistenceReadIdentity(readOperation, '/resources/expected-reference', {
+      resourceReference: 'wrong-reference',
+      related: { resourceReference: 'expected-reference' },
+    }),
+    {
+      verified: false,
+      evidence: [
+        {
+          parameter: 'resourceReference',
+          expected: 'expected-reference',
+          actual: 'wrong-reference',
+        },
+      ],
+    },
+  );
 });

@@ -94,6 +94,10 @@ record_status() {
   local runtime_failures_file=""
   local runtime_form_crud_gui_summary_file=""
   local runtime_evomaster_summary_file=""
+  local runtime_reference_picker_proof_summary_file=""
+  local runtime_external_prerequisite="null"
+  local runtime_operation_error_attribution="null"
+  local runtime_reference_picker_cross_service="null"
   mkdir -p "$artifact_dir/harness"
   if [[ "$phase" == "runtime-loop" ]]; then
     runtime_summary_file="$artifact_dir/harness/runtime-summary.json"
@@ -102,6 +106,12 @@ record_status() {
     runtime_failures_file="$artifact_dir/harness/runtime-failures.json"
     runtime_form_crud_gui_summary_file="$artifact_dir/harness/runtime-form-crud-gui-summary.json"
     runtime_evomaster_summary_file="$artifact_dir/harness/runtime-evomaster-summary.json"
+    runtime_reference_picker_proof_summary_file="$artifact_dir/harness/runtime-reference-picker-proof-summary.json"
+    if [[ -f "$runtime_summary_file" ]]; then
+      runtime_external_prerequisite="$(jq -c '.externalPrerequisite // null' "$runtime_summary_file")"
+      runtime_operation_error_attribution="$(jq -c '.operationErrorAttribution // null' "$runtime_summary_file")"
+      runtime_reference_picker_cross_service="$(jq -c '.referencePickerCrossService // null' "$runtime_summary_file")"
+    fi
   fi
   jq -n \
     --arg artifact "$artifact" \
@@ -120,6 +130,10 @@ record_status() {
     --arg runtimeFailures "$runtime_failures_file" \
     --arg runtimeFormCrudGuiSummary "$runtime_form_crud_gui_summary_file" \
     --arg runtimeEvoMasterSummary "$runtime_evomaster_summary_file" \
+    --arg runtimeReferencePickerProofSummary "$runtime_reference_picker_proof_summary_file" \
+    --argjson runtimeExternalPrerequisite "$runtime_external_prerequisite" \
+    --argjson runtimeOperationErrorAttribution "$runtime_operation_error_attribution" \
+    --argjson runtimeReferencePickerCrossService "$runtime_reference_picker_cross_service" \
     'def nullable_number($v): if ($v | length) == 0 then null else ($v | tonumber) end;
     {artifact: $artifact, phase: $phase, exitCode: ($status | tonumber), ok: (($status | tonumber) == 0), log: $log, message: $message, startEpoch: nullable_number($startEpoch), startIso: $startIso, endEpoch: nullable_number($endEpoch), endIso: $endIso, durationSeconds: ($durationSeconds | tonumber)}
     + (if ($runtimeSummary | length) > 0 then {
@@ -128,7 +142,11 @@ record_status() {
       runtimeArtifacts: $runtimeArtifacts,
       runtimeFailures: $runtimeFailures,
       runtimeFormCrudGuiSummary: $runtimeFormCrudGuiSummary,
-      runtimeEvoMasterSummary: $runtimeEvoMasterSummary
+      runtimeEvoMasterSummary: $runtimeEvoMasterSummary,
+      runtimeReferencePickerProofSummary: $runtimeReferencePickerProofSummary,
+      externalPrerequisite: $runtimeExternalPrerequisite,
+      operationErrorAttribution: $runtimeOperationErrorAttribution,
+      referencePickerCrossService: $runtimeReferencePickerCrossService
     } else {} end)' \
     > "$artifact_dir/harness/${phase}-status.json"
   jq -c . "$artifact_dir/harness/${phase}-status.json" >> "$SUMMARY_JSONL"
@@ -146,7 +164,8 @@ archive_runtime_loop_reports() {
     runtime-artifacts.json \
     runtime-failures.json \
     runtime-form-crud-gui-summary.json \
-    runtime-evomaster-summary.json; do
+    runtime-evomaster-summary.json \
+    runtime-reference-picker-proof-summary.json; do
     if [[ -f "$OUTPUT_DIR/$report_name" ]]; then
       cp "$OUTPUT_DIR/$report_name" "$harness_dir/$report_name"
     else
@@ -257,6 +276,10 @@ write_summary() {
         totalApiOperationsPageRenderedOperations: (map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0),
         totalApiOperationsPageSubmittedOperations: (map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0),
         totalApiOperationsPage2xxSuccesses: (map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0),
+        totalApiOperationsPageEligibleOperations: (map(.coverage.apiOperationsPageEligibleOperations // .coverage.declaredOperations // 0) | add // 0),
+        totalApiOperationsPageBlockedPrerequisiteOperations: (map(.coverage.apiOperationsPageBlockedPrerequisiteOperations // 0) | add // 0),
+        totalApiOperationsPageDisabledOptionalOperations: (map(.coverage.apiOperationsPageDisabledOptionalOperations // 0) | add // 0),
+        totalApiOperationsPageApplicableOperations: (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0),
         totalApiOperationsPageExpectedNegatives: (map(.coverage.apiOperationsPageExpectedNegatives // 0) | add // 0),
         totalApiOperationsPageUnexecutableOperations: (map(.coverage.apiOperationsPageUnexecutableOperations // 0) | add // 0),
         totalApiOperationsPageHarnessErrors: (map(.coverage.apiOperationsPageHarnessErrors // 0) | add // 0),
@@ -276,10 +299,6 @@ write_summary() {
         totalStructuredArrayOperations: (map(.coverage.structuredArrayOperations // 0) | add // 0),
         totalObjectStringControlFailures: (map(.coverage.objectStringControlFailures // 0) | add // 0),
         totalResponsiveViewportsChecked: (map(.coverage.responsiveViewportsChecked // 0) | add // 0),
-        totalCombinedSourceLines: (map(.sourceCoverage.combined.lines.total // 0) | add // 0),
-        totalCoveredCombinedSourceLines: (map(.sourceCoverage.combined.lines.covered // 0) | add // 0),
-        totalCombinedSourceBranches: (map(.sourceCoverage.combined.branches.total // 0) | add // 0),
-        totalCoveredCombinedSourceBranches: (map(.sourceCoverage.combined.branches.covered // 0) | add // 0),
         totalScreenshots: (map((.screenshots // []) | length) | add // 0),
         angularVitestPassed: (map(select(((.unitTest // .jest).status // "skipped") == "passed")) | length),
         angularVitestFailed: (map(select(((.unitTest // .jest).status // "skipped") == "failed")) | length),
@@ -292,13 +311,11 @@ write_summary() {
         referencePickerSaveSuccessRatio: ratio((map(.coverage.successfulReferencePickerSaves // 0) | add // 0); (map(.coverage.exercisedReferencePickerSaves // 0) | add // 0)),
         operationRenderCoverageRatio: ratio((map(.coverage.renderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRenderCoverageRatio: ratio((map(.coverage.apiOperationsPageRenderedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPage2xxSuccessRatio: ratio((map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
-        apiOperationsPageTerminalResultRatio: ratio((map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0); (map(.coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageSubmissionCoverageRatio: ratio((map(.coverage.apiOperationsPageSubmittedOperations // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPage2xxSuccessRatio: ratio((map(.coverage.apiOperationsPage2xxSuccesses // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
+        apiOperationsPageTerminalResultRatio: ratio((map(.coverage.apiOperationsPageTerminalResults // 0) | add // 0); (map(.coverage.apiOperationsPageApplicableOperations // .coverage.declaredOperations // 0) | add // 0)),
         apiOperationsPageRoundTripSuccessRatio: ratio((map(.coverage.apiOperationsPageSuccessfulRoundTripChecks // 0) | add // 0); (map(.coverage.apiOperationsPageRoundTripChecks // 0) | add // 0)),
         schemaFieldCoverageRatio: ratio((map(.coverage.schemaFields.covered // 0) | add // 0); (map(.coverage.schemaFields.applicable // 0) | add // 0)),
-        combinedSourceLineCoverageRatio: ratio((map(.sourceCoverage.combined.lines.covered // 0) | add // 0); (map(.sourceCoverage.combined.lines.total // 0) | add // 0)),
-        combinedSourceBranchCoverageRatio: ratio((map(.sourceCoverage.combined.branches.covered // 0) | add // 0); (map(.sourceCoverage.combined.branches.total // 0) | add // 0)),
         artifacts: map({
           artifact,
           status,
@@ -309,6 +326,8 @@ write_summary() {
           angularVitest: (.unitTest // .jest // null),
           browserStatus: (.browser.status // .status),
           screenshotCount: ((.screenshots // []) | length),
+          operationErrorAttribution,
+          operationErrorAttributionReportFile,
           error: (.error.message // "")
         })
       }
@@ -327,6 +346,37 @@ write_summary() {
     --slurpfile formCrudGui "$FORM_CRUD_GUI_SUMMARY_JSON" \
     '
     def nullable_number($v): if ($v | length) == 0 then null else ($v | tonumber) end;
+    def attribution_summary($reports; $label):
+      [$reports[] | select(. != null)] as $available |
+      {
+        metricLabel: $label,
+        artifactCount: ($available | map(.artifactCount // 0) | add // 0),
+        eventClassCounts: {
+          "frontend-console": ($available | map(.eventClassCounts["frontend-console"] // 0) | add // 0),
+          "page-error": ($available | map(.eventClassCounts["page-error"] // 0) | add // 0),
+          "request-failure": ($available | map(.eventClassCounts["request-failure"] // 0) | add // 0),
+          "http-response": ($available | map(.eventClassCounts["http-response"] // 0) | add // 0)
+        },
+        attributedExpectedNegative: ($available | map(.attributedExpectedNegative // 0) | add // 0),
+        attributedPostDelete: ($available | map(.attributedPostDelete // 0) | add // 0),
+        unmatchedAuthenticatedHttp: ($available | map(.unmatchedAuthenticatedHttp // 0) | add // 0),
+        ambiguousAuthenticatedHttp: ($available | map(.ambiguousAuthenticatedHttp // 0) | add // 0),
+        enterpriseGate: {
+          metricLabel: "authenticated-target-http-error-attribution",
+          status: (if ($available | any(.enterpriseGate.status == "failed")) then "failed" else "passed" end)
+        }
+      };
+    def reference_picker_gate_counts($reports):
+      reduce (
+        [$reports[] | select(. != null) | .gateCounts // {} | to_entries[]][]
+      ) as $entry (
+        {};
+        .[$entry.key] = {
+          passed: ((.[$entry.key].passed // 0) + ($entry.value.passed // 0)),
+          failed: ((.[$entry.key].failed // 0) + ($entry.value.failed // 0))
+        }
+      );
+    [.[] | .referencePickerCrossService // null | select(. != null)] as $referencePickerReports |
     {
       startEpoch: nullable_number($startEpoch),
       startIso: $startIso,
@@ -340,6 +390,88 @@ write_summary() {
       totalDurationSeconds: (map(.durationSeconds // 0) | add // 0),
       evomaster: ($evomaster[0] // {artifactCount: 0, artifacts: []}),
       formCrudGui: ($formCrudGui[0] // {artifactCount: 0, artifacts: []}),
+      operationErrorAttribution: {
+        metricLabel: "full-matrix-operation-error-attribution",
+        openapiSmoke: attribution_summary(
+          [.[] | .operationErrorAttribution.openapiSmoke];
+          "openapi-smoke-operation-error-attribution"
+        ),
+        formCrudGui: attribution_summary(
+          [.[] | .operationErrorAttribution.formCrudGui];
+          "form-crud-gui-operation-error-attribution"
+        ),
+        artifacts: (map(select(.operationErrorAttribution != null)) | map({
+          artifact,
+          openapiSmoke: .operationErrorAttribution.openapiSmoke,
+          formCrudGui: .operationErrorAttribution.formCrudGui
+        }))
+      },
+      referencePickerCrossService: {
+        metricLabel: "full-matrix-cross-service-reference-picker-proof",
+        status: (
+          if ($referencePickerReports | any(.enterpriseGate.status == "failed")) then "failed"
+          elif ($referencePickerReports | any(.status == "passed")) then "passed"
+          else "not-configured"
+          end
+        ),
+        counts: {
+          configured: ($referencePickerReports | map(.counts.configured // 0) | add // 0),
+          passed: ($referencePickerReports | map(.counts.passed // 0) | add // 0),
+          failed: ($referencePickerReports | map(.counts.failed // 0) | add // 0),
+          requiredGates: ($referencePickerReports | map(.counts.requiredGates // 0) | add // 0),
+          passedGates: ($referencePickerReports | map(.counts.passedGates // 0) | add // 0),
+          failedGates: ($referencePickerReports | map(.counts.failedGates // 0) | add // 0),
+          configurationPersistenceProofs: (
+            $referencePickerReports | map(.counts.configurationPersistenceProofs // 0) | add // 0
+          ),
+          independentAuthenticatedTargetFetches: (
+            $referencePickerReports | map(.counts.independentAuthenticatedTargetFetches // 0) | add // 0
+          ),
+          capturedSourcePatches: ($referencePickerReports | map(.counts.capturedSourcePatches // 0) | add // 0),
+          persistedSourceSelections: ($referencePickerReports | map(.counts.persistedSourceSelections // 0) | add // 0)
+        },
+        gateCounts: reference_picker_gate_counts($referencePickerReports),
+        enterpriseGate: {
+          metricLabel: "full-matrix-cross-service-reference-picker-proof-required",
+          status: (
+            if ($referencePickerReports | any(.enterpriseGate.status == "failed")) then "failed" else "passed" end
+          ),
+          reasonCodes: ($referencePickerReports | map(.enterpriseGate.reasonCodes // []) | add // [] | unique)
+        },
+        runtimeSummaries: $referencePickerReports
+      },
+      externalPrerequisite: {
+        declared: (map(.externalPrerequisite.declared // 0) | add // 0),
+        required: (map(.externalPrerequisite.required // 0) | add // 0),
+        proven: (map(.externalPrerequisite.proven // 0) | add // 0),
+        failed: (map(.externalPrerequisite.failed // 0) | add // 0),
+        cleanupFailed: (map(.externalPrerequisite.cleanupFailed // 0) | add // 0),
+        disabledOptional: (map(.externalPrerequisite.disabledOptional // 0) | add // 0),
+        operationReport: {
+          counts: {
+            declared: (map(.externalPrerequisite.operationReport.counts.declared // 0) | add // 0),
+            required: (map(.externalPrerequisite.operationReport.counts.required // 0) | add // 0),
+            eligible: (map(.externalPrerequisite.operationReport.counts.eligible // 0) | add // 0),
+            blockedPrerequisite: (map(.externalPrerequisite.operationReport.counts.blockedPrerequisite // 0) | add // 0),
+            disabledOptional: (map(.externalPrerequisite.operationReport.counts.disabledOptional // 0) | add // 0)
+          },
+          denominators: {
+            declared: (map(.externalPrerequisite.operationReport.denominators.declared // 0) | add // 0),
+            applicable: (map(.externalPrerequisite.operationReport.denominators.applicable // 0) | add // 0),
+            executionEligible: (map(.externalPrerequisite.operationReport.denominators.executionEligible // 0) | add // 0),
+            excludedDisabledOptional: (map(.externalPrerequisite.operationReport.denominators.excludedDisabledOptional // 0) | add // 0)
+          },
+          enterpriseGate: {
+            status: (if any(.externalPrerequisite.operationReport.enterpriseGate.status == "failed") then "failed" else "passed" end),
+            blockedRequiredOperations: (map(.externalPrerequisite.operationReport.enterpriseGate.blockedRequiredOperations // 0) | add // 0)
+          }
+        },
+        artifacts: (map(select(.externalPrerequisite != null)) | map({
+          artifact,
+          phase,
+          operationReport: .externalPrerequisite.operationReport
+        }))
+      },
       results: .
     }
   ' "$SUMMARY_JSONL" > "$SUMMARY_JSON"

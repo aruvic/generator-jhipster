@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertReferencePickerMappingContract } from './reference-picker-mapping.mjs';
+
 function requiredObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -117,6 +119,28 @@ function applicationBaseUrl(application) {
   return `http://${application.publicHost}:${application.port}`;
 }
 
+function normalizeConfigurationService(value, configDirectory, outputDirectory) {
+  const service = requiredObject(value, 'configurationService');
+  const host = requiredString(service.host, 'configurationService.host');
+  const publicHost = requiredString(service.publicHost ?? host, 'configurationService.publicHost');
+  return {
+    name: requiredString(service.name, 'configurationService.name'),
+    host,
+    publicHost,
+    port: positiveInteger(service.port, 'configurationService.port'),
+    healthPath: normalizePath(service.healthPath, 'configurationService.healthPath'),
+    collectionPath: normalizePath(service.collectionPath, 'configurationService.collectionPath'),
+    storagePath: path.resolve(
+      configDirectory,
+      requiredString(
+        service.storagePath ?? path.join(outputDirectory, 'reference-picker-configurations.json'),
+        'configurationService.storagePath',
+      ),
+    ),
+    baseUrl: `http://${publicHost}:${positiveInteger(service.port, 'configurationService.port')}`,
+  };
+}
+
 function normalizeCopyFields(value) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error('picker.copyFields must be a non-empty array');
@@ -133,6 +157,7 @@ function normalizeCopyFields(value) {
 export function normalizeReferencePickerTopology(input, configFile = process.cwd()) {
   const topology = requiredObject(input, 'topology');
   const configDirectory = path.dirname(path.resolve(configFile));
+  const outputDirectory = path.resolve(configDirectory, requiredString(topology.outputDirectory, 'outputDirectory'));
   const source = normalizeApplication(topology.source, 'source', configDirectory);
   const target = normalizeApplication(topology.target, 'target', configDirectory);
   const uiInput = requiredObject(topology.ui, 'ui');
@@ -145,6 +170,7 @@ export function normalizeReferencePickerTopology(input, configFile = process.cwd
     publicHost: requiredString(uiInput.publicHost ?? uiInput.host, 'ui.publicHost'),
     port: positiveInteger(uiInput.port, 'ui.port'),
   };
+  const configurationService = normalizeConfigurationService(topology.configurationService, configDirectory, outputDirectory);
   const authentication = {
     loginPath: normalizePath(authenticationInput.loginPath, 'authentication.loginPath'),
     path: normalizePath(authenticationInput.path, 'authentication.path'),
@@ -177,8 +203,8 @@ export function normalizeReferencePickerTopology(input, configFile = process.cwd
     sourceGetStatuses: expectedStatuses(verificationInput.sourceGetStatuses, 'verification.sourceGetStatuses'),
   };
 
-  if (!['embed', 'reference'].includes(picker.mode)) {
-    throw new Error('picker.mode must be "embed" or "reference"');
+  if (picker.mode !== 'reference') {
+    throw new Error('picker.mode must be "reference" for cross-service reference validation');
   }
   if (typeof picker.multiple !== 'boolean') {
     throw new Error('picker.multiple must be a boolean');
@@ -189,6 +215,10 @@ export function normalizeReferencePickerTopology(input, configFile = process.cwd
   if (!picker.formPathTemplate.includes('{operationId}')) {
     throw new Error('picker.formPathTemplate must contain "{operationId}"');
   }
+  if (verification.sourceSaveMethod !== 'PATCH') {
+    throw new Error('verification.sourceSaveMethod must be "PATCH" for selected reference persistence proof');
+  }
+  assertReferencePickerMappingContract(picker.copyFields, target.identityPath);
 
   const sourceBaseUrl = applicationBaseUrl(source);
   const targetBaseUrl = applicationBaseUrl(target);
@@ -196,10 +226,14 @@ export function normalizeReferencePickerTopology(input, configFile = process.cwd
   if (source.directory === target.directory) {
     throw new Error('source.directory and target.directory must be distinct');
   }
+  if (source.name === target.name) {
+    throw new Error('source.name and target.name must be distinct');
+  }
   const ports = [
     ['source.port', source.port],
     ['target.port', target.port],
     ['ui.port', ui.port],
+    ['configurationService.port', configurationService.port],
     ['source.database.port', source.database.port],
     ['target.database.port', target.database.port],
   ];
@@ -216,16 +250,23 @@ export function normalizeReferencePickerTopology(input, configFile = process.cwd
   if (source.database.name === target.database.name) {
     throw new Error('source.database.name and target.database.name must be distinct');
   }
+  if (source.database.host === target.database.host && source.database.port === target.database.port) {
+    throw new Error('source.database and target.database endpoints must be distinct');
+  }
+  if (new URL(sourceBaseUrl).origin === new URL(targetBaseUrl).origin) {
+    throw new Error('source and target application origins must be distinct');
+  }
   if (new URL(picker.targetBaseUrl).origin !== new URL(targetBaseUrl).origin) {
     throw new Error(`picker.targetBaseUrl must target the configured target application origin ${targetBaseUrl}`);
   }
 
   return {
-    outputDirectory: path.resolve(configDirectory, requiredString(topology.outputDirectory, 'outputDirectory')),
+    outputDirectory,
     timeoutSeconds: positiveInteger(topology.timeoutSeconds ?? 240, 'timeoutSeconds'),
     source: { ...source, baseUrl: sourceBaseUrl },
     target: { ...target, baseUrl: targetBaseUrl },
     ui: { ...ui, baseUrl: uiBaseUrl },
+    configurationService,
     authentication,
     picker,
     verification,

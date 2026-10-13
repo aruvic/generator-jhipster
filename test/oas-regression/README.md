@@ -121,18 +121,36 @@ request/response round trip fails the GUI phase. Declared non-2xx responses and
 operations blocked by a documented workflow precondition are reported as
 expected-negative or unexecutable, separately from 2xx success, harness errors,
 and unexpected failures. It also reports request/response schema fields as
-covered, applicable-but-uncovered, unavailable, or excluded, with facets for
-required/optional, nested objects and arrays, references, enums, formats,
-bounds, and nullability. Required applicable fields must be covered, and
-populated optional fields must meet
-`FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM` (default `0.5`). It stores screenshots,
-`angular-jest.log`, `angular-jest.json` (legacy-compatible filenames),
+covered, uncovered, observation-unknown, excluded, or
+`not-applicable-with-evidence`, with facets for required/optional, nested
+objects and arrays, references, enums, formats, bounds, and nullability.
+Writable request fields remain contract-completeness obligations when no
+runtime body, parent object, array item, or map value instantiated them;
+required writable misses always fail the artifact gate. A mutually exclusive
+`oneOf` branch can leave the denominator only when its structural reason and
+observed discriminator selection are explicit machine-readable evidence.
+Missing runtime data is never structural evidence.
+
+Observed-instance field coverage and contract completeness are separate
+metrics. Observed coverage uses only concrete instances and is never described
+as contract-complete. Contract completeness retains uncovered writable fields
+and response-observation unknowns in its denominator. Required contract fields
+must be covered, and optional contract fields must meet
+`FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM` (default `0.75`, configurable
+from above `0.5` through `1`). A zero optional denominator is reported as
+`not-applicable-with-evidence` with `passed: null`, never as a vacuous 0/0
+success. It stores screenshots, `angular-jest.log`, `angular-jest.json`
+(legacy-compatible filenames),
 `form-crud-gui-smoke.json`, and the combined `form-crud-gui-summary.json` under
 the artifact output folder. With `FORM_CRUD_GUI_SOURCE_COVERAGE_ENABLED=true`,
 Chromium V8 coverage is collected in bounded route batches, source-mapped by a
 memory-limited worker to the generated executable Form CRUD TypeScript, and
 written under
-`form-crud-gui/source-coverage/{browser,combined}`. The harness looks for Playwright in
+`form-crud-gui/source-coverage/browser`. When Angular Vitest source coverage is
+enabled, its independently scoped evidence is written under
+`form-crud-gui/source-coverage/vitest`. A `compatible-union` artifact is written
+only when the browser and Vitest instrumentation maps are mathematically
+compatible. The harness looks for Playwright in
 `FORM_CRUD_GUI_PLAYWRIGHT_ROOT`, `PLAYWRIGHT_ROOT`, the app working directory,
 and `/tmp/playwright-tests`. By default it uses
 `FORM_CRUD_GUI_PLAYWRIGHT_ROOT=/tmp/playwright-tests` and will try an offline
@@ -151,21 +169,35 @@ Run the focused dependency bootstrap regression test with:
 test/oas-regression/form-crud-gui-dependencies.test.sh
 ```
 
-When the current runtime invocation also runs Angular Vitest coverage,
-`FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST` defaults to `true` and the bounded
-worker requires and merges the scoped Vitest/Istanbul JSON data into `combined`.
-It defaults to `false` when Vitest is skipped, so stale coverage from an older
-run is not reported. A requested merge with missing or malformed JSON is a
-harness failure rather than a browser-only fallback. Large generated metadata
-such as `openapi-operations.model.ts` is excluded from executable source
-metrics. Every applicable handwritten Form CRUD, reference-picker, and API
-Operations component is gated independently; missing source files fail the
-gate instead of disappearing from the denominator. The initial per-component
-minimums are 70% lines/statements, 60% functions, and 55% branches. Override
-them with `FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES`,
-`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS`,
-`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS`, and
-`FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES`. Set
+Browser/E2E and Vitest/unit source coverage are always reported as separate
+metrics. Each metric records its own label, evidence files, source and
+instrumentation denominators, thresholds, per-component results, and gate.
+`FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED` defaults to the Angular Vitest
+execution setting, so stale coverage from an older run is not reported when
+Vitest is skipped. Missing or malformed requested Vitest evidence fails the
+Vitest gate. Missing, malformed, or incompatible browser source-map evidence
+fails the browser gate and never falls back to Vitest results.
+
+Large generated metadata such as `openapi-operations.model.ts` is excluded from
+executable source metrics. Every applicable handwritten Form CRUD,
+reference-picker, and API Operations component is gated independently for both
+browser and Vitest evidence; missing source files fail the corresponding gate
+instead of disappearing from the denominator. Both metric families default to
+70% lines/statements, 60% functions, and 55% branches. Configure browser
+thresholds with `FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES`,
+`FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS`,
+`FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS`, and
+`FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES`; configure Vitest
+thresholds with `FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES`,
+`FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS`,
+`FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS`, and
+`FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES`. Thresholds must be finite
+and greater than zero but no greater than 100.
+
+The compatible-union report is informational and has no fallback denominator.
+If instrumentation differs or either evidence family is unavailable, its
+status is `unavailable`, its summary and denominator are `null`, and the reason
+is retained; no union ratio is invented. Set
 `FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=1` for the lowest peak
 memory use; the default of `3` batches adjacent route loads while remaining
 below the measured large-artifact heap limit.
@@ -177,18 +209,69 @@ failure. Complete runs retain the same per-component thresholds.
 `full_matrix.sh` also aggregates those Angular Vitest and Playwright reports into
 `full-matrix-form-crud-gui-status.json` and embeds the same data under
 `formCrudGui` in `full-matrix-summary.json`, including resource coverage,
-operation rendering/submission counts, source line and branch coverage,
-create/list exercise counts, generated Angular Vitest pass/fail counts, failures,
-durations, and screenshot counts. Operation-render coverage and source coverage
-are distinct metrics. The summaries keep 2xx successes, expected-negative
+operation rendering/submission counts, separate browser and Vitest source
+coverage metrics and gates, create/list exercise counts, generated Angular
+Vitest pass/fail counts, failures, durations, and screenshot counts.
+Operation-render coverage and source coverage are distinct metrics. The
+summaries keep 2xx successes, expected-negative
 results, unexecutable operations, harness errors, unexpected failures, and
 terminal results separate; a passing CRUD workflow is not reported as 100%
-2xx, source-line, or branch coverage. Aggregate coverage ratios use complete
-workflow runs only, while `coverageSemantics` and `incompleteEvidence` identify
-excluded early-stop evidence explicitly.
+2xx, source-line, branch, observed-instance schema, or contract-completeness
+coverage. Aggregate coverage ratios use complete workflow runs only. Schema
+summaries expose distinct `schemaObservedInstanceCoverageRatio` and
+`schemaContractCompletenessRatio` labels, retain contract unknowns, and publish
+the schema contract enterprise gate for every artifact plus the aggregate.
+`coverageSemantics` and `incompleteEvidence` identify excluded early-stop
+evidence explicitly.
 
 By default, runtime evidence and generated request payloads are written to
 `/tmp/generator-jhipster-regression`. Set `OUTPUT_DIR` to change that location.
+
+External prerequisite fixtures use the generic declaration profile selected by
+`EXTERNAL_PREREQUISITE_PROFILE_FILE` (default
+`profiles/external-prerequisites.json`). A missing file, an empty profile, or a
+profile whose exact method/path selectors do not occur in the current OpenAPI
+document preserves the normal smoke workflow without provisioning anything.
+For an applicable declaration, the runtime provisions only after application
+authentication, then proves each selected resource with the declared
+authenticated, same-origin canonical GET before any smoke mutation. Provider
+output records provisioning state only; provider assertions are never accepted
+as proof.
+
+Only resources with complete canonical proof are written to
+`$OUTPUT_DIR/<artifact>/external-prerequisite/verified-resources.json` and made
+available to YAML smoke path resolution. A verified resource can unlock only
+its exact declared enabled operation selectors. Failed required resources fail
+the artifact in phase `external-prerequisite`; their selectors are reported as
+`blocked-prerequisite` with a proof reason and evidence path. Failed optional
+resources remain `disabled-optional`, state an explicit reason, are excluded
+from the applicable operation denominator, and are never claimed as exercised.
+Neither classification supplies identity: only `verified-resources.json` can
+promote declared identity or make a prerequisite-dependent operation eligible.
+Cleanup runs before
+application and database teardown on success, failure, and EXIT paths, and any
+cleanup failure also fails the artifact in that phase.
+
+Sanitized lifecycle evidence is stored beside `verified-resources.json` in
+`status.json`, `selected-fixtures.json`, `provision-results.json`,
+`proof-results.json`, `operation-results.json`, and `cleanup-results.json`.
+`operation-results.json` records the prerequisite classifications (`eligible`,
+`blocked-prerequisite`, and `disabled-optional`). Smoke reports extend those
+classifications with separate execution outcomes (`success-2xx`,
+`expected-negative`, `unexecutable`, `harness-error`, and
+`unexpected-failure`). Their denominators retain required blockers, exclude
+disabled optional capabilities, and never combine those states into one
+success percentage. A blocked required selector fails the operation enterprise
+gate even when provisioning itself returned success.
+
+Runtime artifact status, `runtime-summary.json`, and `full-matrix-summary.json`
+carry the same operation counts, denominators, gate, evidence paths, and
+applicable resource counts for `declared`, `required`, `proven`, `failed`,
+`cleanupFailed`, and `disabledOptional`. A missing declaration preserves the
+normal smoke behavior and treats ordinary operations as eligible without
+creating external identity. Provider secrets may be supplied through
+`EXTERNAL_PREREQUISITE_SECRETS_FILE`; they are sent to providers only through
+the fixture protocol pipe and are redacted from evidence.
 
 Useful overrides:
 
@@ -203,6 +286,8 @@ OUTPUT_DIR=/tmp/generator-jhipster-regression
 ANGULAR_NODE_MODULES_CACHE_ENABLED=true
 ANGULAR_NODE_MODULES_CACHE_DIR=/tmp/generator-jhipster-regression/npm-node-modules-cache
 PERSISTENCE_PROFILES_FILE=/path/to/persistence-profiles.json
+EXTERNAL_PREREQUISITE_PROFILE_FILE=/path/to/external-prerequisites.json
+EXTERNAL_PREREQUISITE_SECRETS_FILE=/path/to/external-prerequisite-secrets.json
 ARTIFACT_INCLUDE=TMF683,oas3v1
 ARTIFACT_EXCLUDE=DCSA_EBL
 EVOMASTER_ENABLED=true
@@ -242,14 +327,18 @@ FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT=3
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES=67108864
 FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES=2097152
 FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB=1024
-FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST=true
-FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM=0.5
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED=true
+FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM=0.75
 FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS=5
 FORM_CRUD_GUI_PERSISTENCE_POLL_INTERVAL_MS=500
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES=70
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS=70
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS=60
-FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES=55
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES=70
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS=70
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS=60
+FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES=55
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES=70
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS=70
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS=60
+FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES=55
 FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR=true
 FORM_CRUD_GUI_FAIL_ON_INVALID_CREATE_FORM=true
 FORM_CRUD_GUI_FAIL_ON_CREATE_HTTP_ERROR=true
@@ -393,10 +482,13 @@ dependency fails preflight instead of recording a ready topology.
 
 The helper rejects shared generated application directories, listener ports,
 database container names, or database names, and rejects a `targetBaseUrl` that
-is not the configured target service origin. It starts both generated
-applications and both PostgreSQL containers, records both health responses and
-database identities before browser testing, and then seeds one source and one
-target resource. Playwright creates the mapping through
+is not the configured target service origin. Topology validation also requires
+reference mode and copy mappings that identify the target identity plus the
+reference and relationship metadata verified after persistence; shape-compatible
+OAS fields alone are not accepted as cross-service picker evidence. It starts
+both generated applications and both PostgreSQL containers, records both health
+responses and database identities before browser testing, and then seeds one
+source and one target resource. Playwright creates the mapping through
 `admin/form-crud-reference-pickers`, reloads it, opens the picker on the exact
 configured source Formly field, selects the live cross-origin target row,
 asserts the mapped source model and source write request, and GETs the source
@@ -417,14 +509,14 @@ resources created by that browser sweep. With
 have a terminal result, and any harness error or unexpected failure is fatal.
 Set `FORM_CRUD_GUI_API_OPERATIONS_REQUIRE_ALL_2XX=true` only for contracts whose
 workflows make every operation synchronously executable. Failed schema-aware
-persistence round trips remain fatal. The run combines
-Chromium V8 coverage with Angular Vitest coverage for generated Form CRUD,
-reference-picker administration, and API Operations TypeScript. Per-artifact
-Istanbul JSON, LCOV, summaries, converted-script metadata, and conversion
-errors are written under
-`$OUTPUT_DIR/<artifact>/form-crud-gui/source-coverage/`. Operation rendering
-and execution ratios, round-trip ratios, and combined source line/branch ratios
-are aggregated into the runtime and full-matrix JSON summaries.
+persistence round trips remain fatal. The run measures Chromium V8 and Angular
+Vitest source coverage independently for generated Form CRUD, reference-picker
+administration, and API Operations TypeScript. Per-artifact Istanbul JSON,
+LCOV, summaries, converted-script metadata, and conversion errors are written
+under `$OUTPUT_DIR/<artifact>/form-crud-gui/source-coverage/`. Operation
+rendering and execution ratios, round-trip ratios, and the separate browser and
+Vitest source metrics and gates are aggregated into the runtime and full-matrix
+JSON summaries.
 
 EvoMaster evidence is stored under
 `$OUTPUT_DIR/<artifact>/evomaster/`, including the generated tests, WFC report,

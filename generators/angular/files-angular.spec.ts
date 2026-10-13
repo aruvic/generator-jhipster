@@ -19,6 +19,23 @@ info:
   title: Discriminator metadata regression
   version: 1.0.0
 paths:
+  /base-resources:
+    post:
+      operationId: createBaseResource
+      tags: [resources]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BaseResource_FVO'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BaseResource'
   /resources:
     post:
       operationId: createResource
@@ -60,6 +77,7 @@ components:
       allOf:
         - $ref: '#/components/schemas/BaseResource_FVO'
         - type: object
+          required: [childValue]
           properties:
             childValue:
               type: string
@@ -180,6 +198,120 @@ components:
     expect(implicitReferenceDiscriminator?.discriminatorValues?.[0]).toBe('EntityRef');
     expect(implicitReferenceDiscriminator?.example).toBe('EntityRef');
     expect(operation?.responseStatusCodes).toEqual(['201']);
+
+    const baseOperation = operations.find(candidate => candidate.operationId === 'createBaseResource');
+    expect(baseOperation?.requestBodyExample).toEqual(
+      expect.objectContaining({
+        '@type': 'ConcreteResource',
+        childValue: 'string',
+      }),
+    );
+    expect(baseOperation?.requestBodyFields?.find(field => field.name === '@type')?.example).toBe('ConcreteResource');
+    expect(baseOperation?.requestBodyFields?.find(field => field.name === 'childValue')?.required).toBe(true);
+  });
+
+  it('uses a referenced concrete example to disambiguate an abstract request body and retains an ambiguous base', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-operations-'));
+    const apiPath = join(dir, 'api.yml');
+    writeFileSync(
+      apiPath,
+      `
+openapi: 3.0.3
+info:
+  title: Abstract request metadata regression
+  version: 1.0.0
+paths:
+  /resources:
+    post:
+      operationId: createResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Resource_FVO'
+            examples:
+              physical:
+                $ref: '#/components/examples/CreatePhysicalResource'
+      responses:
+        '201':
+          description: Created
+  /ambiguous-resources:
+    post:
+      operationId: createAmbiguousResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Resource_FVO'
+      responses:
+        '201':
+          description: Created
+components:
+  schemas:
+    Entity:
+      type: object
+      properties:
+        '@type':
+          type: string
+    Resource_FVO:
+      discriminator:
+        propertyName: '@type'
+        mapping:
+          Resource: '#/components/schemas/Resource_FVO'
+          LogicalResource: '#/components/schemas/LogicalResource_FVO'
+          PhysicalResource: '#/components/schemas/PhysicalResource_FVO'
+      allOf:
+        - $ref: '#/components/schemas/Entity'
+        - type: object
+          properties:
+            name:
+              type: string
+    LogicalResource_FVO:
+      allOf:
+        - $ref: '#/components/schemas/Resource_FVO'
+        - type: object
+          properties:
+            logicalId:
+              type: string
+    PhysicalResource_FVO:
+      allOf:
+        - $ref: '#/components/schemas/Resource_FVO'
+        - type: object
+          required: [serialNumber]
+          properties:
+            serialNumber:
+              type: string
+  examples:
+    CreatePhysicalResource:
+      value:
+        '@type': PhysicalResource
+        name: Router
+        serialNumber: EQ-123
+`,
+    );
+
+    const operations = loadOpenApiOperations(
+      { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
+      angularApplication,
+    );
+
+    const concreteOperation = operations.find(candidate => candidate.operationId === 'createResource');
+    expect(concreteOperation?.requestBodyExample).toEqual({
+      '@type': 'PhysicalResource',
+      name: 'Router',
+      serialNumber: 'EQ-123',
+    });
+    expect(concreteOperation?.requestBodyFields?.find(field => field.name === '@type')?.example).toBe('PhysicalResource');
+    expect(concreteOperation?.requestBodyFields?.find(field => field.name === 'serialNumber')?.required).toBe(true);
+    expect(concreteOperation?.requestBodyFields?.map(field => field.name)).not.toContain('logicalId');
+
+    const ambiguousOperation = operations.find(candidate => candidate.operationId === 'createAmbiguousResource');
+    expect(ambiguousOperation?.requestBodyExample).toEqual(expect.objectContaining({ '@type': 'Resource', name: 'string' }));
+    expect(ambiguousOperation?.requestBodyFields?.map(field => field.name)).not.toEqual(
+      expect.arrayContaining(['logicalId', 'serialNumber']),
+    );
   });
 
   it('sanitizes explicit request examples against the concrete schema', () => {
@@ -271,6 +403,142 @@ components:
         },
       },
     });
+  });
+
+  it('uses typed explicit discriminators to select request example and field branches', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-operations-'));
+    const apiPath = join(dir, 'api.yml');
+    writeFileSync(
+      apiPath,
+      `
+openapi: 3.0.3
+info:
+  title: Typed discriminator metadata regression
+  version: 1.0.0
+paths:
+  /equipment:
+    post:
+      operationId: createEquipment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EquipmentChoice'
+            example:
+              items:
+                - isOwned: false
+                  equipmentReference: EQ-123
+      responses:
+        '204':
+          description: Accepted
+  /targets:
+    post:
+      operationId: createTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TargetChoice'
+            example:
+              kind: reference
+              referenceValue: REF-123
+      responses:
+        '204':
+          description: Accepted
+components:
+  schemas:
+    EquipmentChoice:
+      type: object
+      discriminator:
+        propertyName: isOwned
+        mapping:
+          'true': '#/components/schemas/OwnedEquipment'
+          'false': '#/components/schemas/ReferencedEquipment'
+      oneOf:
+        - $ref: '#/components/schemas/OwnedEquipment'
+        - $ref: '#/components/schemas/ReferencedEquipment'
+    OwnedEquipment:
+      type: object
+      required: [isOwned, equipment]
+      properties:
+        isOwned:
+          type: boolean
+          example: true
+        equipment:
+          type: string
+    ReferencedEquipment:
+      type: object
+      required: [isOwned, equipmentReference]
+      properties:
+        isOwned:
+          type: boolean
+          example: false
+        equipmentReference:
+          type: string
+    TargetChoice:
+      type: object
+      discriminator:
+        propertyName: kind
+        mapping:
+          inline: '#/components/schemas/InlineTarget'
+          reference: '#/components/schemas/ReferenceTarget'
+      anyOf:
+        - $ref: '#/components/schemas/InlineTarget'
+        - $ref: '#/components/schemas/ReferenceTarget'
+    InlineTarget:
+      type: object
+      required: [kind, inlineValue]
+      properties:
+        kind:
+          type: string
+          example: inline
+        inlineValue:
+          type: string
+    ReferenceTarget:
+      type: object
+      required: [kind, referenceValue]
+      properties:
+        kind:
+          type: string
+          example: reference
+        referenceValue:
+          type: string
+`,
+    );
+
+    const operations = loadOpenApiOperations(
+      { destinationPath: (value: string) => (value === 'src/main/resources/swagger/api.yml' ? apiPath : join(dir, value)) },
+      angularApplication,
+    );
+
+    const booleanOperation = operations.find(candidate => candidate.operationId === 'createEquipment');
+    const itemFields = booleanOperation?.requestBodyFields?.find(field => field.name === 'items')?.items?.fields ?? [];
+    const booleanDiscriminator = itemFields.find(field => field.name === 'isOwned');
+
+    expect(booleanOperation?.requestBodyExample).toEqual({
+      items: [{ isOwned: false, equipmentReference: 'EQ-123' }],
+    });
+    expect(booleanDiscriminator?.type).toBe('boolean');
+    expect(booleanDiscriminator?.example).toBe(false);
+    expect(itemFields.map(field => field.name)).toEqual(expect.arrayContaining(['isOwned', 'equipmentReference']));
+    expect(itemFields.find(field => field.name === 'equipmentReference')?.required).toBe(true);
+    expect(itemFields.map(field => field.name)).not.toContain('equipment');
+
+    const stringOperation = operations.find(candidate => candidate.operationId === 'createTarget');
+    const stringFieldNames = stringOperation?.requestBodyFields?.map(field => field.name) ?? [];
+
+    expect(stringOperation?.requestBodyExample).toEqual({ kind: 'reference', referenceValue: 'REF-123' });
+    expect(stringOperation?.requestBodyFields?.find(field => field.name === 'kind')?.example).toBe('reference');
+    expect(stringFieldNames).toEqual(expect.arrayContaining(['kind', 'referenceValue']));
+    expect(stringFieldNames).not.toContain('inlineValue');
   });
 
   it('sanitizes retained items after applying an explicit example array limit', () => {

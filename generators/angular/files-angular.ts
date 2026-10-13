@@ -649,11 +649,70 @@ function concreteReferenceExample(openApi: any, schema: any, refName: string | u
     : normalizedSchema?.properties?.['@type'] ? '@type'
     : undefined;
   if (!discriminatorProperty) return value;
+  const explicitDiscriminatorValue = (value as Record<string, unknown>)[discriminatorProperty];
+  if (discriminatorValueSelectsReference(normalizedSchema, refName, explicitDiscriminatorValue)) return value;
+  const explicitMappedRef = normalizedSchema?.discriminator?.mapping?.[String(explicitDiscriminatorValue)];
+  if (schema?.discriminator?.propertyName === discriminatorProperty && typeof explicitMappedRef === 'string') return value;
   const discriminatorValue = discriminatorExampleValue(openApi, normalizedSchema, refName, discriminatorProperty);
-  return discriminatorValue ? { ...(value as Record<string, unknown>), [discriminatorProperty]: discriminatorValue } : value;
+  return discriminatorValue !== undefined && discriminatorValue !== '' ?
+      { ...(value as Record<string, unknown>), [discriminatorProperty]: discriminatorValue }
+    : value;
 }
 
-function discriminatorExampleValue(openApi: any, schema: any, refName: string | undefined, propertyName: string): string {
+function discriminatorValueSelectsReference(schema: any, refName: string, value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  const mappedRef = schema?.discriminator?.mapping?.[String(value)];
+  if (typeof mappedRef !== 'string') return false;
+  if (extractSchemaRef({ $ref: mappedRef }) === refName) return true;
+  return [...(Array.isArray(schema?.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema?.anyOf) ? schema.anyOf : [])].some(
+    branch => branch?.$ref === mappedRef,
+  );
+}
+
+function concreteDiscriminatorChoice(openApi: any, schema: any, refName: string | undefined): string | undefined {
+  const mapping = schema?.discriminator?.mapping;
+  if (!refName || !mapping || typeof mapping !== 'object') return undefined;
+  const normalizedRefName = stripDtoSuffix(refName);
+  const concreteReferences = [
+    ...new Set(
+      Object.values(mapping)
+        .filter((mappedRef): mappedRef is string => typeof mappedRef === 'string')
+        .filter(mappedRef => {
+          const mappedRefName = extractSchemaRef({ $ref: mappedRef });
+          if (!mappedRefName || stripDtoSuffix(mappedRefName) === normalizedRefName) return false;
+          const mappedSchema = resolveOpenApiRef(openApi, { $ref: mappedRef });
+          return Boolean(mappedSchema && !mappedSchema.readOnly && !mappedSchema.abstract && !mappedSchema['x-abstract']);
+        }),
+    ),
+  ];
+  return concreteReferences.length === 1 ? concreteReferences[0] : undefined;
+}
+
+// OpenAPI mapping keys are strings, but retain the discriminator property's schema type in generated examples.
+function typedDiscriminatorMappingValue(openApi: any, schema: any, propertyName: string, mappingValue: string, example?: unknown): unknown {
+  const mappedRef = schema?.discriminator?.mapping?.[mappingValue];
+  const mappedSchema = typeof mappedRef === 'string' ? resolveOpenApiRef(openApi, { $ref: mappedRef }) : undefined;
+  const propertySchema =
+    findDiscriminatorPropertySchema(openApi, mappedSchema, propertyName) ?? findDiscriminatorPropertySchema(openApi, schema, propertyName);
+  if (example && typeof example === 'object' && !Array.isArray(example) && Object.hasOwn(example, propertyName)) {
+    const explicitValue = (example as Record<string, unknown>)[propertyName];
+    if (String(explicitValue) === mappingValue && (!propertySchema || validExplicitScalar(propertySchema, explicitValue))) {
+      return explicitValue;
+    }
+  }
+  if (propertySchema?.const !== undefined && String(propertySchema.const) === mappingValue) return propertySchema.const;
+  const enumValue = propertySchema?.enum?.find((value: unknown) => String(value) === mappingValue);
+  if (enumValue !== undefined) return enumValue;
+  if (schemaType(propertySchema) === 'boolean') {
+    if (mappingValue === 'true') return true;
+    if (mappingValue === 'false') return false;
+  }
+  if (schemaType(propertySchema) === 'integer' && /^-?\d+$/u.test(mappingValue)) return Number(mappingValue);
+  if (schemaType(propertySchema) === 'number' && mappingValue.trim() && Number.isFinite(Number(mappingValue))) return Number(mappingValue);
+  return mappingValue;
+}
+
+function discriminatorExampleValue(openApi: any, schema: any, refName: string | undefined, propertyName: string): unknown {
   const mapping = schema?.discriminator?.mapping;
   const mappingEntries =
     mapping && typeof mapping === 'object' ?
@@ -663,34 +722,34 @@ function discriminatorExampleValue(openApi: any, schema: any, refName: string | 
     : [];
   const schemaDiscriminatorValue = refName ? stripDtoSuffix(refName) : undefined;
   if (schemaDiscriminatorValue && mappingEntries.some(([value]) => value === schemaDiscriminatorValue)) {
-    return schemaDiscriminatorValue;
+    return typedDiscriminatorMappingValue(openApi, schema, propertyName, schemaDiscriminatorValue);
   }
   for (const branch of [...(Array.isArray(schema?.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema?.anyOf) ? schema.anyOf : [])]) {
     const branchRef = typeof branch?.$ref === 'string' ? branch.$ref : undefined;
     const mappedValue = mappingEntries.find(([, ref]) => ref === branchRef)?.[0];
-    if (mappedValue) return mappedValue;
+    if (mappedValue) return typedDiscriminatorMappingValue(openApi, schema, propertyName, mappedValue);
     const branchRefName = branchRef ? extractSchemaRef(branch) : undefined;
     if (branchRefName) return stripDtoSuffix(branchRefName);
   }
-  if (mappingEntries.length) return mappingEntries[0][0];
+  if (mappingEntries.length) return typedDiscriminatorMappingValue(openApi, schema, propertyName, mappingEntries[0][0]);
   const propertySchema = findDiscriminatorPropertySchema(openApi, schema, propertyName);
-  if (propertySchema?.const !== undefined) return String(propertySchema.const);
-  if (Array.isArray(propertySchema?.enum) && propertySchema.enum.length) return String(propertySchema.enum[0]);
+  if (propertySchema?.const !== undefined) return propertySchema.const;
+  if (Array.isArray(propertySchema?.enum) && propertySchema.enum.length) return propertySchema.enum[0];
   return schemaDiscriminatorValue ?? '';
 }
 
-function normalizeSchemaForFields(openApi: any, schema: any, seen = new Set<string>()): any {
+function normalizeSchemaForFields(openApi: any, schema: any, seen = new Set<string>(), example?: unknown, schemaName?: string): any {
   if (!schema || typeof schema !== 'object') return {};
   if (typeof schema.$ref === 'string') {
     if (seen.has(schema.$ref)) return {};
-    return normalizeSchemaForFields(openApi, resolveOpenApiRef(openApi, schema), new Set([...seen, schema.$ref]));
+    const refName = extractSchemaRef(schema);
+    return normalizeSchemaForFields(openApi, resolveOpenApiRef(openApi, schema), new Set([...seen, schema.$ref]), example, refName);
   }
+  const hasDirectDiscriminator = Boolean(schema.discriminator?.propertyName);
   schema = mergeAllOfSchema(openApi, schema, seen);
-  const choice = [...(Array.isArray(schema.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema.anyOf) ? schema.anyOf : [])].find(
-    (candidate: any) => schemaType(resolveOpenApiRef(openApi, candidate)) !== 'null',
-  );
+  const choice = selectExampleChoice(openApi, schema, example, schemaName, hasDirectDiscriminator);
   if (choice) {
-    const resolvedChoice = normalizeSchemaForFields(openApi, choice, seen);
+    const resolvedChoice = normalizeSchemaForFields(openApi, choice, seen, example);
     return {
       ...resolvedChoice,
       ...schema,
@@ -713,6 +772,7 @@ function schemaField(
   mode: 'request' | 'response' = 'request',
   seen = new Set<string>(),
   depth = 0,
+  example?: unknown,
 ): OpenApiSchemaField {
   const refName = extractSchemaRef(schema);
   if (typeof schema?.$ref === 'string') {
@@ -730,7 +790,7 @@ function schemaField(
     }
   }
   const originalSchema = schema;
-  schema = normalizeSchemaForFields(openApi, schema, seen);
+  schema = normalizeSchemaForFields(openApi, schema, seen, example);
   const type = schemaType(schema);
   const pointer = schemaPointer(path);
   const field: OpenApiSchemaField = {
@@ -776,8 +836,12 @@ function schemaField(
         const resolvedProperty = resolveOpenApiRef(openApi, propertySchema);
         return mode === 'request' ? !resolvedProperty?.readOnly : !resolvedProperty?.writeOnly;
       })
-      .map(([propertyName, propertySchema]) =>
-        schemaField(
+      .map(([propertyName, propertySchema]) => {
+        const propertyExample =
+          example && typeof example === 'object' && !Array.isArray(example) && Object.hasOwn(example, propertyName) ?
+            (example as Record<string, unknown>)[propertyName]
+          : undefined;
+        return schemaField(
           openApi,
           propertyName,
           [...path, propertyName],
@@ -786,26 +850,55 @@ function schemaField(
           mode,
           new Set(seen),
           depth + 1,
-        ),
-      );
+          propertyExample,
+        );
+      });
     const discriminatorProperty = typeof schema.discriminator?.propertyName === 'string' ? schema.discriminator.propertyName : undefined;
     const discriminatorValues = discriminatorProperty ? discriminatorAllowedValues(openApi, schema, refName, discriminatorProperty) : [];
     const implicitTypeValues = !discriminatorProperty && refName ? [stripDtoSuffix(refName)] : [];
     const typeDiscriminatorValues = discriminatorProperty ? discriminatorValues : implicitTypeValues;
+    const selectedDiscriminatorValue =
+      (
+        discriminatorProperty &&
+        example &&
+        typeof example === 'object' &&
+        !Array.isArray(example) &&
+        Object.hasOwn(example, discriminatorProperty)
+      ) ?
+        (example as Record<string, unknown>)[discriminatorProperty]
+      : undefined;
     if (typeDiscriminatorValues.length) {
-      field.fields = field.fields.map(child =>
-        (discriminatorProperty && child.name === discriminatorProperty) || (!discriminatorProperty && child.name === '@type') ?
-          {
-            ...child,
-            discriminatorValues: typeDiscriminatorValues,
-            enumValues: child.enumValues?.length ? child.enumValues : typeDiscriminatorValues,
-            example: typeDiscriminatorValues.includes(String(child.example)) ? child.example : typeDiscriminatorValues[0],
-          }
-        : child,
-      );
+      field.fields = field.fields.map(child => {
+        const isDiscriminator =
+          (discriminatorProperty && child.name === discriminatorProperty) || (!discriminatorProperty && child.name === '@type');
+        if (!isDiscriminator) return child;
+        let discriminatorExample: unknown = typeDiscriminatorValues[0];
+        if (selectedDiscriminatorValue !== undefined && typeDiscriminatorValues.includes(String(selectedDiscriminatorValue))) {
+          discriminatorExample = selectedDiscriminatorValue;
+        } else if (typeDiscriminatorValues.includes(String(child.example))) {
+          discriminatorExample = child.example;
+        }
+        return {
+          ...child,
+          discriminatorValues: typeDiscriminatorValues,
+          enumValues: child.enumValues?.length ? child.enumValues : typeDiscriminatorValues,
+          example: discriminatorExample,
+        };
+      });
     }
   } else if (type === 'array') {
-    field.items = schemaField(openApi, `${name} item`, [...path, '0'], schema.items ?? {}, false, mode, new Set(seen), depth + 1);
+    const itemExample = Array.isArray(example) ? example.find(item => item !== undefined) : undefined;
+    field.items = schemaField(
+      openApi,
+      `${name} item`,
+      [...path, '0'],
+      schema.items ?? {},
+      false,
+      mode,
+      new Set(seen),
+      depth + 1,
+      itemExample,
+    );
     const objectExample = firstObjectExample(field.example);
     if (objectExample && (field.items.type !== 'object' || !field.items.fields?.length)) {
       field.items = inferredSchemaFieldFromExample(`${name} item`, [...path, '0'], objectExample);
@@ -866,44 +959,58 @@ function stripDtoSuffix(value: string): string {
   return value.replace(/_?(?:FVO|MVO|RES)$/u, '');
 }
 
-function schemaFields(openApi: any, schema: any, required: boolean, mode: 'request' | 'response'): OpenApiSchemaField[] {
+function schemaFields(openApi: any, schema: any, required: boolean, mode: 'request' | 'response', example?: unknown): OpenApiSchemaField[] {
   if (!schema) return [];
-  const root = schemaField(openApi, 'body', [], schema, required, mode);
+  const root = schemaField(openApi, 'body', [], schema, required, mode, new Set(), 0, example);
   if (root.type === 'object' && root.fields?.length) return [...root.fields];
   return [root];
 }
 
-function requestBodyFields(openApi: any, schema: any, required: boolean): OpenApiSchemaField[] {
-  return schemaFields(openApi, schema, required, 'request');
+function requestBodyFields(openApi: any, schema: any, required: boolean, example?: unknown): OpenApiSchemaField[] {
+  return schemaFields(openApi, schema, required, 'request', example);
 }
 
 function responseBodyFields(openApi: any, schema: any): OpenApiSchemaField[] {
   return schemaFields(openApi, schema, false, 'response');
 }
 
-function schemaExample(openApi: any, schema: any, seen = new Set<string>(), depth = 0, useExplicitExamples = true): unknown {
+function schemaExample(
+  openApi: any,
+  schema: any,
+  seen = new Set<string>(),
+  depth = 0,
+  useExplicitExamples = true,
+  schemaName?: string,
+): unknown {
   if (!schema || typeof schema !== 'object') return undefined;
   if (depth > MAX_OPERATION_FORM_EXAMPLE_DEPTH) return undefined;
   if (typeof schema.$ref === 'string') {
     if (seen.has(schema.$ref)) return undefined;
     const refName = extractSchemaRef(schema);
     const resolved = resolveOpenApiRef(openApi, schema);
-    const value = schemaExample(openApi, resolved, new Set([...seen, schema.$ref]), depth + 1, useExplicitExamples);
+    const value = schemaExample(openApi, resolved, new Set([...seen, schema.$ref]), depth + 1, useExplicitExamples, refName);
     return concreteReferenceExample(openApi, resolved, refName, value);
   }
   if (useExplicitExamples && schema.example !== undefined) return schema.example;
   if (schema.default !== undefined) return schema.default;
   const enumValues = schemaEnumValues(schema);
   if (enumValues?.length) return enumValues[0];
+  const hasDirectDiscriminator = Boolean(schema.discriminator?.propertyName);
   schema = mergeAllOfSchema(openApi, schema, seen);
-  if (Array.isArray(schema.oneOf) && schema.oneOf.length) {
-    const branch = schema.oneOf.find((candidate: any) => resolveOpenApiRef(openApi, candidate)?.type !== 'null') ?? schema.oneOf[0];
+  const choices = [...(Array.isArray(schema.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema.anyOf) ? schema.anyOf : [])];
+  const branch = selectExampleChoice(openApi, schema, undefined, schemaName, hasDirectDiscriminator);
+  if (branch) {
     const value = schemaExample(openApi, branch, seen, depth + 1, useExplicitExamples);
     const discriminatorProperty = schema.discriminator?.propertyName;
     const mapping = schema.discriminator?.mapping;
+    const baseValue = choices.length === 0 ? schemaObjectExample(openApi, schema, seen, depth, useExplicitExamples) : undefined;
+    const mergedValue =
+      baseValue && value && typeof value === 'object' && !Array.isArray(value) ?
+        { ...baseValue, ...(value as Record<string, unknown>) }
+      : value;
     if (
-      value &&
-      typeof value === 'object' &&
+      mergedValue &&
+      typeof mergedValue === 'object' &&
       discriminatorProperty &&
       mapping &&
       typeof mapping === 'object' &&
@@ -911,14 +1018,10 @@ function schemaExample(openApi: any, schema: any, seen = new Set<string>(), dept
     ) {
       const discriminatorValue = Object.entries(mapping).find(([, ref]) => ref === branch.$ref)?.[0];
       if (discriminatorValue) {
-        return { ...(value as Record<string, unknown>), [discriminatorProperty]: discriminatorValue };
+        return { ...(mergedValue as Record<string, unknown>), [discriminatorProperty]: discriminatorValue };
       }
     }
-    return value;
-  }
-  if (Array.isArray(schema.anyOf) && schema.anyOf.length && !schema.properties) {
-    const branch = schema.anyOf.find((candidate: any) => resolveOpenApiRef(openApi, candidate)?.type !== 'null') ?? schema.anyOf[0];
-    return schemaExample(openApi, branch, seen, depth + 1, useExplicitExamples);
+    return mergedValue;
   }
   switch (schemaType(schema)) {
     case 'integer':
@@ -931,13 +1034,7 @@ function schemaExample(openApi: any, schema: any, seen = new Set<string>(), dept
       return [schemaExample(openApi, schema.items, seen, depth + 1, useExplicitExamples)].filter(value => value !== undefined);
     case 'object':
       if (schema.properties && typeof schema.properties === 'object') {
-        const value: Record<string, unknown> = {};
-        for (const [propertyName, propertySchema] of Object.entries(schema.properties)) {
-          if ((propertySchema as any)?.readOnly) continue;
-          const propertyExample = schemaExample(openApi, propertySchema, seen, depth + 1, useExplicitExamples);
-          if (propertyExample !== undefined) value[propertyName] = propertyExample;
-        }
-        return value;
+        return schemaObjectExample(openApi, schema, seen, depth, useExplicitExamples);
       }
       if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
         const additionalValue = schemaExample(openApi, schema.additionalProperties, seen, depth + 1, useExplicitExamples);
@@ -953,9 +1050,24 @@ function schemaExample(openApi: any, schema: any, seen = new Set<string>(), dept
   }
 }
 
-function selectExampleChoice(openApi: any, schema: any, example: unknown): any | undefined {
+function schemaObjectExample(openApi: any, schema: any, seen: Set<string>, depth: number, useExplicitExamples: boolean) {
+  const value: Record<string, unknown> = {};
+  for (const [propertyName, propertySchema] of Object.entries(schema.properties ?? {})) {
+    if ((propertySchema as any)?.readOnly) continue;
+    const propertyExample = schemaExample(openApi, propertySchema, seen, depth + 1, useExplicitExamples);
+    if (propertyExample !== undefined) value[propertyName] = propertyExample;
+  }
+  return value;
+}
+
+function selectExampleChoice(
+  openApi: any,
+  schema: any,
+  example: unknown,
+  schemaName?: string,
+  allowDiscriminatorMappingChoice = false,
+): any | undefined {
   const choices = [...(Array.isArray(schema?.oneOf) ? schema.oneOf : []), ...(Array.isArray(schema?.anyOf) ? schema.anyOf : [])];
-  if (!choices.length) return undefined;
   const discriminatorProperty = schema?.discriminator?.propertyName;
   const discriminatorValue =
     example && typeof example === 'object' && !Array.isArray(example) && discriminatorProperty ?
@@ -964,9 +1076,11 @@ function selectExampleChoice(openApi: any, schema: any, example: unknown): any |
   const mappedRef = discriminatorValue ? schema?.discriminator?.mapping?.[discriminatorValue] : undefined;
   if (typeof mappedRef === 'string') {
     const mappedChoice = choices.find(choice => choice?.$ref === mappedRef);
-    if (mappedChoice) return mappedChoice;
+    if (mappedChoice || (choices.length === 0 && allowDiscriminatorMappingChoice)) return mappedChoice ?? { $ref: mappedRef };
   }
-  return choices.find(choice => schemaType(resolveOpenApiRef(openApi, choice)) !== 'null') ?? choices[0];
+  if (choices.length) return choices.find(choice => schemaType(resolveOpenApiRef(openApi, choice)) !== 'null') ?? choices[0];
+  const concreteChoice = allowDiscriminatorMappingChoice ? concreteDiscriminatorChoice(openApi, schema, schemaName) : undefined;
+  return concreteChoice ? { $ref: concreteChoice } : undefined;
 }
 
 function validExplicitScalar(schema: any, value: unknown): boolean {
@@ -1008,16 +1122,21 @@ function sanitizeRequestExample(openApi: any, schema: any, example: unknown, see
     return concreteReferenceExample(openApi, resolved, refName, sanitized);
   }
 
+  const hasDirectDiscriminator = Boolean(schema.discriminator?.propertyName);
   schema = mergeAllOfSchema(openApi, schema, seen);
-  const choice = selectExampleChoice(openApi, schema, example);
+  const choice = selectExampleChoice(openApi, schema, example, refName, hasDirectDiscriminator);
   if (choice) {
-    const sanitized = sanitizeRequestExample(openApi, choice, example, seen, depth + 1);
+    const hasCompositionChoice = Array.isArray(schema.oneOf) || Array.isArray(schema.anyOf);
+    const sanitized = sanitizeRequestExample(openApi, choice, example, hasCompositionChoice ? seen : new Set(), depth + 1);
     const discriminatorProperty = schema?.discriminator?.propertyName;
     const branchRef = typeof choice?.$ref === 'string' ? choice.$ref : undefined;
     const discriminatorValue =
       branchRef ? Object.entries(schema?.discriminator?.mapping ?? {}).find(([, mappedRef]) => mappedRef === branchRef)?.[0] : undefined;
     return sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized) && discriminatorProperty && discriminatorValue ?
-        { ...(sanitized as Record<string, unknown>), [discriminatorProperty]: discriminatorValue }
+        {
+          ...(sanitized as Record<string, unknown>),
+          [discriminatorProperty]: typedDiscriminatorMappingValue(openApi, schema, discriminatorProperty, discriminatorValue, example),
+        }
       : sanitized;
   }
 
@@ -1054,7 +1173,7 @@ function sanitizeRequestExample(openApi: any, schema: any, example: unknown, see
         : undefined;
       if (discriminatorProperty && refName) {
         const discriminatorValue = discriminatorExampleValue(openApi, schema, refName, discriminatorProperty);
-        if (discriminatorValue) result[discriminatorProperty] = discriminatorValue;
+        if (discriminatorValue !== undefined && discriminatorValue !== '') result[discriminatorProperty] = discriminatorValue;
       }
       return result;
     }
@@ -1107,13 +1226,15 @@ function requestBodyDefinition(
   const [requestContentType, mediaTypeSpec] = contentEntry as [string, any];
   const schema = mediaTypeSpec?.schema;
   const requestBodyRequired = Boolean(requestBody?.required);
-  const explicitExample = mediaTypeSpec?.example ?? (Object.values(mediaTypeSpec?.examples ?? {})[0] as any)?.value;
+  const exampleEntry = Object.values(mediaTypeSpec?.examples ?? {})[0];
+  const explicitExample = mediaTypeSpec?.example ?? resolveOpenApiRef(openApi, exampleEntry)?.value;
+  const requestBodyExample =
+    explicitExample === undefined ? schemaExample(openApi, schema) : sanitizeRequestExample(openApi, schema, explicitExample);
   return {
     requestBodyRequired,
     requestContentType,
-    requestBodyExample:
-      explicitExample === undefined ? schemaExample(openApi, schema) : sanitizeRequestExample(openApi, schema, explicitExample),
-    requestBodyFields: requestBodyFields(openApi, schema, requestBodyRequired),
+    requestBodyExample,
+    requestBodyFields: requestBodyFields(openApi, schema, requestBodyRequired, requestBodyExample),
   };
 }
 

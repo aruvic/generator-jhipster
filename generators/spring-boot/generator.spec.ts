@@ -73,6 +73,23 @@ describe(`generator - ${generator}`, () => {
       expect(runResult.getStateSnapshot()).toMatchSnapshot();
     });
 
+    it('should use Jackson 3 for logging', () => {
+      const loggingAspect = `${SERVER_MAIN_SRC_DIR}com/mycompany/myapp/aop/logging/LoggingAspect.java`;
+      const loggingConfiguration = `${SERVER_MAIN_SRC_DIR}com/mycompany/myapp/config/LoggingAspectConfiguration.java`;
+      const loggingAspectTest = 'src/test/java/com/mycompany/myapp/aop/logging/LoggingAspectTest.java';
+
+      for (const file of [loggingAspect, loggingConfiguration, loggingAspectTest]) {
+        runResult.assertFileContent(file, 'import tools.jackson.databind.ObjectMapper;');
+        runResult.assertNoFileContent(file, 'com.fasterxml.jackson');
+      }
+      runResult.assertFileContent(loggingAspect, [
+        'import tools.jackson.core.JacksonException;',
+        'import tools.jackson.databind.node.StringNode;',
+        '.properties()',
+        'catch (IllegalArgumentException | JacksonException e)',
+      ]);
+    });
+
     it('should use the supported prometheus registry dependency', () => {
       const javaDefinitions = runResult.sourceCallsArg.addJavaDefinitions.flat();
       const dependencies = javaDefinitions.flatMap(definition => {

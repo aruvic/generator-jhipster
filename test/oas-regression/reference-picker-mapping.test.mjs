@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { assertMappedReference, assertPersistedReference } from './reference-picker-mapping.mjs';
+import { assertMappedReference, assertPersistedReference, assertReferencePickerMappingContract } from './reference-picker-mapping.mjs';
 
 const picker = {
   multiple: true,
@@ -37,6 +37,22 @@ const targetSelection = {
   identity: 1001,
   collectionUrl: 'http://target.example/api/parties',
 };
+
+test('rejects arbitrary OAS reference mappings before runtime verification', () => {
+  assert.doesNotThrow(() => assertReferencePickerMappingContract(picker.copyFields, targetSelection.identityPath));
+  assert.throws(
+    () =>
+      assertReferencePickerMappingContract(
+        [
+          { source: 'id', target: 'id' },
+          { source: 'name', target: 'name' },
+          { source: 'href', target: 'href' },
+        ],
+        targetSelection.identityPath,
+      ),
+    /do not prove required reference-referred-type contract/,
+  );
+});
 
 test('requires every configured copy mapping before persistence', () => {
   assert.deepEqual(assertMappedReference([requestReference], selectedItem, picker, 'PATCH'), requestReference);
@@ -158,7 +174,10 @@ test('rejects a lost or mismatched automatic href on readback', () => {
 
 test('rejects lost configured identity or relationship contracts on readback', () => {
   const changedReferences = [
-    [{ ...requestReference, party: { ...requestReference.party, id: undefined } }, /changed stable identity\/relationship mappings: party\.id/],
+    [
+      { ...requestReference, party: { ...requestReference.party, id: undefined } },
+      /changed stable identity\/relationship mappings: party\.id/,
+    ],
     [
       { ...requestReference, party: { ...requestReference.party, '@referredType': 'Organization' } },
       /changed stable identity\/relationship mappings: party\.@referredType/,
@@ -188,11 +207,7 @@ test('requires configured mappings for identity and explicit reference and relat
     };
     assert.throws(
       () => assertPersistedReference([requestReference], requestReference, pickerWithoutContract, targetSelection, 'Persisted GET'),
-      new RegExp(
-        contract[0] === 'party.id'
-          ? `do not map ${contract[1]}`
-          : `do not prove required ${contract[1]} contract`,
-      ),
+      new RegExp(contract[0] === 'party.id' ? `do not map ${contract[1]}` : `do not prove required ${contract[1]} contract`),
     );
   }
 });
@@ -200,20 +215,10 @@ test('requires configured mappings for identity and explicit reference and relat
 test('classifies an explicitly configured href separately while retaining exact target-route proof', () => {
   const pickerWithConfiguredHref = {
     ...picker,
-    copyFields: [
-      picker.copyFields[0],
-      { source: 'href', target: 'party.href' },
-      ...picker.copyFields.slice(1),
-    ],
+    copyFields: [picker.copyFields[0], { source: 'href', target: 'party.href' }, ...picker.copyFields.slice(1)],
   };
 
-  const result = assertPersistedReference(
-    [requestReference],
-    requestReference,
-    pickerWithConfiguredHref,
-    targetSelection,
-    'Persisted GET',
-  );
+  const result = assertPersistedReference([requestReference], requestReference, pickerWithConfiguredHref, targetSelection, 'Persisted GET');
 
   assert.equal(result.mappingEvidence.find(({ contract }) => contract === 'reference-href').classification, 'configured-copy');
 });

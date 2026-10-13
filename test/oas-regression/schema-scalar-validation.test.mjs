@@ -8,9 +8,7 @@ test('supports OpenAPI 3.0 boolean and 3.1 numeric exclusive bounds', () => {
   assert.equal(exclusiveMinimum({ exclusiveMinimum: 1.5 }), 1.5);
   assert.equal(exclusiveMaximum({ maximum: 9, exclusiveMaximum: true }), 9);
   assert.equal(exclusiveMaximum({ exclusiveMaximum: 9.5 }), 9.5);
-  assert.deepEqual(validateScalarConstraints(1, { minimum: 1, exclusiveMinimum: true }, '/amount'), [
-    '/amount expected > 1',
-  ]);
+  assert.deepEqual(validateScalarConstraints(1, { minimum: 1, exclusiveMinimum: true }, '/amount'), ['/amount expected > 1']);
   assert.deepEqual(validateScalarConstraints(9.5, { exclusiveMaximum: 9.5 }, '/amount'), ['/amount expected < 9.5']);
 });
 

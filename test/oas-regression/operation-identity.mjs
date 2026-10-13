@@ -1,5 +1,6 @@
 const IDENTITY_TOKENS = new Set(['id', 'identifier', 'reference', 'ref', 'uuid']);
 const CONTEXT_STOP_WORDS = new Set(['api']);
+const EVENT_TOKENS = new Set(['event', 'notification']);
 
 function singularToken(value) {
   if (value.endsWith('ies') && value.length > 3) return `${value.slice(0, -3)}y`;
@@ -21,6 +22,12 @@ export function identityTokens(value) {
     .split(/[^A-Za-z0-9]+/)
     .map(token => canonicalToken(token))
     .filter(token => token && !CONTEXT_STOP_WORDS.has(token) && !/^v\d+$/.test(token));
+}
+
+export function isEventLikeOperation(operation) {
+  return [operation?.id, operation?.operationId, operation?.path, operation?.tag]
+    .flatMap(identityTokens)
+    .some(token => EVENT_TOKENS.has(token));
 }
 
 function normalizedName(value) {
@@ -66,6 +73,30 @@ function overlapCount(left, right) {
   return [...left].filter(value => right.has(value)).length;
 }
 
+function identityCompatibility(entry, operation, parameter) {
+  const parameterTokens = new Set(identityTokens(parameter?.name));
+  const candidateTokens = new Set(entry.tokens);
+  const identityOverlap = overlapCount(
+    new Set([...parameterTokens].filter(token => IDENTITY_TOKENS.has(token))),
+    new Set([...candidateTokens].filter(token => IDENTITY_TOKENS.has(token))),
+  );
+  return {
+    exactParameter: entry.normalizedKey === normalizedName(parameter?.name),
+    contextOverlap: overlapCount(operationContextTokens(operation), candidateTokens),
+    identityOverlap,
+  };
+}
+
+function compareRankedEntries(left, right) {
+  return (
+    right.score - left.score ||
+    Number(right.entry.origin === 'response') - Number(left.entry.origin === 'response') ||
+    left.entry.depth - right.entry.depth ||
+    left.recordIndex - right.recordIndex ||
+    left.entry.path.localeCompare(right.entry.path)
+  );
+}
+
 function scoreEntry(entry, operation, parameter, record) {
   const parameterTokens = new Set(identityTokens(parameter?.name));
   const parameterIdentityTokens = new Set([...parameterTokens].filter(token => IDENTITY_TOKENS.has(token)));
@@ -92,8 +123,10 @@ function scoreEntry(entry, operation, parameter, record) {
   return score;
 }
 
-export function semanticIdentityValue(operation, parameter, records, { origins = ['response', 'request'] } = {}) {
+export function semanticIdentityCandidate(operation, parameter, records, { origins = ['response', 'request'], field, expectedValue } = {}) {
   const allowedOrigins = new Set(origins);
+  const normalizedField = field === undefined || field === null ? undefined : normalizedName(field);
+  const expected = expectedValue === undefined || expectedValue === null ? undefined : String(expectedValue).trim();
   const ranked = [];
 
   records.forEach((record, recordIndex) => {
@@ -109,16 +142,42 @@ export function semanticIdentityValue(operation, parameter, records, { origins =
     }
   });
 
-  const best = ranked
-    .filter(candidate => Number.isFinite(candidate.score) && candidate.entry.value.trim())
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        Number(right.entry.origin === 'response') - Number(left.entry.origin === 'response') ||
-        left.entry.depth - right.entry.depth ||
-        left.recordIndex - right.recordIndex ||
-        left.entry.path.localeCompare(right.entry.path),
-    )[0];
+  const candidates = ranked
+    .filter(
+      candidate =>
+        Number.isFinite(candidate.score) &&
+        candidate.entry.value.trim() &&
+        (normalizedField === undefined || candidate.entry.normalizedKey === normalizedField),
+    )
+    .sort(compareRankedEntries);
+  const best = candidates[0];
+  const bestCompatibility = best && identityCompatibility(best.entry, operation, parameter);
+  const expectedCandidate =
+    expected === undefined || !best ?
+      undefined
+    : candidates
+        .filter(candidate => candidate.entry.value.trim() === expected)
+        .filter(candidate => {
+          const compatibility = identityCompatibility(candidate.entry, operation, parameter);
+          const compatibleField = compatibility.exactParameter || (compatibility.contextOverlap > 0 && compatibility.identityOverlap > 0);
+          const preservesCanonicalPrecedence =
+            candidate.entry.depth <= best.entry.depth &&
+            (candidate.score >= best.score ||
+              (!bestCompatibility.exactParameter && compatibility.contextOverlap > bestCompatibility.contextOverlap));
+          return compatibleField && preservesCanonicalPrecedence;
+        })
+        .sort(compareRankedEntries)[0];
+  const selected = expectedCandidate ?? best;
 
-  return best && best.score >= 45 ? best.entry.value.trim() : undefined;
+  if (!selected || selected.score < 45) return undefined;
+  return {
+    value: selected.entry.value.trim(),
+    field: selected.entry.key,
+    path: selected.entry.path,
+    origin: selected.entry.origin,
+  };
+}
+
+export function semanticIdentityValue(operation, parameter, records, options) {
+  return semanticIdentityCandidate(operation, parameter, records, options)?.value;
 }

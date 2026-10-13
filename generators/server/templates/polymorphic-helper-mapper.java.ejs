@@ -1,4 +1,9 @@
 <%_ const hasMapperDependencies = Array.isArray(usesMappers) && usesMappers.length > 0;
+    const needsCycleSafeProxy = typeof requiresMapperProxy !== 'undefined' && requiresMapperProxy;
+    const effectiveBaseResponseMethodAnnotations
+      = typeof baseResponseMethodAnnotations === 'undefined'
+      ? (locals.baseResponseMethodAnnotations ?? [])
+      : (baseResponseMethodAnnotations ?? []);
     const baseDtoIsCompositionInterface
       = typeof isCompositionInterface === 'undefined' ? Boolean(locals.isCompositionInterface) : Boolean(isCompositionInterface);
     const isResponseRoleVariant = variant => variant.isResponseVariant && !variant.isRequestVariant && String(variant.dtoSimpleName || '').endsWith('RES');
@@ -15,9 +20,9 @@
     });
     const requiresMappingImport = Boolean(
       requiresRequestIdIgnore
-      || requiresVariantIdIgnore
+        || requiresVariantIdIgnore
         || (baseMethodAnnotations && baseMethodAnnotations.some(annotation => annotation.includes('@Mapping(')))
-        || (baseResponseMethodAnnotations && baseResponseMethodAnnotations.some(annotation => annotation.includes('@Mapping(')))
+        || effectiveBaseResponseMethodAnnotations.some(annotation => annotation.includes('@Mapping('))
         || variants.some(variant => Array.isArray(variant.annotations) && variant.annotations.some(annotation => annotation.includes('@Mapping(')))
         || variants.some(variant => Array.isArray(variant.responseAnnotations) && variant.responseAnnotations.some(annotation => annotation.includes('@Mapping('))),
     );
@@ -66,16 +71,69 @@
       }
       return subtype.dtoType;
     };
-    const dtoFallbackTypes = [];
-    const addDtoFallbackType = (dtoType) => {
-      if (dtoType && dtoType !== baseDtoType && !dtoFallbackTypes.includes(dtoType)) {
-        dtoFallbackTypes.push(dtoType);
+    const dtoFallbackCandidates = [];
+    const addDtoFallbackCandidate = (
+      candidate,
+      requiredPropertyAccessors = [],
+      distinguishingRequiredPropertyAccessors = [],
+    ) => {
+      if (
+        candidate?.dtoType
+          && candidate.dtoType !== baseDtoType
+          && !dtoFallbackCandidates.some(existing => existing.dtoType === candidate.dtoType)
+      ) {
+        dtoFallbackCandidates.push({
+          ...candidate,
+          requiredPropertyAccessors,
+          distinguishingRequiredPropertyAccessors,
+          fallbackMapMethodName: `map${baseType}To${candidate.dtoSimpleName}DtoFallback`,
+        });
       }
     };
-    subtypes.filter(subtype => subtype.isDtoSubtype !== false).forEach(subtype => addDtoFallbackType(subtype.dtoType));
-    requestVariants
+    variants
       .filter(variant => variant.assignableToBaseDto)
-      .forEach(variant => addDtoFallbackType(variant.dtoType));
+      .forEach(variant =>
+        addDtoFallbackCandidate(
+        variant,
+        variant.requiredPropertyAccessors,
+        variant.distinguishingRequiredPropertyAccessors,
+      ),
+      );
+    subtypes
+      .filter(subtype => subtype.isDtoSubtype !== false)
+      .forEach(subtype =>
+        addDtoFallbackCandidate(
+        subtype,
+        subtype.requiredPropertyAccessors,
+        subtype.distinguishingRequiredPropertyAccessors,
+      ),
+      );
+    const requestCollectionMappings = [
+      {
+        sourceType: baseDtoType,
+        sourceSimpleName: baseDtoSimpleName,
+        targetType: baseDomainType,
+        fields: typeof baseCollectionFields === 'undefined' ? [] : (baseCollectionFields ?? []),
+        ignoreNullsOnUpdate: typeof baseIgnoreNullsOnUpdate === 'undefined' ? false : Boolean(baseIgnoreNullsOnUpdate),
+      },
+      ...requestVariants.map(variant => ({
+        sourceType: variant.dtoType,
+        sourceSimpleName: variant.dtoSimpleName,
+        targetType: variant.targetDomainType || baseDomainType,
+        fields: variant.collectionFields ?? [],
+        ignoreNullsOnUpdate: Boolean(variant.ignoreNullsOnUpdate),
+      })),
+    ].filter(mapping => mapping.fields.length > 0);
+    const hasCollectionMerges = requestCollectionMappings.length > 0;
+    const responseCollectionMappings = [
+      {
+        fields: typeof baseResponseCollectionFields === 'undefined' ? [] : (baseResponseCollectionFields ?? []),
+      },
+      ...responseVariants.map(variant => ({
+        fields: variant.responseCollectionFields ?? [],
+      })),
+    ].filter(mapping => mapping.fields.length > 0);
+    const hasResponseCollectionMappings = responseCollectionMappings.length > 0;
     const baseGeneratedUuidFields = locals.baseGeneratedUuidFields ?? [];
     const baseGeneratedDefaultFields = locals.baseGeneratedDefaultFields ?? [];
     const effectiveRequestDiscriminatorAccessor
@@ -85,7 +143,7 @@
       hasGeneratedFields(variant.generatedUuidFields) || hasGeneratedFields(variant.generatedDefaultFields);
       const helperHasGeneratedFields
         = hasGeneratedFields(baseGeneratedUuidFields)
-          || hasGeneratedFields(baseGeneratedDefaultFields)
+        || hasGeneratedFields(baseGeneratedDefaultFields)
         || requestVariants.some(variantHasGeneratedFields);
 _%>
 /**
@@ -95,9 +153,19 @@ _%>
 
 package <%- packageName %>;
 
+<%_ if (needsCycleSafeProxy) { _%>
+import org.mapstruct.AnnotateWith;
+<%_ } _%>
 import org.mapstruct.Mapper;
 import org.mapstruct.CollectionMappingStrategy;
 import org.mapstruct.MappingTarget;
+<%_ if ((typeof baseIgnoreNullsOnUpdate !== 'undefined' && Boolean(baseIgnoreNullsOnUpdate)) || requestVariants.some(variant => variant.ignoreNullsOnUpdate)) { _%>
+import org.mapstruct.BeanMapping;
+import org.mapstruct.NullValuePropertyMappingStrategy;
+<%_ } _%>
+<%_ if (hasCollectionMerges) { _%>
+import org.mapstruct.AfterMapping;
+<%_ } _%>
 <%_ if (requiresMappingImport) { _%>
 import org.mapstruct.Mapping;
 <%_ } _%>
@@ -108,8 +176,32 @@ import org.mapstruct.ObjectFactory;
 import org.mapstruct.SubclassMapping;
 import org.mapstruct.ReportingPolicy;
 import org.springframework.context.annotation.Lazy;
+<%_ if (needsCycleSafeProxy) { _%>
+import org.springframework.context.annotation.Scope;
+import org.springframework.context.annotation.ScopedProxyMode;
+<%_ } _%>
 import org.springframework.beans.factory.annotation.Autowired;
+<%_ if (hasCollectionMerges || hasResponseCollectionMappings) { _%>
 
+import java.util.List;
+<%_ } _%>
+<%_ if (hasCollectionMerges) { _%>
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
+<%_ } _%>
+
+<%_ if (needsCycleSafeProxy) { _%>
+@AnnotateWith(
+    value = Scope.class,
+    elements = @AnnotateWith.Element(name = "proxyMode", enumClass = ScopedProxyMode.class, enums = "TARGET_CLASS")
+)
+<%_ } _%>
 @Lazy
 @Mapper(
     componentModel = "spring",
@@ -124,7 +216,9 @@ public abstract class <%- mapperName %> {
       fqcn,
       simpleName: fqcn.substring(fqcn.lastIndexOf('.') + 1),
     }));
+    const currentMapperFqcn = `${packageName}.${mapperName}`;
     const lowerFirst = value => value ? value.charAt(0).toLowerCase() + value.slice(1) : value;
+    const mapperReceiver = field => field.mapperFqcn === currentMapperFqcn ? 'this' : `this.${field.mapperField}`;
     const specificity = (subtype) => {
       const type = subtype.dtoType || subtype.domainType || subtype.targetType || '';
       const simple = type.substring(type.lastIndexOf('.') + 1);
@@ -179,6 +273,12 @@ _%>
             return this.<%- subtypeMapperField %>.<%- subtypeDtoMethod %>((<%- subtype.domainType %>) unwrapped);
         }
 <%_ } _%>
+<%_ if (dtoFallbackCandidates.length > 0) { _%>
+        <%- baseDtoType %> matchingDto = mapBestMatching<%- baseType %>Dto(unwrapped);
+        if (matchingDto != null) {
+            return matchingDto;
+        }
+<%_ } _%>
         return map<%- baseType %>BaseDto(unwrapped);
     }
 
@@ -206,8 +306,8 @@ _%>
         return instantiate<%- baseType %>DtoFallback(source);
     }
 
-<%_ if (locals.baseResponseMethodAnnotations) { _%>
-  <%_ for (const annotation of baseResponseMethodAnnotations) { _%>
+<%_ if (effectiveBaseResponseMethodAnnotations.length > 0) { _%>
+  <%_ for (const annotation of effectiveBaseResponseMethodAnnotations) { _%>
     <%- annotation %>
   <%_ } _%>
 <%_ } _%>
@@ -308,6 +408,9 @@ _%>
     <%- annotation %>
   <%_ } _%>
 <%_ } _%>
+<%_ if (typeof baseIgnoreNullsOnUpdate !== 'undefined' && baseIgnoreNullsOnUpdate) { _%>
+    @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
+<%_ } _%>
 <%_ if (!shouldPreserveReferenceId) { _%>
     @Mapping(target = "id", ignore = true)
 <%_ } _%>
@@ -322,6 +425,7 @@ _%>
         ? [...variantEffectiveSubtypes, ...subtypes.filter(subtype => !variantEffectiveSubtypes.some(candidate => candidate.domainType === subtype.domainType))]
         : variantEffectiveSubtypes;
       const variantOrderedSubtypes = sortSubtypes(variantSubtypesWithBase);
+      const variantTargetDomainType = variant.targetDomainType || baseDomainType;
   _%>
     public void update<%- baseType %>From<%- variantDtoSimpleName %>(@MappingTarget <%- baseDomainType %> target, <%- variant.dtoType %> source) {
         if (target == null || source == null) {
@@ -329,7 +433,8 @@ _%>
         }
         <%- baseDomainType %> unwrappedTarget = unwrapHibernateProxy(target);
   <%_ for (const subtype of variantOrderedSubtypes) { _%>
-    <%_ if (subtype.isCompatible === false) { continue; }
+    <%_ if ((variant.collectionFields ?? []).length > 0) { continue; }
+        if (subtype.isCompatible === false) { continue; }
         if (variantDtoSimpleName.startsWith(baseType) && subtype.isDtoSubtype === false) { continue; }
         const subtypeDtoType = resolveVariantSubtypeDtoType(variant, subtype);
         const subtypeDtoSimpleName = subtypeDtoType.substring(subtypeDtoType.lastIndexOf('.') + 1);
@@ -345,12 +450,15 @@ _%>
             return;
         }
   <%_ } _%>
-        update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(unwrappedTarget, source);
+        update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(<%- variantTargetDomainType === baseDomainType ? 'unwrappedTarget' : `(${variantTargetDomainType}) unwrappedTarget` %>, source);
         initializeGeneratedFieldsAfter<%- variantDtoSimpleName %>Mapping(unwrappedTarget);
     }
 
   <%_ if (!preserveVariantId(variant)) { _%>
     @Mapping(target = "id", ignore = true)
+  <%_ } _%>
+  <%_ if (variant.ignoreNullsOnUpdate) { _%>
+    @BeanMapping(nullValuePropertyMappingStrategy = NullValuePropertyMappingStrategy.IGNORE)
   <%_ } _%>
   <%_ if (variant.annotations && variant.annotations.length > 0) { _%>
     <%_ for (const annotation of variant.annotations.filter(annotation => annotation.includes('@Mapping'))) { _%>
@@ -358,7 +466,7 @@ _%>
     <%_ } _%>
   <%_ } _%>
     @Named("update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>")
-    protected abstract void update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(@MappingTarget <%- baseDomainType %> target, <%- variant.dtoType %> source);
+    protected abstract void update<%- baseType %>BaseFrom<%- variantDtoSimpleName %>(@MappingTarget <%- variantTargetDomainType %> target, <%- variant.dtoType %> source);
 
 <%_ } _%>
 
@@ -372,6 +480,268 @@ _%>
     <%_ } _%>
   <%_ } _%>
     public abstract <%- variant.dtoType %> <%- variantMappingMethodName %>(<%- responseSourceType %> source);
+
+<%_ } _%>
+<%_ for (const candidate of dtoFallbackCandidates) { _%>
+  <%_ for (const annotation of effectiveBaseResponseMethodAnnotations) { _%>
+    <%- annotation %>
+  <%_ } _%>
+    @Named("<%- candidate.fallbackMapMethodName %>")
+    protected abstract <%- candidate.dtoType %> <%- candidate.fallbackMapMethodName %>(<%- baseDomainType %> source);
+
+<%_ } _%>
+<%_ if (hasResponseCollectionMappings) { _%>
+  <%_ const responseCollectionFieldsByMethod = new Map();
+      for (const mapping of responseCollectionMappings) {
+        for (const field of mapping.fields) {
+          if (field.responseListMapMethod && field.responseMapMethod) {
+            responseCollectionFieldsByMethod.set(`${field.responseListMapMethod}:${field.mapperFqcn}:${field.elementDomainType}:${field.elementDtoType}`, field);
+          }
+        }
+      }
+  _%>
+  <%_ for (const field of responseCollectionFieldsByMethod.values()) { _%>
+    @Named("<%- mapperName %>.<%- field.responseListMapMethod %>")
+    protected <%- field.responseCollectionDtoType || `List<${field.elementDtoType}>` %> <%- field.responseListMapMethod %>(List<<%- field.elementDomainType %>> source) {
+        if (source == null) {
+            return null;
+        }
+    <%_ if (field.responseCollectionDtoType) { _%>
+        <%- field.responseCollectionDtoType %> target = new <%- field.responseCollectionDtoType %>();
+        target.addAll(source.stream()
+            .map(<%- mapperReceiver(field) %>::<%- field.responseMapMethod %>)
+            .toList());
+        return target;
+    <%_ } else { _%>
+        return source.stream()
+            .map(<%- mapperReceiver(field) %>::<%- field.responseMapMethod %>)
+            .toList();
+    <%_ } _%>
+    }
+
+  <%_ } _%>
+<%_ } _%>
+<%_ if (hasCollectionMerges) { _%>
+  <%_ const inlineCollectionFieldsByMethod = new Map();
+      for (const mapping of requestCollectionMappings) {
+        for (const field of mapping.fields) {
+          if (field.useInlineElementMapping && field.inlineMapMethod && field.inlineUpdateMethod) {
+            inlineCollectionFieldsByMethod.set(`${field.inlineMapMethod}:${field.inlineUpdateMethod}`, field);
+          }
+        }
+      }
+  _%>
+  <%_ for (const field of inlineCollectionFieldsByMethod.values()) { _%>
+    <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%- annotation %>
+    <%_ } _%>
+    @Named("<%- mapperName %>.<%- field.inlineMapMethod %>")
+    protected abstract <%- field.elementDomainType %> <%- field.inlineMapMethod %>(<%- field.elementDtoType %> source);
+
+    <%_ for (const annotation of field.inlineMappingAnnotations ?? []) { _%>
+    <%- annotation %>
+    <%_ } _%>
+    @Named("<%- mapperName %>.<%- field.inlineUpdateMethod %>")
+    protected abstract void <%- field.inlineUpdateMethod %>(@MappingTarget <%- field.elementDomainType %> target, <%- field.elementDtoType %> source);
+
+  <%_ } _%>
+  <%_ for (const mapping of requestCollectionMappings) { _%>
+    @AfterMapping
+    protected void mergeCollectionsFrom<%- mapping.sourceSimpleName %>(@MappingTarget <%- mapping.targetType %> target, <%- mapping.sourceType %> source) {
+        if (source == null) {
+            return;
+        }
+    <%_ for (const field of mapping.fields) { _%>
+      <%_ const existingKeyExpressions = field.existingKeyExpressions ?? field.keyExpressions ?? []; _%>
+      <%_ const incomingKeyExpressions = field.incomingKeyExpressions ?? []; _%>
+      <%_ const hasKeyExpressions = existingKeyExpressions.length > 0 || incomingKeyExpressions.length > 0; _%>
+      <%_ if (hasKeyExpressions) { _%>
+        Function<<%- field.elementDomainType %>, Object> <%- field.targetField %>ExistingKey = item -> {
+        <%_ if (existingKeyExpressions.length > 0) { _%>
+            Object key = null;
+          <%_ for (const expression of existingKeyExpressions) { _%>
+            if (key == null) {
+                Object candidateKey = <%- expression.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
+                }
+            }
+          <%_ } _%>
+            return key;
+        <%_ } else { _%>
+            return null;
+        <%_ } _%>
+        };
+        Function<<%- field.elementDtoType %>, Object> <%- field.targetField %>IncomingKey = item -> {
+        <%_ if (incomingKeyExpressions.length > 0) { _%>
+            Object key = null;
+          <%_ for (const expression of incomingKeyExpressions) { _%>
+            if (key == null) {
+                Object candidateKey = <%- expression.replace(/\{var\}/g, 'item') %>;
+                if (candidateKey != null) {
+                    key = candidateKey;
+                }
+            }
+          <%_ } _%>
+            return key;
+        <%_ } else { _%>
+            return null;
+        <%_ } _%>
+        };
+        BiConsumer<<%- field.elementDomainType %>, <%- field.elementDtoType %>> <%- field.targetField %>Guard =
+            (existingItem, incomingItem) -> {
+                Object existingKey = <%- field.targetField %>ExistingKey.apply(existingItem);
+                Object incomingKey = <%- field.targetField %>IncomingKey.apply(incomingItem);
+                if (existingKey != null && incomingKey != null && !existingKey.equals(incomingKey)) {
+                    throw new IllegalArgumentException("Identifier for <%- field.targetField %> is immutable");
+                }
+            };
+        Consumer<<%- field.elementDomainType %>> <%- field.targetField %>Initializer =
+        <%_ if (field.hasId && !field.preserveNewItemId) { _%>
+            item -> item.setId(null);
+        <%_ } else { _%>
+            null;
+        <%_ } _%>
+        ;
+        List<<%- field.elementDomainType %>> merged<%- field.targetGetter %> = mergeCollection(
+            target.get<%- field.targetGetter %>(),
+            source.get<%- field.sourceGetter %>(),
+            <%- field.targetField %>ExistingKey,
+            <%- field.targetField %>IncomingKey,
+            <%- field.targetField %>Guard,
+            (existingItem, incomingItem) -> <% if (field.useInlineElementMapping) { %>this.<%- field.inlineUpdateMethod %>(existingItem, incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.updateMethod %>(existingItem, incomingItem)<% } %>,
+            incomingItem -> <% if (field.useInlineElementMapping) { %>this.<%- field.inlineMapMethod %>(incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.mapMethod %>(incomingItem)<% } %>,
+            <%- field.targetField %>Initializer
+        );
+        target.<%- field.targetSetter %>(merged<%- field.targetGetter %>);
+      <%_ } else { _%>
+        if (source.get<%- field.sourceGetter %>() != null) {
+            List<<%- field.elementDomainType %>> replaced<%- field.targetGetter %> = new ArrayList<>();
+            for (<%- field.elementDtoType %> incomingItem : source.get<%- field.sourceGetter %>()) {
+                if (incomingItem != null) {
+                    <%- field.elementDomainType %> mappedItem = <% if (field.useInlineElementMapping) { %>this.<%- field.inlineMapMethod %>(incomingItem)<% } else { %><%- mapperReceiver(field) %>.<%- field.mapMethod %>(incomingItem)<% } %>;
+                    if (mappedItem != null) {
+        <%_ if (field.hasId && !field.preserveNewItemId) { _%>
+                        mappedItem.setId(null);
+        <%_ } _%>
+                        replaced<%- field.targetGetter %>.add(mappedItem);
+                    }
+                }
+            }
+            target.<%- field.targetSetter %>(replaced<%- field.targetGetter %>);
+        <%_ if (!mapping.ignoreNullsOnUpdate) { _%>
+        } else {
+            target.<%- field.targetSetter %>(null);
+        <%_ } _%>
+        }
+      <%_ } _%>
+    <%_ } _%>
+    }
+
+  <%_ } _%>
+
+    protected <D, S> List<D> mergeCollection(
+        List<D> current,
+        List<S> incoming,
+        Function<D, Object> existingKeyResolver,
+        Function<S, Object> incomingKeyResolver,
+        BiConsumer<D, S> immutableGuard,
+        BiConsumer<D, S> updater,
+        Function<S, D> mapper,
+        Consumer<D> newItemInitializer
+    ) {
+        List<D> existingItems = current != null ? new ArrayList<>(current) : new ArrayList<>();
+        if (incoming == null) {
+            return existingItems;
+        }
+        final boolean hasKeyResolver = existingKeyResolver != null || incomingKeyResolver != null;
+        boolean hasNonNullKey = false;
+        if (existingKeyResolver != null) {
+            for (D item : existingItems) {
+                if (existingKeyResolver.apply(item) != null) {
+                    hasNonNullKey = true;
+                    break;
+                }
+            }
+        }
+        if (!hasNonNullKey && incomingKeyResolver != null) {
+            for (S incomingItem : incoming) {
+                if (incomingKeyResolver.apply(incomingItem) != null) {
+                    hasNonNullKey = true;
+                    break;
+                }
+            }
+        }
+        if (!hasKeyResolver || !hasNonNullKey) {
+            List<D> merged = new ArrayList<>();
+            int index = 0;
+            for (S incomingItem : incoming) {
+                if (index < existingItems.size()) {
+                    D existingItem = existingItems.get(index);
+                    if (immutableGuard != null) {
+                        immutableGuard.accept(existingItem, incomingItem);
+                    }
+                    if (updater != null) {
+                        updater.accept(existingItem, incomingItem);
+                    }
+                    merged.add(existingItem);
+                } else if (mapper != null) {
+                    D mappedItem = mapper.apply(incomingItem);
+                    if (mappedItem != null) {
+                        if (newItemInitializer != null) {
+                            newItemInitializer.accept(mappedItem);
+                        }
+                        merged.add(mappedItem);
+                    }
+                }
+                index++;
+            }
+            return merged;
+        }
+        Map<Object, D> currentByKey = new LinkedHashMap<>();
+        if (existingKeyResolver != null) {
+            for (D item : existingItems) {
+                Object key = existingKeyResolver.apply(item);
+                if (key != null && !currentByKey.containsKey(key)) {
+                    currentByKey.put(key, item);
+                }
+            }
+        }
+        List<D> merged = new ArrayList<>();
+        Set<Object> seenKeys = new LinkedHashSet<>();
+        for (S incomingItem : incoming) {
+            D mappedItem = null;
+            Object incomingKey = incomingKeyResolver != null ? incomingKeyResolver.apply(incomingItem) : null;
+            if (incomingKey == null && existingKeyResolver != null && mapper != null) {
+                mappedItem = mapper.apply(incomingItem);
+                incomingKey = mappedItem != null ? existingKeyResolver.apply(mappedItem) : null;
+            }
+            if (incomingKey != null && !seenKeys.add(incomingKey)) {
+                continue;
+            }
+            if (incomingKey != null && currentByKey.containsKey(incomingKey)) {
+                D currentItem = currentByKey.get(incomingKey);
+                if (immutableGuard != null) {
+                    immutableGuard.accept(currentItem, incomingItem);
+                }
+                if (updater != null) {
+                    updater.accept(currentItem, incomingItem);
+                }
+                merged.add(currentItem);
+                continue;
+            }
+            if (mappedItem == null && mapper != null) {
+                mappedItem = mapper.apply(incomingItem);
+            }
+            if (mappedItem != null) {
+                if (newItemInitializer != null) {
+                    newItemInitializer.accept(mappedItem);
+                }
+                merged.add(mappedItem);
+            }
+        }
+        return merged;
+    }
 
 <%_ } _%>
 
@@ -410,7 +780,7 @@ _%>
       const targetMapperField = targetMapperSimpleName ? lowerFirst(targetMapperSimpleName) : undefined;
       const canDelegateToConcreteMapper = Boolean(
         targetMapperSimpleName
-        && targetMapperField
+          && targetMapperField
           && mapperFields.some(field => field.simpleName === targetMapperSimpleName)
           && targetDomainType !== baseDomainType
           && variantDtoSimpleName === variant.targetDomainSimpleName
@@ -532,8 +902,8 @@ _%>
         return map<%- baseType %>CanonicalBaseDto(unwrapHibernateProxy(source));
     }
 
-  <%_ if (locals.baseResponseMethodAnnotations) { _%>
-    <%_ for (const annotation of baseResponseMethodAnnotations) { _%>
+  <%_ if (effectiveBaseResponseMethodAnnotations.length > 0) { _%>
+    <%_ for (const annotation of effectiveBaseResponseMethodAnnotations) { _%>
     <%- annotation %>
     <%_ } _%>
   <%_ } _%>
@@ -628,21 +998,13 @@ _%>
         if (baseCandidate != null) {
             return baseCandidate;
         }
-<%_ if (dtoFallbackTypes.length > 0) { _%>
+<%_ if (dtoFallbackCandidates.length > 0) { _%>
         <%- baseDtoType %> bestSubtypeCandidate = instantiateBestMatching<%- baseType %>Dto(source);
         if (bestSubtypeCandidate != null) {
             return bestSubtypeCandidate;
         }
   <%_ if (baseDtoIsCompositionInterface) { _%>
         return null;
-  <%_ } else { _%>
-        <%- baseDtoType %> subtypeCandidate;
-    <%_ for (const dtoType of dtoFallbackTypes) { _%>
-        subtypeCandidate = tryInstantiate(<%- dtoType %>.class);
-        if (subtypeCandidate != null && <%- baseDtoType %>.class.isAssignableFrom(subtypeCandidate.getClass())) {
-            return subtypeCandidate;
-        }
-    <%_ } _%>
   <%_ } _%>
 <%_ } _%>
 <%_ if (!baseDtoIsCompositionInterface) { _%>
@@ -650,58 +1012,101 @@ _%>
 <%_ } _%>
     }
 
-<%_ if (dtoFallbackTypes.length > 0) { _%>
+<%_ if (dtoFallbackCandidates.length > 0) { _%>
+    private <%- baseDtoType %> mapBestMatching<%- baseType %>Dto(<%- baseDomainType %> source) {
+        <%- baseDtoType %> matchingCandidate = instantiateBestMatching<%- baseType %>Dto(source);
+        if (matchingCandidate == null) {
+            return null;
+        }
+  <%_ for (const candidate of dtoFallbackCandidates) { _%>
+        if (matchingCandidate instanceof <%- candidate.dtoType %>) {
+            return <%- candidate.fallbackMapMethodName %>(source);
+        }
+  <%_ } _%>
+        return null;
+    }
+
     private <%- baseDtoType %> instantiateBestMatching<%- baseType %>Dto(<%- baseDomainType %> source) {
         if (source == null) {
             return null;
         }
         <%- baseDtoType %> bestCandidate = null;
         int bestScore = 0;
+        boolean bestCandidateAmbiguous = false;
+        <%- baseDtoType %> fallbackCandidate = null;
+        boolean fallbackCandidateAmbiguous = false;
         <%- baseDtoType %> subtypeCandidate;
         int subtypeScore;
-  <%_ for (const dtoType of dtoFallbackTypes) { _%>
-        subtypeCandidate = tryInstantiate(<%- dtoType %>.class);
-        if (subtypeCandidate != null && <%- baseDtoType %>.class.isAssignableFrom(subtypeCandidate.getClass())) {
-            subtypeScore = countMappableNonNullProperties(source, subtypeCandidate.getClass());
+  <%# eslint-disable-next-line @stylistic/max-statements-per-line -%>
+  <%_ for (const candidate of dtoFallbackCandidates) { const requiredPropertyAccessors = candidate.requiredPropertyAccessors ?? []; const distinguishingRequiredPropertyAccessors = candidate.distinguishingRequiredPropertyAccessors ?? []; const requiredPropertyArguments = requiredPropertyAccessors.map(accessor => `, ${JSON.stringify(accessor)}`).join(''); const distinguishingRequiredPropertyArguments = distinguishingRequiredPropertyAccessors.map(accessor => `, ${JSON.stringify(accessor)}`).join(''); const distinguishingRequiredCondition = distinguishingRequiredPropertyAccessors.length > 0 ? ` &&\n            hasAllNonNullProperties(source${distinguishingRequiredPropertyArguments})` : ''; _%>
+        subtypeCandidate = tryInstantiate(<%- candidate.dtoType %>.class);
+        if (subtypeCandidate != null &&
+            <%- baseDtoType %>.class.isAssignableFrom(subtypeCandidate.getClass()) &&
+            hasAllNonNullProperties(source<%- requiredPropertyArguments %>)<%- distinguishingRequiredCondition %>
+        ) {
+    <%_ if (distinguishingRequiredPropertyAccessors.length > 0) { _%>
+            subtypeScore = countMappableNonNullProperties(
+                source,
+                subtypeCandidate.getClass()<%- distinguishingRequiredPropertyArguments %>
+            );
             if (subtypeScore > bestScore) {
                 bestScore = subtypeScore;
                 bestCandidate = subtypeCandidate;
+                bestCandidateAmbiguous = false;
+            } else if (subtypeScore == bestScore) {
+                bestCandidateAmbiguous = true;
             }
+    <%_ } else { _%>
+            if (fallbackCandidate == null) {
+                fallbackCandidate = subtypeCandidate;
+            } else {
+                fallbackCandidateAmbiguous = true;
+            }
+    <%_ } _%>
         }
   <%_ } _%>
-        return bestCandidate;
+        if (bestCandidateAmbiguous) {
+            return null;
+        }
+        if (bestCandidate != null) {
+            return bestCandidate;
+        }
+        return fallbackCandidateAmbiguous ? null : fallbackCandidate;
     }
 
-    private int countMappableNonNullProperties(Object source, Class<?> targetType) {
-        int score = 0;
-        for (java.lang.reflect.Method sourceMethod : source.getClass().getMethods()) {
-            if (sourceMethod.getParameterCount() != 0 || sourceMethod.getDeclaringClass() == Object.class) {
-                continue;
+    private boolean hasAllNonNullProperties(Object source, String... propertySuffixes) {
+        for (String propertySuffix : propertySuffixes) {
+            if (!hasNonNullReadableProperty(source, propertySuffix)) {
+                return false;
             }
-            String propertySuffix = beanPropertySuffix(sourceMethod.getName());
-            if (propertySuffix == null || "Class".equals(propertySuffix)) {
-                continue;
-            }
+        }
+        return true;
+    }
+
+    private boolean hasNonNullReadableProperty(Object source, String propertySuffix) {
+        for (String prefix : new String[] { "get", "is" }) {
             try {
-                Object value = sourceMethod.invoke(source);
-                if (value != null && hasWritableProperty(targetType, propertySuffix)) {
-                    score++;
+                java.lang.reflect.Method accessor = source.getClass().getMethod(prefix + propertySuffix);
+                if (accessor.getParameterCount() == 0) {
+                    return accessor.invoke(source) != null;
                 }
-            } catch (ReflectiveOperationException ignored) {
-                // Ignore properties that cannot be read reflectively.
+            } catch (NoSuchMethodException ignored) {
+                // Try the other JavaBean accessor prefix.
+            } catch (ReflectiveOperationException ex) {
+                throw new IllegalStateException("Unable to read property " + propertySuffix, ex);
+            }
+        }
+        return false;
+    }
+
+    private int countMappableNonNullProperties(Object source, Class<?> targetType, String... propertySuffixes) {
+        int score = 0;
+        for (String propertySuffix : propertySuffixes) {
+            if (hasNonNullReadableProperty(source, propertySuffix) && hasWritableProperty(targetType, propertySuffix)) {
+                score++;
             }
         }
         return score;
-    }
-
-    private String beanPropertySuffix(String methodName) {
-        if (methodName.startsWith("get") && methodName.length() > 3) {
-            return methodName.substring(3);
-        }
-        if (methodName.startsWith("is") && methodName.length() > 2) {
-            return methodName.substring(2);
-        }
-        return null;
     }
 
     private boolean hasWritableProperty(Class<?> targetType, String propertySuffix) {

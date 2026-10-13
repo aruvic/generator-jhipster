@@ -18,12 +18,7 @@ function validFormat(value, format) {
   if (format === 'email') return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value);
   if (format === 'uuid') return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   if (format === 'hostname') {
-    return (
-      value.length <= 253 &&
-      value
-        .split('.')
-        .every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
-    );
+    return value.length <= 253 && value.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label));
   }
   if (format === 'uri' || format === 'url') {
     try {

@@ -512,7 +512,7 @@ describe('OpenAPI delegate generator', () => {
     }
   });
 
-  it('uses the persistence mapper when an operation response DTO differs from the persisted entity', async () => {
+  it('maps post-save response DTOs without applying missing-resource validation', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
     try {
       const swaggerDir = join(tempDir, 'src/main/resources/swagger');
@@ -691,13 +691,20 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain(
         'List<ServiceRES> body = mapValidResponseBodies(entities, this.mapper::toServiceRES, List.of(new RequiredPropertyRule("", "@type", false), new RequiredPropertyRule("", "href", false), new RequiredPropertyRule("", "id", false)));',
       );
+      const mapResponseBody = output.slice(
+        output.indexOf('private <T> T mapResponseBody(Supplier<T> mapper)'),
+        output.indexOf('private <T> void requireValidResponseBody(T body)'),
+      );
+      expect(mapResponseBody).toContain('return mapper.get();');
+      expect(mapResponseBody).not.toContain('requireValidResponseBody');
+      expect(output).toContain('return isValidResponseBody(body) ? body : null;');
       expect(output).not.toContain('this.serviceResMapper.toServiceResDto(saved)');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it('resolves non-numeric path identifiers through matching scalar entity fields', async () => {
+  it('prunes omitted complex persistence state before validating a Void update payload', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
     try {
       const swaggerDir = join(tempDir, 'src/main/resources/swagger');
@@ -749,6 +756,22 @@ describe('OpenAPI delegate generator', () => {
           `      type: object\n` +
           `      properties:\n` +
           `        carrierBookingRequestReference:\n` +
+          `          type: string\n` +
+          `        placeOfBLIssue:\n` +
+          `          $ref: '#/components/schemas/PlaceOfBLIssue'\n` +
+          `    PlaceOfBLIssue:\n` +
+          `      oneOf:\n` +
+          `        - $ref: '#/components/schemas/CodedPlace'\n` +
+          `        - $ref: '#/components/schemas/NamedPlace'\n` +
+          `    CodedPlace:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        code:\n` +
+          `          type: string\n` +
+          `    NamedPlace:\n` +
+          `      type: object\n` +
+          `      properties:\n` +
+          `        name:\n` +
           `          type: string\n`,
       );
 
@@ -827,6 +850,19 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('public ResponseEntity<Void> updateBooking(');
       expect(output).toContain('UpdateBooking updateBooking)');
       expect(output).toContain('return ResponseEntity.status(successStatus).body((Void) null);');
+      expect(output).toContain('JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> existing));');
+      expect(output).toContain('JsonNode mappingNode = pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat);');
+      expect(output).toContain('convertAndValidate(mappingNode, UpdateBooking.class);');
+      expect(output).toContain('UpdateBooking mergedPayload = convertValue(mappingNode, UpdateBooking.class);');
+      expect(output).not.toContain('convertAndValidate(payloadNode, UpdateBooking.class);');
+      expect(output.indexOf('JsonNode mappingNode = pruneUnpatchedComplexFields')).toBeLessThan(
+        output.indexOf('convertAndValidate(mappingNode, UpdateBooking.class);'),
+      );
+      const pruningHelper = output.slice(
+        output.indexOf('private JsonNode pruneUnpatchedComplexFields('),
+        output.indexOf('private JsonNode preservePatchedArrayItemValues('),
+      );
+      expect(pruningHelper).toContain('if (!patchedFields.contains(entry.getKey()) && isComplexPatchField(entry.getValue()))');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -935,7 +971,7 @@ describe('OpenAPI delegate generator', () => {
     }
   });
 
-  it('places required request bodies before optional parameters when generated delegate signatures are not available yet', async () => {
+  it('preserves the uniquely closest request reference when initializing a create response reference', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
     try {
       const swaggerDir = join(tempDir, 'src/main/resources/swagger');
@@ -970,14 +1006,16 @@ describe('OpenAPI delegate generator', () => {
           `    CreateBooking:\n` +
           `      type: object\n` +
           `      properties:\n` +
-          `        carrierBookingRequestReference:\n` +
+          `        bookingChannelReference:\n` +
+          `          type: string\n` +
+          `        serviceContractReference:\n` +
           `          type: string\n` +
           `    CreateBookingResponse:\n` +
           `      type: object\n` +
           `      required:\n` +
-          `        - bookingReference\n` +
+          `        - carrierBookingRequestReference\n` +
           `      properties:\n` +
-          `        bookingReference:\n` +
+          `        carrierBookingRequestReference:\n` +
           `          type: string\n` +
           `          example: fixed-documentation-example\n`,
       );
@@ -1014,6 +1052,15 @@ describe('OpenAPI delegate generator', () => {
               entityNameCapitalized: 'Booking',
               entityNamePlural: 'Bookings',
               entityNameKebabCase: 'booking',
+              fields: [
+                { fieldName: 'bookingChannelReference', fieldType: 'String' },
+                { fieldName: 'serviceContractReference', fieldType: 'String' },
+                {
+                  fieldName: 'carrierBookingRequestReference',
+                  fieldType: 'String',
+                  fieldValidateRules: ['required'],
+                },
+              ],
             },
           },
           {
@@ -1050,14 +1097,21 @@ describe('OpenAPI delegate generator', () => {
       const signature = output.slice(signatureStart, output.indexOf(') {', signatureStart));
       expect(signature.indexOf('CreateBooking createBooking')).toBeLessThan(signature.indexOf('String apiVersion'));
       expect(output).toContain('validatePayload(createBooking);');
-      expect(output).toContain('entity.setBookingReference(java.util.UUID.randomUUID().toString());');
-      expect(output).not.toContain('entity.setBookingReference("fixed-documentation-example");');
+      const identityAssignment =
+        'entity.setCarrierBookingRequestReference(entity.getBookingChannelReference() != null ? entity.getBookingChannelReference() : java.util.UUID.randomUUID().toString());';
+      expect(output).toContain(identityAssignment);
+      expect(output.indexOf(identityAssignment)).toBeLessThan(output.indexOf('saved = this.repository.saveAndFlush(entity);'));
+      const responseMapping =
+        'CreateBookingResponse responseBody = mapResponseBody(() -> this.createBookingResponseMapper.toCreateBookingResponse(responseEntity));';
+      expect(output).toContain(responseMapping);
+      expect(output.indexOf('saved = this.repository.saveAndFlush(entity);')).toBeLessThan(output.indexOf(responseMapping));
+      expect(output).not.toContain('entity.setCarrierBookingRequestReference("fixed-documentation-example");');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it('maps create and update operations using the expected MapStruct method names', async () => {
+  it('calls the public polymorphic PATCH mapper API instead of its protected helper', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'jhipster-openapi-delegate-'));
     try {
       const swaggerDir = join(tempDir, 'src/main/resources/swagger');
@@ -1146,6 +1200,21 @@ describe('OpenAPI delegate generator', () => {
           `}\n`,
       );
 
+      const mapperDir = join(tempDir, 'src/main/java/com/example/web/api/mapper');
+      mkdirSync(mapperDir, { recursive: true });
+      writeFileSync(
+        join(mapperDir, 'ReferenceMapper.java'),
+        `package com.example.web.api.mapper;\n\n` +
+          `public abstract class ReferenceMapper {\n` +
+          `    public abstract com.example.domain.Reference toReferenceEntity(com.example.service.api.dto.Reference source);\n` +
+          `    public abstract com.example.service.api.dto.Reference toReferenceDto(com.example.domain.Reference source);\n` +
+          `    protected abstract void updateReferenceFromReferenceBase(@org.mapstruct.MappingTarget com.example.domain.Reference target, com.example.service.api.dto.Reference source);\n` +
+          `    public void updateReferenceFromReference(@org.mapstruct.MappingTarget com.example.domain.Reference target, com.example.service.api.dto.Reference source) {\n` +
+          `        updateReferenceFromReferenceBase(target, source);\n` +
+          `    }\n` +
+          `}\n`,
+      );
+
       const writes = new Map<string, string>();
       const currentDir = fileURLToPath(new URL('.', import.meta.url));
       const rootDir = resolve(currentDir, '../../..');
@@ -1212,13 +1281,12 @@ describe('OpenAPI delegate generator', () => {
         'JsonNode baseNode = normalizePatchDiscriminators(toJsonObject(() -> this.mapper.toReferenceDto(existing)));',
       );
       expect(output).toContain('JsonNode payloadNode = removePropertiesNotDeserializableBy(patchedNode, Reference.class);');
-      expect(output).toContain('convertAndValidate(payloadNode, Reference.class);');
+      expect(output).toContain('JsonNode mappingNode = pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat);');
+      expect(output).toContain('convertAndValidate(mappingNode, Reference.class);');
       expect(output).toContain(
         'JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);',
       );
-      expect(output).toContain(
-        'Reference mergedPayload = convertValue(pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat), Reference.class);',
-      );
+      expect(output).toContain('Reference mergedPayload = convertValue(mappingNode, Reference.class);');
       expect(output).toContain('private JsonNode removePropertiesNotDeserializableBy(JsonNode node, Class<?> targetType)');
       expect(output).toContain('validatePayload(mergedPayload);');
       expect(output).toContain(
@@ -1230,6 +1298,8 @@ describe('OpenAPI delegate generator', () => {
       expect(output).toContain('private void validateRequiredProperties(Object payload, List<RequiredPropertyRule> rules)');
       expect(output).toContain('Missing required payload field(s): ');
       expect(output).toContain('Map<String, Object> originalIdentifiers = snapshotIdentifierValues(existing);');
+      expect(output).toContain('this.mapper.updateReferenceFromReference(existing, mergedPayload);');
+      expect(output).not.toContain('this.mapper.updateReferenceFromReferenceBase(existing, mergedPayload);');
       expect(output).toContain('restoreIdentifierValues(existing, originalIdentifiers);');
       expect(output).toContain('private Map<String, Object> snapshotIdentifierValues(Object source)');
       expect(output).toContain('private void restoreIdentifierValues(Object target, Map<String, Object> values)');

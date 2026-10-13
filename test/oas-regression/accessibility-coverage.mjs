@@ -170,6 +170,18 @@ export async function expandAllNestedAccordions(root, { settleMs = 50, maxPasses
   return { observed, expanded };
 }
 
+export async function clearRequiredValidationControl(control, tagName) {
+  if (String(tagName).toLowerCase() === 'select') {
+    await control.evaluate(element => {
+      element.selectedIndex = -1;
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  } else {
+    await control.fill('');
+  }
+  await control.blur();
+}
+
 export function requiredValidationResult(observation) {
   if (!observation) return { applicable: false, passed: true };
   const passed = observation.browserInvalid && observation.submitDisabled;

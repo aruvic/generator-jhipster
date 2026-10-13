@@ -12,22 +12,31 @@ const storagePath =
   options.storage ??
   process.env.FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE ??
   path.join(process.env.OUTPUT_DIR ?? '/tmp/generator-jhipster-regression', 'form-crud-reference-pickers.json');
+const healthPath = routePath(
+  options.healthPath ?? process.env.FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HEALTH_PATH ?? '/management/health',
+  'health path',
+);
+const collectionPath = routePath(
+  options.collectionPath ?? process.env.FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_COLLECTION_PATH ?? '/api/form-crud-reference-pickers',
+  'collection path',
+);
+const itemPathPrefix = `${collectionPath}/`;
 
 fs.mkdirSync(path.dirname(storagePath), { recursive: true });
 
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? `${host}:${port}`}`);
-    if (url.pathname === '/management/health') {
+    if (url.pathname === healthPath) {
       sendJson(response, 200, { status: 'UP' });
       return;
     }
-    if (url.pathname === '/api/form-crud-reference-pickers') {
+    if (url.pathname === collectionPath) {
       await handleCollection(request, response);
       return;
     }
-    if (url.pathname.startsWith('/api/form-crud-reference-pickers/')) {
-      await handleItem(request, response, decodeURIComponent(url.pathname.slice('/api/form-crud-reference-pickers/'.length)));
+    if (url.pathname.startsWith(itemPathPrefix)) {
+      await handleItem(request, response, decodeURIComponent(url.pathname.slice(itemPathPrefix.length)));
       return;
     }
     sendJson(response, 404, problem(404, 'Not Found', `No route for ${request.method} ${url.pathname}`));
@@ -39,6 +48,7 @@ const server = http.createServer(async (request, response) => {
 
 server.listen(port, host, () => {
   process.stdout.write(`Form CRUD reference picker config service listening at http://${host}:${port}\n`);
+  process.stdout.write(`Collection: ${collectionPath}\n`);
   process.stdout.write(`Storage: ${storagePath}\n`);
 });
 
@@ -209,8 +219,18 @@ function parseArgs(args) {
     if (arg === '--host') parsed.host = args[++index];
     else if (arg === '--port') parsed.port = args[++index];
     else if (arg === '--storage') parsed.storage = args[++index];
+    else if (arg === '--health-path') parsed.healthPath = args[++index];
+    else if (arg === '--collection-path') parsed.collectionPath = args[++index];
   }
   return parsed;
+}
+
+function routePath(value, label) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized.startsWith('/') || normalized === '/' || normalized.endsWith('/')) {
+    throw new Error(`${label} must start with "/" and must not be "/" or end with "/"`);
+  }
+  return normalized;
 }
 
 function positiveInteger(value, fallback) {

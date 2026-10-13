@@ -3,8 +3,14 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
-import { captureResponseBodyForAction } from './playwright-response-capture.mjs';
+import { captureSuccessfulResponseJsonForAction } from './playwright-response-capture.mjs';
+import {
+  findReferencePickerConfigBySemanticKey,
+  requireReferencePickerConfig,
+  requireReferencePickerIdentityMapping,
+} from './reference-picker-admin-state.mjs';
 import { assertMappedReference, assertPersistedReference, valueAtPath } from './reference-picker-mapping.mjs';
+import { buildReferencePickerProofReport } from './reference-picker-proof.mjs';
 import { loadReferencePickerTopology } from './reference-picker-topology.mjs';
 
 const redactionMarker = '[REDACTED]';
@@ -78,11 +84,15 @@ if (!topologyFile || !outputDir) {
 const topology = loadReferencePickerTopology(topologyFile);
 const sourceSeedResponseFile = process.env.REFERENCE_PICKER_SOURCE_SEED_RESPONSE;
 const targetSeedResponseFile = process.env.REFERENCE_PICKER_TARGET_SEED_RESPONSE;
+const sourceTokenFile = process.env.REFERENCE_PICKER_SOURCE_TOKEN_FILE;
 const targetTokenFile = process.env.REFERENCE_PICKER_TARGET_TOKEN_FILE;
+const preconditionsFile = process.env.REFERENCE_PICKER_PRECONDITIONS_FILE;
 for (const [label, filename] of [
   ['REFERENCE_PICKER_SOURCE_SEED_RESPONSE', sourceSeedResponseFile],
   ['REFERENCE_PICKER_TARGET_SEED_RESPONSE', targetSeedResponseFile],
+  ['REFERENCE_PICKER_SOURCE_TOKEN_FILE', sourceTokenFile],
   ['REFERENCE_PICKER_TARGET_TOKEN_FILE', targetTokenFile],
+  ['REFERENCE_PICKER_PRECONDITIONS_FILE', preconditionsFile],
 ]) {
   if (!filename || !fs.existsSync(filename)) {
     throw new Error(`${label} must name an existing file`);
@@ -95,8 +105,10 @@ const timeoutMs = Number.parseInt(process.env.FORM_CRUD_GUI_TIMEOUT_MS ?? '30000
 const headless = process.env.FORM_CRUD_GUI_HEADLESS !== 'false';
 const sourceSeedResponse = JSON.parse(fs.readFileSync(sourceSeedResponseFile, 'utf8'));
 const targetSeedResponse = JSON.parse(fs.readFileSync(targetSeedResponseFile, 'utf8'));
+const sourceToken = fs.readFileSync(sourceTokenFile, 'utf8').trim();
 const targetToken = fs.readFileSync(targetTokenFile, 'utf8').trim();
-const sensitiveValues = [targetToken];
+const preconditions = JSON.parse(fs.readFileSync(preconditionsFile, 'utf8'));
+const sensitiveValues = [sourceToken, targetToken];
 const sourceIdentity = valueAtPath(sourceSeedResponse, topology.source.identityPath);
 const targetIdentity = valueAtPath(targetSeedResponse, topology.target.identityPath);
 const sourceItemPath = topology.verification.sourceItemPathTemplate.replace('{id}', encodeURIComponent(String(sourceIdentity)));
@@ -123,6 +135,15 @@ const result = {
     requested: topology.picker,
     saved: undefined,
     reloaded: false,
+    service: {
+      name: topology.configurationService.name,
+      port: topology.configurationService.port,
+      url: joinUrl(topology.configurationService.baseUrl, topology.configurationService.collectionPath),
+    },
+    save: undefined,
+    externalReadback: undefined,
+    sourceReadback: undefined,
+    identityMapping: undefined,
   },
   field: {
     operationId: topology.picker.formId,
@@ -141,6 +162,7 @@ const result = {
 
 let browser;
 let authenticated = false;
+let targetAuthorizationInjected = false;
 
 function joinUrl(baseUrl, suffix) {
   return `${baseUrl.replace(/\/+$/, '')}/${suffix.replace(/^\/+/, '')}`;
@@ -267,9 +289,34 @@ async function authenticatedFetch(page, requestPath, options = {}) {
   );
 }
 
+async function authenticatedServiceFetch(baseUrl, requestPath, token, options = {}) {
+  return serviceFetch(baseUrl, requestPath, { ...options, token });
+}
+
+async function serviceFetch(baseUrl, requestPath, options = {}) {
+  const url = new URL(requestPath, baseUrl);
+  const response = await fetch(url, {
+    method: options.method ?? 'GET',
+    headers: {
+      Accept: 'application/json',
+      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+  });
+  const text = await response.text();
+  let body;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = text;
+  }
+  return { status: response.status, body, url: response.url };
+}
+
 async function debugState(page) {
-  await page.waitForFunction(() => Boolean(window.__formsDebug?.formCrud), undefined, { timeout: timeoutMs });
-  return page.evaluate(() => window.__formsDebug.formCrud());
+  await page.waitForFunction(() => Boolean(globalThis.window.__formsDebug?.formCrud), undefined, { timeout: timeoutMs });
+  return page.evaluate(() => globalThis.window.__formsDebug.formCrud());
 }
 
 async function expandAccordions(root) {
@@ -292,7 +339,7 @@ async function expandAccordions(root) {
 
 async function exactReferencePickerField(page) {
   return page.evaluate(sourcePath => {
-    const state = window.__formsDebug.formCrud();
+    const state = globalThis.window.__formsDebug.formCrud();
     const normalize = value =>
       String(value ?? '')
         .replace(/\[['"]?([^'"\]]+)['"]?\]/g, '.$1')
@@ -303,11 +350,8 @@ async function exactReferencePickerField(page) {
     const visit = (fields, prefix = '') => {
       for (const field of fields ?? []) {
         const key = field?.key === undefined || field?.key === null ? '' : String(field.key);
-        const fieldPath =
-          key ?
-            prefix ? `${prefix}.${key}`
-            : key
-          : prefix;
+        let fieldPath = prefix;
+        if (key) fieldPath = prefix ? `${prefix}.${key}` : key;
         if (field?.props?.referencePicker && normalize(fieldPath) === normalize(sourcePath)) {
           matches.push({
             path: normalize(fieldPath),
@@ -369,20 +413,42 @@ async function configurePicker(page) {
     await multipleCheckbox.click();
   }
 
-  const { response: saveResponse, body: saveResponseBody } = await captureResponseBodyForAction(
+  const { response: saveResponse, body: responseBody } = await captureSuccessfulResponseJsonForAction(
     page,
     response => sameRequest(response.request(), 'PUT', topology.ui.baseUrl, topology.picker.configPath),
     () => root.locator('[data-cy="formCrudReferencePickersSave"]').click(),
     { timeout: timeoutMs, label: 'reference-picker administration save' },
+    async () => {
+      const readback = await authenticatedFetch(page, topology.picker.configPath, { method: 'GET' });
+      expectedStatus(readback.status, [200], 'Reference-picker administration save readback');
+      return readback.body;
+    },
   );
   expectedStatus(saveResponse.status(), [200], 'Reference-picker administration save');
   const requestBody = JSON.parse(saveResponse.request().postData() ?? '[]');
-  const requested = requestBody.find(candidate => candidate.sourcePath === topology.picker.sourcePath);
+  const requested = findReferencePickerConfigBySemanticKey(requestBody, topology.picker);
   assertPickerConfiguration(requested, 'request');
-  const responseBody = JSON.parse(saveResponseBody.toString('utf8'));
-  const saved = responseBody.find(candidate => candidate.sourcePath === topology.picker.sourcePath);
+  const saved = findReferencePickerConfigBySemanticKey(responseBody, requested);
   assertPickerConfiguration(saved, 'response');
   result.configuration.saved = saved;
+  result.configuration.save = {
+    method: saveResponse.request().method(),
+    url: saveResponse.url(),
+    status: saveResponse.status(),
+    authenticated: Boolean(await saveResponse.request().headerValue('authorization')),
+    transport: {
+      kind: 'ui-same-origin-proxy',
+      baseUrl: topology.ui.baseUrl,
+      port: topology.ui.port,
+    },
+    compatibilityService: {
+      name: topology.source.name,
+      port: topology.source.port,
+      url: joinUrl(topology.source.baseUrl, topology.picker.configPath),
+    },
+    request: requested,
+    response: saved,
+  };
   await root.locator('[data-cy="formCrudReferencePickersSuccess"]').waitFor({ state: 'visible' });
   await page.screenshot({ path: path.join(outputDir, 'reference-picker-admin-saved.png'), fullPage: true });
 
@@ -396,11 +462,42 @@ async function configurePicker(page) {
   const reloadedPanel = root.locator('[data-cy="formCrudReferencePickerConfig"]').first();
   await reloadedPanel.waitFor({ state: 'visible' });
   assertPickerConfiguration(await pickerConfigurationFromPanel(reloadedPanel), 'rendered reload');
-  const persisted = await authenticatedFetch(page, topology.picker.configPath, { method: 'GET' });
-  expectedStatus(persisted.status, [200], 'Reference-picker persisted configuration GET');
-  const reloaded = persisted.body.find(candidate => candidate.sourcePath === topology.picker.sourcePath);
-  assertPickerConfiguration(reloaded, 'persisted reload');
+
+  const externalPersisted = await serviceFetch(topology.configurationService.baseUrl, topology.configurationService.collectionPath);
+  expectedStatus(externalPersisted.status, [200], 'Direct external reference-picker configuration GET');
+  const externalConfiguration = requireReferencePickerConfig(
+    externalPersisted.body,
+    saved,
+    'persisted at the external configuration service',
+  );
+  assertPickerConfiguration(externalConfiguration, 'external service readback');
+  result.configuration.externalReadback = {
+    method: 'GET',
+    url: externalPersisted.url,
+    status: externalPersisted.status,
+    authenticated: false,
+    directService: true,
+    service: { name: topology.configurationService.name, port: topology.configurationService.port },
+    response: externalPersisted.body,
+    matchedConfiguration: externalConfiguration,
+  };
+
+  const sourcePersisted = await authenticatedServiceFetch(topology.source.baseUrl, topology.picker.configPath, sourceToken);
+  expectedStatus(sourcePersisted.status, [200], 'Source compatibility reference-picker configuration GET');
+  const sourceConfiguration = requireReferencePickerConfig(sourcePersisted.body, saved, 'returned by the source compatibility endpoint');
+  assertPickerConfiguration(sourceConfiguration, 'source compatibility readback');
+  result.configuration.identityMapping = requireReferencePickerIdentityMapping(saved, externalConfiguration, sourceConfiguration);
   result.configuration.reloaded = true;
+  result.configuration.sourceReadback = {
+    method: 'GET',
+    url: sourcePersisted.url,
+    status: sourcePersisted.status,
+    authenticated: true,
+    directService: true,
+    service: { name: topology.source.name, port: topology.source.port },
+    response: sourcePersisted.body,
+    matchedConfiguration: sourceConfiguration,
+  };
   await page.screenshot({ path: path.join(outputDir, 'reference-picker-admin-reloaded.png'), fullPage: true });
 }
 
@@ -435,6 +532,7 @@ try {
       await route.continue();
       return;
     }
+    targetAuthorizationInjected = true;
     await route.continue({
       headers: {
         ...route.request().headers(),
@@ -498,13 +596,17 @@ try {
   if ((await pickerButtons.count()) !== 1) {
     throw new Error(`Expected exactly one picker button for the configured field, found ${await pickerButtons.count()}`);
   }
-  const [targetResponse] = await Promise.all([
-    page.waitForResponse(
-      response => sameRequest(response.request(), 'GET', topology.picker.targetBaseUrl, topology.verification.targetListPath),
-      { timeout: timeoutMs },
-    ),
-    pickerButtons.first().click(),
-  ]);
+  const { response: targetResponse, body: targetResponseBody } = await captureSuccessfulResponseJsonForAction(
+    page,
+    response => sameRequest(response.request(), 'GET', topology.picker.targetBaseUrl, topology.verification.targetListPath),
+    () => pickerButtons.first().click(),
+    { timeout: timeoutMs, label: 'cross-service target collection request' },
+    async () => {
+      const readback = await authenticatedServiceFetch(topology.picker.targetBaseUrl, topology.verification.targetListPath, targetToken);
+      expectedStatus(readback.status, [200], 'Cross-service target collection readback');
+      return readback.body;
+    },
+  );
   expectedStatus(targetResponse.status(), [200], 'Cross-service target collection request');
   if (new URL(targetResponse.url()).origin === new URL(topology.source.baseUrl).origin) {
     throw new Error('Reference picker target request unexpectedly used the source service origin');
@@ -513,7 +615,10 @@ try {
     method: targetResponse.request().method(),
     url: targetResponse.url(),
     status: targetResponse.status(),
+    authenticated: targetAuthorizationInjected && Boolean(await targetResponse.request().headerValue('authorization')),
     crossService: true,
+    service: { name: topology.target.name, port: topology.target.port },
+    responseEvidence: targetResponseBody,
   };
 
   const modal = page.locator('[data-cy="formCrudReferencePickerModal"]').first();
@@ -528,6 +633,11 @@ try {
   if (valueAtPath(selectedItem, topology.target.identityPath) !== targetIdentity) {
     throw new Error('Reference picker row did not come from the seeded target resource');
   }
+  result.targetRequest.selectedIdentity = targetIdentity;
+  result.targetRequest.selectedIdentityFound =
+    valueAtPath(selectedItem, topology.target.identityPath) === targetIdentity &&
+    Array.isArray(targetResponseBody) &&
+    targetResponseBody.some(item => valueAtPath(item, topology.target.identityPath) === targetIdentity);
   await pickerRows.first().locator('[data-cy="formCrudReferencePickerSelect"]').click();
   await modal.waitFor({ state: 'detached' });
 
@@ -575,17 +685,24 @@ try {
     method: saveResponse.request().method(),
     url: saveResponse.url(),
     status: saveResponse.status(),
+    authenticated: Boolean(await saveResponse.request().headerValue('authorization')),
+    selectionMapped: true,
+    service: { name: topology.source.name, port: topology.source.port },
     reference: requestReference,
   };
 
-  const persisted = await authenticatedFetch(page, sourceItemPath, { method: 'GET' });
+  const persisted = await authenticatedServiceFetch(topology.source.baseUrl, sourceItemPath, sourceToken);
   expectedStatus(persisted.status, topology.verification.sourceGetStatuses, 'Persisted source GET');
   const persistedValue = valueAtPath(persisted.body, topology.picker.sourcePath);
   result.sourceGet = {
     method: 'GET',
-    url: joinUrl(topology.source.baseUrl, sourceItemPath),
+    url: persisted.url,
     status: persisted.status,
+    authenticated: true,
+    directService: true,
+    service: { name: topology.source.name, port: topology.source.port },
     responseReference: persistedValue,
+    responseEvidence: persisted.body,
   };
   const { reference: persistedReference, mappingEvidence } = assertPersistedReference(
     persistedValue,
@@ -600,6 +717,7 @@ try {
   );
   result.sourceGet.stableReference = persistedReference;
   result.sourceGet.mappingEvidence = mappingEvidence;
+  result.sourceGet.selectionPersisted = true;
   const hrefEvidence = mappingEvidence.find(mapping => mapping.contract === 'reference-href');
   const referredTypeEvidence = mappingEvidence.find(mapping => mapping.contract === 'reference-referred-type');
   const relationshipTypeEvidence = mappingEvidence.find(mapping => mapping.contract === 'relationship-type');
@@ -610,7 +728,7 @@ try {
     throw new Error(`Persisted reference href used ${hrefUrl.origin} instead of target service origin ${targetOrigin}`);
   }
   result.sourceGet.contractEvidence = {
-    targetIdentity: targetIdentity,
+    targetIdentity,
     href: hrefEvidence.getValue,
     hrefClassification: hrefEvidence.classification,
     hrefExpected: hrefEvidence.expectedValue,
@@ -632,6 +750,30 @@ try {
   process.exitCode = 1;
 } finally {
   await browser?.close();
+  const proof = buildReferencePickerProofReport({
+    topology,
+    preconditions,
+    workflow: result,
+    evidencePointers: {
+      topology: ['../topology.json#/source', '../topology.json#/target', '../topology.json#/configurationService'],
+      preconditions: ['../preconditions.json'],
+      configuration: [
+        'status.json#/configuration/save',
+        'status.json#/configuration/externalReadback',
+        'status.json#/configuration/sourceReadback',
+        'status.json#/configuration/identityMapping',
+      ],
+      targetFetch: ['status.json#/targetRequest'],
+      sourcePatch: ['status.json#/sourceRequest', 'reference-picker-selected.png'],
+      sourceReadback: ['status.json#/sourceGet'],
+    },
+  });
+  if (proof.status !== 'passed') {
+    result.status = 'failed';
+    result.error ||= `Cross-service reference-picker proof failed: ${proof.reasonCodes.join(', ')}`;
+    process.exitCode = 1;
+  }
+  fs.writeFileSync(path.join(outputDir, 'reference-picker-proof.json'), `${JSON.stringify(redactDiagnostic(proof), null, 2)}\n`);
   writeResult();
 }
 

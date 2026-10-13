@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/form-crud-gui-dependencies.sh"
 
 TOPOLOGY_READER="$SCRIPT_DIR/reference-picker-topology.mjs"
 GUI_SMOKE="$SCRIPT_DIR/reference-picker-admin-gui.mjs"
+CONFIG_SERVICE="$SCRIPT_DIR/form-crud-reference-picker-config-service.mjs"
 SECRET_POLICY="$SCRIPT_DIR/reference-picker-secret-policy.mjs"
 GENERATOR_NODE_BIN="$(resolve_generator_node_bin "${GENERATOR_NODE_BIN:-}")"
 NODE="$GENERATOR_NODE_BIN/node"
@@ -38,6 +39,7 @@ require_file() {
 require_file "$TOPOLOGY_FILE"
 require_file "$TOPOLOGY_READER"
 require_file "$GUI_SMOKE"
+require_file "$CONFIG_SERVICE"
 require_file "$SECRET_POLICY"
 
 normalized_file="$(mktemp "${TMPDIR:-/tmp}/reference-picker-topology.XXXXXX.json")"
@@ -75,7 +77,8 @@ GUI_NODE_OPTIONS="${GUI_NODE_OPTIONS:---max-old-space-size=4096}"
 
 mkdir -p "$OUTPUT_DIR"
 FAILURE_FILE="$OUTPUT_DIR/failure.json"
-rm -f "$OUTPUT_DIR/status.json" "$OUTPUT_DIR/gui/status.json" "$FAILURE_FILE"
+PROOF_FILE="$OUTPUT_DIR/reference-picker-proof.json"
+rm -f "$OUTPUT_DIR/status.json" "$OUTPUT_DIR/gui/status.json" "$PROOF_FILE" "$FAILURE_FILE"
 cp "$normalized_file" "$OUTPUT_DIR/topology.json"
 
 start_epoch="$(date +%s)"
@@ -83,6 +86,7 @@ start_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 source_pid=""
 target_pid=""
 gui_pid=""
+config_service_pid=""
 source_db_started=false
 target_db_started=false
 failure_stage="preflight"
@@ -157,6 +161,11 @@ source_db_name="$(json_value '.source.database.name')"
 target_db_name="$(json_value '.target.database.name')"
 source_db_user="$(json_value '.source.database.user')"
 target_db_user="$(json_value '.target.database.user')"
+config_service_base_url="$(json_value '.configurationService.baseUrl')"
+config_service_port="$(json_value '.configurationService.port')"
+config_service_health_path="$(json_value '.configurationService.healthPath')"
+config_service_collection_path="$(json_value '.configurationService.collectionPath')"
+config_service_storage_path="$(json_value '.configurationService.storagePath')"
 
 terminate_group() {
   local pid="${1:-}"
@@ -194,6 +203,7 @@ cleanup() {
   terminate_group "$gui_pid" || applications_stopped=false
   terminate_group "$target_pid" || applications_stopped=false
   terminate_group "$source_pid" || applications_stopped=false
+  terminate_group "$config_service_pid" || applications_stopped=false
 
   if [[ "$target_db_started" == "true" ]]; then
     docker rm -f "$target_db_container" >/dev/null 2>&1 || databases_removed=false
@@ -222,11 +232,15 @@ cleanup() {
   local updated_status
   local cleanup_ok=false
   local failure_json=null
+  local proof_json=null
   if [[ "$applications_stopped" == "true" && "$databases_removed" == "true" ]]; then
     cleanup_ok=true
   fi
   if [[ -f "$FAILURE_FILE" ]]; then
     failure_json="$(<"$FAILURE_FILE")"
+  fi
+  if [[ -f "$PROOF_FILE" ]]; then
+    proof_json="$(<"$PROOF_FILE")"
   fi
   updated_status="$(mktemp "${TMPDIR:-/tmp}/reference-picker-status.XXXXXX.json")"
   jq \
@@ -236,12 +250,14 @@ cleanup() {
     --arg sourceContainer "$source_db_container" \
     --arg targetContainer "$target_db_container" \
     --argjson failure "$failure_json" \
+    --argjson proof "$proof_json" \
     '.cleanup = {
         status: (if $cleanupOk then "passed" else "failed" end),
         applicationsStopped: $applicationsStopped,
         databasesRemoved: $databasesRemoved,
         containers: [$sourceContainer, $targetContainer]
       }
+      | if $proof == null then . else .proof = $proof end
       | if $failure == null then . else .failure = $failure end' \
     "$OUTPUT_DIR/status.json" > "$updated_status"
   mv "$updated_status" "$OUTPUT_DIR/status.json"
@@ -283,6 +299,7 @@ require_container_absent() {
 require_port_free "$source_app_port" "Source application"
 require_port_free "$target_app_port" "Target application"
 require_port_free "$ui_port" "Source UI"
+require_port_free "$config_service_port" "Reference-picker configuration service"
 require_port_free "$source_db_port" "Source PostgreSQL"
 require_port_free "$target_db_port" "Target PostgreSQL"
 require_container_absent "$source_db_container"
@@ -372,6 +389,9 @@ start_application() {
   log_file="$OUTPUT_DIR/$role-app.log"
   mapfile -t command < <(jq -er ".$role.startCommand[]" "$normalized_file")
   mapfile -t custom_environment < <(jq -r ".$role.environment | to_entries[] | \"\\(.key)=\\(.value)\"" "$normalized_file")
+  if [[ "$role" == "source" ]]; then
+    custom_environment+=("FORM_CRUD_REFERENCE_PICKER_CONFIG_URL=$config_service_base_url$config_service_collection_path")
+  fi
 
   (
     cd "$directory"
@@ -409,6 +429,31 @@ wait_for_url() {
     fi
     sleep 2
   done
+}
+
+start_configuration_service() {
+  mkdir -p "$(dirname "$config_service_storage_path")"
+  (
+    exec setsid env \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HOST="$(json_value '.configurationService.host')" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_PORT="$config_service_port" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_STORAGE="$config_service_storage_path" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_HEALTH_PATH="$config_service_health_path" \
+      FORM_CRUD_REFERENCE_PICKER_CONFIG_SERVICE_COLLECTION_PATH="$config_service_collection_path" \
+      "$NODE" "$CONFIG_SERVICE" \
+        --host "$(json_value '.configurationService.host')" \
+        --port "$config_service_port" \
+        --storage "$config_service_storage_path" \
+        --health-path "$config_service_health_path" \
+        --collection-path "$config_service_collection_path"
+  ) > "$OUTPUT_DIR/configuration-service.log" 2>&1 < /dev/null &
+  config_service_pid=$!
+  wait_for_url \
+    "$config_service_base_url$config_service_health_path" \
+    "reference-picker configuration service" \
+    "$OUTPUT_DIR/configuration-service.log" \
+    "$config_service_pid"
+  curl -fsS --max-time 5 "$config_service_base_url$config_service_health_path" > "$OUTPUT_DIR/configuration-service-health.json"
 }
 
 authenticate() {
@@ -513,6 +558,8 @@ ensure_angular_dependencies() {
   esac
 }
 
+set_failure_context "reference picker configuration service startup" "$OUTPUT_DIR/configuration-service.log"
+start_configuration_service
 set_failure_context "source database startup" "$OUTPUT_DIR/source-db-container.txt"
 start_database source
 set_failure_context "target database startup" "$OUTPUT_DIR/target-db-container.txt"
@@ -537,6 +584,8 @@ source_db_actual="$(
 target_db_actual="$(
   docker exec "$target_db_container" psql -U "$target_db_user" -d "$target_db_name" -Atc 'SELECT current_database();'
 )"
+source_db_container_id="$(docker container inspect --format '{{.Id}}' "$source_db_container")"
+target_db_container_id="$(docker container inspect --format '{{.Id}}' "$target_db_container")"
 [[ "$source_db_actual" == "$source_db_name" ]] || {
   echo "Source PostgreSQL database mismatch: expected $source_db_name, got $source_db_actual" >&2
   exit 1
@@ -553,24 +602,38 @@ jq -n \
   --slurpfile sourceHealth "$OUTPUT_DIR/source-health.json" \
   --arg sourceDatabaseContainer "$source_db_container" \
   --arg sourceDatabase "$source_db_actual" \
+  --arg sourceDatabaseContainerId "$source_db_container_id" \
   --arg targetName "$(json_value '.target.name')" \
   --argjson targetPort "$target_app_port" \
   --arg targetHealthUrl "$target_base_url$(json_value '.target.healthPath')" \
   --slurpfile targetHealth "$OUTPUT_DIR/target-health.json" \
   --arg targetDatabaseContainer "$target_db_container" \
   --arg targetDatabase "$target_db_actual" \
+  --arg targetDatabaseContainerId "$target_db_container_id" \
+  --arg configurationServiceName "$(json_value '.configurationService.name')" \
+  --argjson configurationServicePort "$config_service_port" \
+  --arg configurationServiceHealthUrl "$config_service_base_url$config_service_health_path" \
+  --slurpfile configurationServiceHealth "$OUTPUT_DIR/configuration-service-health.json" \
   '{
+    generatedApplicationCount:2,
     source: {
       name:$sourceName,
       port:$sourcePort,
       databaseContainer:$sourceDatabaseContainer,
+      databaseContainerId:$sourceDatabaseContainerId,
       database:$sourceDatabase,
       health:{url:$sourceHealthUrl,response:$sourceHealth[0]}
+    },
+    configurationService: {
+      name:$configurationServiceName,
+      port:$configurationServicePort,
+      health:{url:$configurationServiceHealthUrl,response:$configurationServiceHealth[0]}
     },
     target: {
       name:$targetName,
       port:$targetPort,
       databaseContainer:$targetDatabaseContainer,
+      databaseContainerId:$targetDatabaseContainerId,
       database:$targetDatabase,
       health:{url:$targetHealthUrl,response:$targetHealth[0]}
     },
@@ -608,14 +671,26 @@ gui_pid=$!
 wait_for_url "$ui_base_url" "source Angular application" "$OUTPUT_DIR/source-angular.log" "$gui_pid"
 
 set_failure_context "reference picker GUI smoke" "$OUTPUT_DIR/gui/status.json"
+set +e
 env \
   FORM_CRUD_GUI_PLAYWRIGHT_ROOT="$FORM_CRUD_GUI_PLAYWRIGHT_ROOT" \
   FORM_CRUD_GUI_HEADLESS="$FORM_CRUD_GUI_HEADLESS" \
   FORM_CRUD_GUI_TIMEOUT_MS="$FORM_CRUD_GUI_TIMEOUT_MS" \
   REFERENCE_PICKER_SOURCE_SEED_RESPONSE="$OUTPUT_DIR/source-seed-response.json" \
   REFERENCE_PICKER_TARGET_SEED_RESPONSE="$OUTPUT_DIR/target-seed-response.json" \
+  REFERENCE_PICKER_SOURCE_TOKEN_FILE="$OUTPUT_DIR/source-token" \
   REFERENCE_PICKER_TARGET_TOKEN_FILE="$OUTPUT_DIR/target-token" \
+  REFERENCE_PICKER_PRECONDITIONS_FILE="$OUTPUT_DIR/preconditions.json" \
   "$NODE" "$GUI_SMOKE" "$normalized_file" "$OUTPUT_DIR/gui" > "$OUTPUT_DIR/gui-run.log"
+gui_exit=$?
+set -e
+if [[ -f "$OUTPUT_DIR/gui/reference-picker-proof.json" ]]; then
+  cp "$OUTPUT_DIR/gui/reference-picker-proof.json" "$PROOF_FILE"
+fi
+if [[ "$gui_exit" != "0" ]]; then
+  cat "$OUTPUT_DIR/gui/status.json" >&2
+  exit "$gui_exit"
+fi
 
 set_failure_context "reference picker GUI result" "$OUTPUT_DIR/gui/status.json"
 gui_status="$(jq -r '.status' "$OUTPUT_DIR/gui/status.json")"
@@ -648,13 +723,21 @@ jq -n \
   --argjson durationSeconds "$((end_epoch - start_epoch))" \
   --slurpfile preconditions "$OUTPUT_DIR/preconditions.json" \
   --slurpfile workflow "$OUTPUT_DIR/gui/status.json" \
+  --slurpfile proof "$PROOF_FILE" \
   '{
     status:$status,
     startIso:$startIso,
     endIso:$endIso,
     durationSeconds:$durationSeconds,
     preconditions:$preconditions[0],
-    workflow:$workflow[0]
+    workflow:$workflow[0],
+    proof:$proof[0],
+    evidence: {
+      topology:"topology.json",
+      preconditions:"preconditions.json",
+      workflow:"gui/status.json",
+      proof:"reference-picker-proof.json"
+    }
   }' > "$OUTPUT_DIR/status.json"
 
 cat "$OUTPUT_DIR/status.json"

@@ -11,6 +11,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.cfg.DateTimeFeature;
 import tools.jackson.databind.json.JsonMapper;
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -145,6 +146,14 @@ public interface OpenApiPrimitiveMapper {
         return JsonMappingSupport.readObject(value, targetType);
     }
 
+    @Named("jsonStringToArrayWrapper")
+    default <T> T jsonStringToArrayWrapper(String value, @TargetType Class<T> targetType) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return JsonMappingSupport.readArrayWrapper(value, targetType);
+    }
+
     @Named("mapToJsonString")
     default String mapToJsonString(Object value) {
         if (value == null) {
@@ -256,6 +265,27 @@ public interface OpenApiPrimitiveMapper {
             try {
                 return OBJECT_MAPPER.readValue(value, targetType);
             } catch (JacksonException ex) {
+                throw badRequest("Unable to deserialize JSON to " + targetType.getSimpleName(), ex);
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        static <T> T readArrayWrapper(String value, Class<T> targetType) {
+            try {
+                T wrapper = targetType.getDeclaredConstructor().newInstance();
+                if (!(wrapper instanceof Collection<?> target)) {
+                    throw new IllegalArgumentException("Target type " + targetType.getName() + " is not a collection");
+                }
+                Object parsed = OBJECT_MAPPER.readValue(
+                    value,
+                    OBJECT_MAPPER.getTypeFactory().constructType(targetType.getGenericSuperclass())
+                );
+                if (!(parsed instanceof Collection<?> values)) {
+                    throw new IllegalArgumentException("JSON value is not an array");
+                }
+                ((Collection<Object>) target).addAll(values);
+                return wrapper;
+            } catch (JacksonException | ReflectiveOperationException | IllegalArgumentException ex) {
                 throw badRequest("Unable to deserialize JSON to " + targetType.getSimpleName(), ex);
             }
         }

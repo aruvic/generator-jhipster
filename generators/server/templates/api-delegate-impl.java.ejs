@@ -459,8 +459,9 @@ _%>
         JsonNode patchedNode = preservePatchedArrayItemValues(baseNode, applyPatchedNode(baseNode, patchNode, patchFormat), patchNode, patchFormat);
         enforceImmutableIdentifiers(baseNode, patchedNode);
         JsonNode payloadNode = removePropertiesNotDeserializableBy(patchedNode, <%- payloadType %>.class);
-        convertAndValidate(payloadNode, <%- payloadType %>.class);
-        <%- payloadType %> mergedPayload = convertValue(pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat), <%- payloadType %>.class);
+        JsonNode mappingNode = pruneUnpatchedComplexFields(payloadNode, patchNode, patchFormat);
+        convertAndValidate(mappingNode, <%- payloadType %>.class);
+        <%- payloadType %> mergedPayload = convertValue(mappingNode, <%- payloadType %>.class);
         validatePayload(mergedPayload);
       <%_ if (op.requestRequiredRulesExpression) { _%>
         validateRequiredProperties(mergedPayload, <%- op.requestRequiredRulesExpression %>);
@@ -1925,9 +1926,7 @@ _%>
 
     private <T> T mapResponseBody(Supplier<T> mapper) {
         try {
-            T body = mapper.get();
-            requireValidResponseBody(body);
-            return body;
+            return mapper.get();
         } catch (ResponseStatusException ex) {
             throw ex;
         } catch (RuntimeException ex) {

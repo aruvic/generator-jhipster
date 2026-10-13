@@ -8,23 +8,60 @@ import { fileURLToPath } from 'node:url';
 
 import {
   accessibilityIssues,
+  clearRequiredValidationControl,
   expandAllNestedAccordions,
   requiredBodyValidationApplicability,
   requiredFormlyControlIssues,
   requiredFormlyControls,
   requiredValidationResult,
 } from './accessibility-coverage.mjs';
+import {
+  exerciseOptionalArrayAddition,
+  newlyMaterializedOptionalArrayItems,
+  valueAtRenderedArrayPath,
+} from './form-crud-array-lifecycle.mjs';
 import { parameterCoverageValue, responseBrowsingFixture } from './form-crud-browser-workflows.mjs';
+import {
+  interactWithOptionalFormControl,
+  matchOptionalFormExerciseControls,
+  mergeOptionalFormExerciseValues,
+  planOptionalFormExercises,
+} from './form-crud-field-exercise.mjs';
+import { classifyEventCandidateRead, correlatedEventIdentityCandidate } from './form-crud-event-identity.mjs';
+import { waitForFormCrudOperationReady } from './form-crud-gui-readiness.mjs';
+import {
+  classifyPersistenceReadOutcome,
+  concreteUrlPath,
+  persistenceReadCapability,
+  persistenceReadIdentity,
+  persistenceReadPathResolution,
+  persistenceReadTarget,
+  semanticIdentityResolution,
+} from './form-crud-persistence.mjs';
+import { identityRecordsForResolution } from './form-crud-gui-identity.mjs';
 import {
   hasRequiredResourceWorkflowCoverage,
   requiredWorkflowCompletion,
   resourceWorkflowCoverage,
 } from './form-crud-workflow-coverage.mjs';
 import { semanticIdentityValue } from './operation-identity.mjs';
-import { selectPayloadFile } from './operation-payload.mjs';
+import { buildOperationOutcomeReport, classifyOperationPrerequisite } from './operation-outcome-report.mjs';
+import { isConfirmedResourceStateRecord, patchPayloadFromResourceState, selectPayloadFile } from './operation-payload.mjs';
 import { classifyOperationPreparationFailure, classifyOperationResponse } from './operation-response.mjs';
-import { buildOperationSchemaCoverage, evaluateOperationSchemaCoverage } from './operation-schema-coverage.mjs';
-import { captureResponseForAction } from './playwright-response-capture.mjs';
+import {
+  DEFAULT_OPTIONAL_FIELD_COVERAGE_MINIMUM,
+  buildOperationSchemaCoverage,
+  evaluateOperationSchemaCoverage,
+} from './operation-schema-coverage.mjs';
+import {
+  captureResponseBodySnapshotForAction,
+  captureResponseForAction,
+  captureSuccessfulDeleteReadbackEvidence,
+  capturedResponseBodyText,
+  createPlaywrightOperationErrorCapture,
+  parseCapturedResponseJson,
+  parseSuccessfulResponseJson,
+} from './playwright-response-capture.mjs';
 import {
   findReferencePickerConfig,
   findReferencePickerConfigBySemanticKey,
@@ -32,6 +69,8 @@ import {
   referencePickerConfigsShareSemanticKey,
   requireReferencePickerConfig,
 } from './reference-picker-admin-state.mjs';
+
+const optionalFormExercises = new Map();
 
 function loadPlaywright() {
   const configuredRoots = [process.env.FORM_CRUD_GUI_PLAYWRIGHT_ROOT, process.env.PLAYWRIGHT_ROOT].filter(Boolean);
@@ -97,6 +136,15 @@ if (!artifactName || !webBaseUrl || !outputDir) {
 }
 
 fs.mkdirSync(outputDir, { recursive: true });
+const externalPrerequisiteFile = process.env.FORM_CRUD_GUI_EXTERNAL_PREREQUISITE_FILE;
+const externalPrerequisiteReport =
+  externalPrerequisiteFile && fs.existsSync(externalPrerequisiteFile) ?
+    JSON.parse(fs.readFileSync(externalPrerequisiteFile, 'utf8'))
+  : undefined;
+const operationErrorReportFile = path.resolve(
+  outputDir,
+  process.env.FORM_CRUD_GUI_OPERATION_ERROR_REPORT_FILE ?? 'operation-error-attribution.json',
+);
 
 function joinUrl(baseUrl, suffix) {
   return `${baseUrl.replace(/\/+$/, '')}/${suffix.replace(/^\/+/, '')}`;
@@ -441,10 +489,31 @@ function relevantExecutionRecords(operation, { createdByApiOperations = false } 
 }
 
 function pathParameterResolution(operation, parameter, options = {}) {
-  const records = relevantExecutionRecords(operation, options)
-    .filter(record => record.status >= 200 && record.status < 300)
-    .sort((left, right) => Number(right.createdByApiOperations) - Number(left.createdByApiOperations));
+  const selectionRecord = options.records?.length === 1 ? options.records[0] : undefined;
+  const records = identityRecordsForResolution(operation, options.records ?? relevantExecutionRecords(operation), options).sort(
+    (left, right) => Number(right.createdByApiOperations) - Number(left.createdByApiOperations),
+  );
+  const identityCandidates = identityRecordsForResolution(operation, options.identityCandidates ?? records, {
+    ...options,
+    selectionRecord,
+  });
+  const verifiedPathResolution = persistenceReadPathResolution(operation, parameter, records);
+  if (verifiedPathResolution) return verifiedPathResolution;
+
   const keyCandidates = pathParameterKeyCandidates(parameter);
+  const persistedResponseValues = [];
+  for (const record of records) {
+    scalarValuesForKeys(record.persistedResponseBody, new Set([normalizeName(parameter.name)]), persistedResponseValues);
+  }
+  const persistedResponse = [...new Set(persistedResponseValues.map(value => String(value).trim()).filter(Boolean))][0];
+  if (persistedResponse) return { value: persistedResponse, source: 'persisted-response-exact-field' };
+
+  const persistedRecords = records
+    .filter(record => record.persistedResponseBody !== undefined)
+    .map(record => ({ ...record, responseBody: record.persistedResponseBody }));
+  const semanticPersistedResponse = semanticIdentityValue(operation, parameter, persistedRecords, { origins: ['response'] });
+  if (semanticPersistedResponse) return { value: semanticPersistedResponse, source: 'persisted-response-semantic-field' };
+
   const exactResponseValues = [];
   for (const record of records) {
     scalarValuesForKeys(record.responseBody, new Set([normalizeName(parameter.name)]), exactResponseValues);
@@ -452,8 +521,18 @@ function pathParameterResolution(operation, parameter, options = {}) {
   const exactResponse = [...new Set(exactResponseValues.map(value => String(value).trim()).filter(Boolean))][0];
   if (exactResponse) return { value: exactResponse, source: 'response-exact-field' };
 
-  const semanticResponse = semanticIdentityValue(operation, parameter, records, { origins: ['response'] });
-  if (semanticResponse) return { value: semanticResponse, source: 'response-semantic-field' };
+  const semanticResponse = semanticIdentityResolution(operation, parameter, records, {
+    origins: ['response'],
+    candidateRecords: identityCandidates,
+  });
+  if (semanticResponse) {
+    return {
+      value: semanticResponse.value,
+      source: 'response-semantic-field',
+      semanticIdentityCandidateCount: semanticResponse.candidateCount,
+      semanticIdentityUnambiguous: semanticResponse.unambiguous,
+    };
+  }
 
   const exactRequestValues = [];
   for (const record of records) {
@@ -475,8 +554,18 @@ function pathParameterResolution(operation, parameter, options = {}) {
   const locationOrUrlIdentity = [...new Set(values.map(value => String(value).trim()).filter(Boolean))][0];
   if (locationOrUrlIdentity) return { value: locationOrUrlIdentity, source: 'location-or-resource-url' };
 
-  const semanticRequest = semanticIdentityValue(operation, parameter, records, { origins: ['request'] });
-  if (semanticRequest) return { value: semanticRequest, source: 'request-semantic-field' };
+  const semanticRequest = semanticIdentityResolution(operation, parameter, records, {
+    origins: ['request'],
+    candidateRecords: identityCandidates,
+  });
+  if (semanticRequest) {
+    return {
+      value: semanticRequest.value,
+      source: 'request-semantic-field',
+      semanticIdentityCandidateCount: semanticRequest.candidateCount,
+      semanticIdentityUnambiguous: semanticRequest.unambiguous,
+    };
+  }
 
   for (const record of records) {
     scalarValuesForKeys(record.responseBody, keyCandidates, values);
@@ -624,7 +713,7 @@ function uniqueCreateBody(operation, body) {
   return output;
 }
 
-function bodyForApiOperation(operation) {
+function baseBodyForApiOperation(operation) {
   const fixture = findPayloadForOperation(operation);
   const generated = uniqueCreateBody(
     operation,
@@ -638,6 +727,17 @@ function bodyForApiOperation(operation) {
       Array.isArray(record.responseBody),
   );
   return matchingCollection ? sanitizeRequestBody(matchingCollection.responseBody, operation.requestBodyFields ?? []) : generated;
+}
+
+function bodyForApiOperation(operation, pathParameterValues = {}) {
+  const baseBody = baseBodyForApiOperation(operation);
+  const exercise = optionalFormExercises.get(operation.id);
+  const desiredBody =
+    exercise ? mergeOptionalFormExerciseValues(baseBody, exercise.formBody, operation.requestBodyFields ?? [], exercise.actions) : baseBody;
+  const resourceRecords = relevantExecutionRecords(operation).filter(
+    record => operationStaticPrefix(record.operation) === operationStaticPrefix(operation),
+  );
+  return patchPayloadFromResourceState(operation, desiredBody, resourceRecords, { pathParameterValues });
 }
 
 function objectSchemaFields(fields = []) {
@@ -701,9 +801,11 @@ function operationRoundTripResult(record, responseBody = record.responseBody, re
   };
 }
 
+const capturedOperationResponseBodies = new WeakMap();
+
 async function captureOperationResponse(pageValue, operation, action, expectedMethods = undefined, responseTimeoutMs = apiTimeoutMs) {
   const methods = new Set((expectedMethods ?? ['POST', 'PUT', 'PATCH', 'DELETE']).map(method => method.toUpperCase()));
-  return captureResponseForAction(
+  const captured = await captureResponseBodySnapshotForAction(
     pageValue,
     response =>
       operation ?
@@ -715,6 +817,8 @@ async function captureOperationResponse(pageValue, operation, action, expectedMe
       label: operation?.id ?? [...methods].join('/'),
     },
   );
+  capturedOperationResponseBodies.set(captured.response, captured);
+  return captured.response;
 }
 
 function valueAtPath(source, pathValue) {
@@ -1037,7 +1141,6 @@ const settleTimeoutMs = Number(process.env.FORM_CRUD_GUI_SETTLE_TIMEOUT_MS ?? St
 const optionalTimeoutMs = Number(process.env.FORM_CRUD_GUI_OPTIONAL_TIMEOUT_MS ?? String(Math.min(timeoutMs, 5000)));
 const headless = (process.env.FORM_CRUD_GUI_HEADLESS ?? 'true') !== 'false';
 const failOnConsoleError = (process.env.FORM_CRUD_GUI_FAIL_ON_CONSOLE_ERROR ?? 'true') !== 'false';
-const failOnHttp4xx = (process.env.FORM_CRUD_GUI_FAIL_ON_HTTP_4XX ?? 'false') === 'true';
 const maxListResources = parseLimit(process.env.FORM_CRUD_GUI_MAX_LIST_RESOURCES ?? 'all');
 const maxCreateResources = parseLimit(process.env.FORM_CRUD_GUI_MAX_CREATE_RESOURCES ?? 'all');
 const maxReferencePickerScenarios = parseLimit(process.env.FORM_CRUD_GUI_MAX_REFERENCE_PICKER_SCENARIOS ?? 'all');
@@ -1060,11 +1163,17 @@ const sourceCoveragePrefixes = [
   'src/main/webapp/app/openapi-operations/',
 ];
 const sourceCoverageExcludedGeneratedFiles = ['src/main/webapp/app/openapi-operations/openapi-operations.model.ts'];
-const sourceCoverageThresholds = {
-  lines: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_LINES ?? 70),
-  statements: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_STATEMENTS ?? 70),
-  functions: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_FUNCTIONS ?? 60),
-  branches: Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MIN_BRANCHES ?? 55),
+const browserSourceCoverageThresholds = {
+  lines: Number(process.env.FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_LINES ?? 70),
+  statements: Number(process.env.FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_STATEMENTS ?? 70),
+  functions: Number(process.env.FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_FUNCTIONS ?? 60),
+  branches: Number(process.env.FORM_CRUD_GUI_BROWSER_SOURCE_COVERAGE_MIN_BRANCHES ?? 55),
+};
+const vitestSourceCoverageThresholds = {
+  lines: Number(process.env.FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_LINES ?? 70),
+  statements: Number(process.env.FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_STATEMENTS ?? 70),
+  functions: Number(process.env.FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_FUNCTIONS ?? 60),
+  branches: Number(process.env.FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_MIN_BRANCHES ?? 55),
 };
 const sourceCoverageComponents = [
   { id: 'form-crud', prefix: sourceCoveragePrefixes[0] },
@@ -1076,8 +1185,13 @@ const sourceCoverageChunkNames = [
 ];
 const sourceCoverageMaxScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_SCRIPT_BYTES ?? 64 * 1024 * 1024);
 const sourceCoverageMaxUnknownScriptBytes = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MAX_UNKNOWN_SCRIPT_BYTES ?? 2 * 1024 * 1024);
-const sourceCoverageMergeUnitTest = (process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_MERGE_JEST ?? 'false') === 'true';
-const optionalFieldCoverageMinimum = Number(process.env.FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM ?? 0.5);
+const vitestSourceCoverageEnabled = (process.env.FORM_CRUD_GUI_VITEST_SOURCE_COVERAGE_ENABLED ?? 'false') === 'true';
+const optionalFieldCoverageMinimum = Number(
+  process.env.FORM_CRUD_GUI_OPTIONAL_FIELD_COVERAGE_MINIMUM ?? DEFAULT_OPTIONAL_FIELD_COVERAGE_MINIMUM,
+);
+const optionalFormInteractionBudget = Math.max(0, Number(process.env.FORM_CRUD_GUI_OPTIONAL_FORM_INTERACTION_BUDGET ?? 48));
+const optionalFormMaxArrayAdditions = 8;
+const optionalFormMaxNestedObjects = 8;
 const sourceCoverageWorkerHeapMb = Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_WORKER_HEAP_MB ?? 1024);
 const sourceCoverageNavigationsPerSegment = Math.max(1, Number(process.env.FORM_CRUD_GUI_SOURCE_COVERAGE_NAVIGATIONS_PER_SEGMENT ?? 1));
 const persistencePollAttempts = Math.max(1, Number(process.env.FORM_CRUD_GUI_PERSISTENCE_POLL_ATTEMPTS ?? 5));
@@ -1099,6 +1213,7 @@ const result = {
   },
   console: [],
   pageErrors: [],
+  requestFailures: [],
   failedResponses: [],
   apiExchanges: [],
   screenshots: [],
@@ -1132,6 +1247,10 @@ const result = {
     apiOperationsPageRenderedOperations: 0,
     apiOperationsPageSubmittedOperations: 0,
     apiOperationsPage2xxSuccesses: 0,
+    apiOperationsPageEligibleOperations: 0,
+    apiOperationsPageBlockedPrerequisiteOperations: 0,
+    apiOperationsPageDisabledOptionalOperations: 0,
+    apiOperationsPageApplicableOperations: 0,
     apiOperationsPageExpectedNegatives: 0,
     apiOperationsPageUnexecutableOperations: 0,
     apiOperationsPageHarnessErrors: 0,
@@ -1151,6 +1270,10 @@ const result = {
     objectStringControlFailures: 0,
     accessibleControlsChecked: 0,
     requiredValidationChecks: 0,
+    optionalFormControlsPlanned: 0,
+    optionalFormControlsInteracted: 0,
+    optionalFormArrayAdditions: 0,
+    optionalFormNestedObjects: 0,
     keyboardChecks: 0,
     dialogAccessibilityChecks: 0,
     responsiveViewportsChecked: 0,
@@ -1176,7 +1299,11 @@ const result = {
     enabled: sourceCoverageEnabled,
     scope: sourceCoveragePrefixes,
     excludedGeneratedFiles: sourceCoverageExcludedGeneratedFiles,
-    thresholds: sourceCoverageThresholds,
+    thresholds: {
+      browser: browserSourceCoverageThresholds,
+      vitest: vitestSourceCoverageThresholds,
+    },
+    vitestEnabled: vitestSourceCoverageEnabled,
     maxScriptBytes: sourceCoverageMaxScriptBytes,
     maxUnknownScriptBytes: sourceCoverageMaxUnknownScriptBytes,
     navigationsPerSegment: sourceCoverageNavigationsPerSegment,
@@ -1186,6 +1313,11 @@ const result = {
 const started = Date.now();
 let browser;
 let page;
+let authenticated = false;
+let operationErrorCapture;
+let browserClosePromise;
+let terminationPromise;
+let terminationSignal;
 let browserCoverageStarted = false;
 let sourceCoverageFunctionFileIndex = 0;
 let sourceCoverageNavigationLabels = [];
@@ -1204,11 +1336,14 @@ const successfulOperationIds = new Set();
 const apiOperationsPageRenderedOperationIds = new Set();
 const apiOperationsPageSubmittedOperationIds = new Set();
 const apiOperationsPageSuccessfulOperationIds = new Set();
+const apiOperationsPageBlockedPrerequisiteOperations = [];
+const apiOperationsPageDisabledOptionalOperations = [];
 const apiOperationsPageExpectedNegativeOperations = [];
 const apiOperationsPageUnexecutableOperations = [];
 const apiOperationsPageHarnessErrors = [];
 const apiOperationsPageUnexpectedFailures = [];
 const operationExecutionRecords = [];
+const eventCandidateReadOutcomes = new Map();
 const identityResolutions = [];
 const structuredObjectOperationIds = new Set();
 const structuredArrayOperationIds = new Set();
@@ -1221,6 +1356,7 @@ function currentTerminalOperationIds() {
   return [
     ...new Set([
       ...apiOperationsPageSuccessfulOperationIds,
+      ...apiOperationsPageBlockedPrerequisiteOperations.map(entry => entry.operationId),
       ...apiOperationsPageExpectedNegativeOperations.map(entry => entry.operationId),
       ...apiOperationsPageUnexecutableOperations.map(entry => entry.operationId),
       ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
@@ -1229,10 +1365,26 @@ function currentTerminalOperationIds() {
   ];
 }
 
+function externalPrerequisiteOperation(operation) {
+  return {
+    operationId: operation.id,
+    method: operation.method,
+    path: operation.path,
+  };
+}
+
+function operationPrerequisiteDisposition(operation) {
+  return classifyOperationPrerequisite(externalPrerequisiteReport, externalPrerequisiteOperation(operation));
+}
+
+function applicableDeclaredOperations() {
+  return declaredOperations.filter(operation => operationPrerequisiteDisposition(operation).classification !== 'disabled-optional');
+}
+
 function currentWorkflowReport() {
   return requiredWorkflowCompletion({
     reachedCoverageGate: reachedWorkflowCoverageGate,
-    declaredOperationIds: declaredOperations.map(operation => operation.id),
+    declaredOperationIds: applicableDeclaredOperations().map(operation => operation.id),
     renderedOperationIds: [...renderedOperationIds],
     terminalOperationIds: currentTerminalOperationIds(),
     requireTerminalResults: exerciseApiOperations,
@@ -1248,7 +1400,67 @@ function currentWorkflowReport() {
 
 function writeResultReport() {
   if (reportWritten) return;
+  operationErrorCapture?.correlateConsoleHttpErrors();
   const declaredIds = declaredOperations.map(operation => operation.id);
+  const operationErrorEvidence = {
+    events: operationErrorCapture?.events ?? [],
+    assertions: operationErrorCapture?.assertions ?? [],
+  };
+  const operationReport = buildOperationOutcomeReport({
+    operations: declaredOperations.map(externalPrerequisiteOperation),
+    prerequisiteReport: externalPrerequisiteReport,
+    outcomes: {
+      'success-2xx': [...apiOperationsPageSuccessfulOperationIds].sort().map(operationId => ({ operationId })),
+      'expected-negative': apiOperationsPageExpectedNegativeOperations,
+      unexecutable: apiOperationsPageUnexecutableOperations,
+      'harness-error': apiOperationsPageHarnessErrors,
+      'unexpected-failure': apiOperationsPageUnexpectedFailures,
+    },
+    operationErrorEvidence,
+  });
+  result.operationReport = operationReport;
+  result.operationErrorAttribution = operationReport.operationErrorAttribution;
+  result.operationErrorAttributionReportFile = operationErrorReportFile;
+  result.runtimeErrorEvents = operationErrorEvidence.events;
+  result.operationErrorAssertions = operationErrorEvidence.assertions;
+  result.failedResponses = [...result.operationErrorAttribution.unmatchedEvents, ...result.operationErrorAttribution.ambiguousEvents]
+    .filter(entry => entry.classification === 'http-response' && entry.authenticated && entry.target)
+    .map(entry => entry.event);
+  fs.mkdirSync(path.dirname(operationErrorReportFile), { recursive: true });
+  fs.writeFileSync(
+    operationErrorReportFile,
+    `${JSON.stringify(
+      {
+        ...result.operationErrorAttribution,
+        source: operationErrorEvidence,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  if (result.operationErrorAttribution.enterpriseGate.status === 'failed') {
+    result.status = 'failed';
+    result.error ??= {
+      message: `Authenticated HTTP error attribution failed: ${result.operationErrorAttribution.counts.unmatchedAuthenticated} unmatched, ${result.operationErrorAttribution.counts.ambiguousAuthenticated} ambiguous`,
+    };
+    process.exitCode = 1;
+  }
+  if (failOnConsoleError) {
+    const attributedRequestIds = new Set(
+      result.operationErrorAttribution.attributedEvents.map(entry => entry.event.requestId).filter(Boolean),
+    );
+    const runtimeEventByEvidenceRef = new Map(operationErrorEvidence.events.map(event => [event.evidenceRef, event]));
+    const consoleErrors = result.console.filter(entry => {
+      if (entry.type !== 'error' || !entry.authenticated) return false;
+      const runtimeEvent = runtimeEventByEvidenceRef.get(entry.evidenceRef);
+      return !attributedRequestIds.has(runtimeEvent?.correlation?.requestId);
+    });
+    if (consoleErrors.length > 0) {
+      result.status = 'failed';
+      result.error ??= { message: `Browser console error(s): ${consoleErrors.map(entry => entry.text).join('; ')}` };
+      process.exitCode = 1;
+    }
+  }
   result.coverage.declaredOperations = declaredIds.length;
   result.coverage.renderedOperations = renderedOperationIds.size;
   result.coverage.submittedOperations = submittedOperationIds.size;
@@ -1261,6 +1473,11 @@ function writeResultReport() {
   result.coverage.apiOperationsPageRenderedOperations = apiOperationsPageRenderedOperationIds.size;
   result.coverage.apiOperationsPageSubmittedOperations = apiOperationsPageSubmittedOperationIds.size;
   result.coverage.apiOperationsPage2xxSuccesses = apiOperationsPageSuccessfulOperationIds.size;
+  const applicableOperations = applicableDeclaredOperations();
+  result.coverage.apiOperationsPageEligibleOperations = operationReport.counts.eligible;
+  result.coverage.apiOperationsPageBlockedPrerequisiteOperations = operationReport.counts.blockedPrerequisite;
+  result.coverage.apiOperationsPageDisabledOptionalOperations = operationReport.counts.disabledOptional;
+  result.coverage.apiOperationsPageApplicableOperations = operationReport.denominators.applicable;
   result.coverage.apiOperationsPageRenderedOperationIds = [...apiOperationsPageRenderedOperationIds].sort();
   result.coverage.apiOperationsPageSubmittedOperationIds = [...apiOperationsPageSubmittedOperationIds].sort();
   result.coverage.apiOperationsPage2xxSuccessOperationIds = [...apiOperationsPageSuccessfulOperationIds].sort();
@@ -1279,14 +1496,18 @@ function writeResultReport() {
     operationId => !apiOperationsPageRenderedOperationIds.has(operationId),
   );
   result.coverage.missingApiOperationsPageSubmittedOperationIds = declaredIds.filter(
-    operationId => !apiOperationsPageSubmittedOperationIds.has(operationId),
+    operationId =>
+      applicableOperations.some(operation => operation.id === operationId) && !apiOperationsPageSubmittedOperationIds.has(operationId),
   );
   result.coverage.missingApiOperationsPage2xxSuccessOperationIds = declaredIds.filter(
-    operationId => !apiOperationsPageSuccessfulOperationIds.has(operationId),
+    operationId =>
+      applicableOperations.some(operation => operation.id === operationId) && !apiOperationsPageSuccessfulOperationIds.has(operationId),
   );
   const terminalIds = new Set(currentTerminalOperationIds());
   result.coverage.apiOperationsPageTerminalResults = terminalIds.size;
-  result.coverage.missingApiOperationsPageTerminalResultOperationIds = declaredIds.filter(operationId => !terminalIds.has(operationId));
+  result.coverage.missingApiOperationsPageTerminalResultOperationIds = applicableOperations
+    .map(operation => operation.id)
+    .filter(operationId => !terminalIds.has(operationId));
   result.coverage.plannedUpdateResourceKeys = [...plannedUpdateResourceKeys].sort();
   result.coverage.successfulUpdateResourceKeys = [...successfulUpdateResourceKeys].sort();
   result.coverage.plannedDeleteResourceKeys = [...plannedDeleteResourceKeys].sort();
@@ -1300,7 +1521,10 @@ function writeResultReport() {
     incompleteReasons: result.workflow.reasons,
   });
   result.operationResults = {
-    success2xx: [...apiOperationsPageSuccessfulOperationIds].sort().map(operationId => ({ operationId })),
+    eligible: operationReport.prerequisites.eligible,
+    blockedPrerequisite: operationReport.prerequisites['blocked-prerequisite'],
+    disabledOptional: operationReport.prerequisites['disabled-optional'],
+    success2xx: operationReport.results['success-2xx'],
     expectedNegative: apiOperationsPageExpectedNegativeOperations,
     unexecutable: apiOperationsPageUnexecutableOperations,
     harnessError: apiOperationsPageHarnessErrors,
@@ -1482,7 +1706,10 @@ async function collectSourceCoverage() {
     return {
       ...component,
       sourceFiles: files.filter(file => !sourceCoverageExcludedGeneratedFiles.includes(path.relative(appDir, file).replaceAll('\\', '/'))),
-      thresholds: sourceCoverageThresholds,
+      thresholds: {
+        browser: browserSourceCoverageThresholds,
+        vitest: vitestSourceCoverageThresholds,
+      },
     };
   });
   fs.writeFileSync(
@@ -1497,7 +1724,10 @@ async function collectSourceCoverage() {
         components: sourceFiles,
         scripts: sourceCoverageScripts,
         workflow: result.workflow,
-        mergeUnitTestCoverage: sourceCoverageMergeUnitTest,
+        declaredOperations: declaredOperations.map(operation => ({ operationId: operation.id, method: operation.method })),
+        browserThresholds: browserSourceCoverageThresholds,
+        vitestThresholds: vitestSourceCoverageThresholds,
+        collectUnitTestCoverage: vitestSourceCoverageEnabled,
         unitTestCoverageFile: path.join(appDir, 'target', 'test-results', 'coverage-final.json'),
       },
       null,
@@ -1519,7 +1749,11 @@ async function collectSourceCoverage() {
     enabled: true,
     scope: sourceCoveragePrefixes,
     excludedGeneratedFiles: sourceCoverageExcludedGeneratedFiles,
-    thresholds: sourceCoverageThresholds,
+    thresholds: {
+      browser: browserSourceCoverageThresholds,
+      vitest: vitestSourceCoverageThresholds,
+    },
+    vitestEnabled: vitestSourceCoverageEnabled,
     maxScriptBytes: sourceCoverageMaxScriptBytes,
     maxUnknownScriptBytes: sourceCoverageMaxUnknownScriptBytes,
     workerHeapMb: sourceCoverageWorkerHeapMb,
@@ -1534,17 +1768,39 @@ async function collectSourceCoverage() {
   }
 }
 
-async function handleTermination(signal) {
+async function closeBrowser() {
+  if (!browser) return;
+  browserClosePromise ??= browser.close();
+  await browserClosePromise;
+}
+
+function handleTermination(signal) {
+  if (terminationSignal) return terminationPromise;
+  terminationSignal = signal;
   result.status = 'interrupted';
   result.error = { message: `Received ${signal}` };
-  try {
-    if (browser) {
-      await browser.close();
-    }
-  } finally {
-    writeResultReport();
-    process.exit(signal === 'SIGINT' ? 130 : 143);
+  if (sourceCoverageEnabled) {
+    result.sourceCoverage = {
+      ...result.sourceCoverage,
+      status: 'interrupted',
+      error: { message: `Source coverage collection interrupted by ${signal}` },
+    };
   }
+  process.exitCode = signal === 'SIGINT' ? 130 : 143;
+  terminationPromise = Promise.resolve().then(async () => {
+    try {
+      await closeBrowser();
+    } catch (error) {
+      result.termination = {
+        signal,
+        browserCloseError: { message: error.message, stack: error.stack },
+      };
+    } finally {
+      writeResultReport();
+      process.exit(process.exitCode);
+    }
+  });
+  return terminationPromise;
 }
 
 process.once('SIGINT', () => {
@@ -1616,6 +1872,220 @@ async function accessibleControlSnapshot(root) {
   );
 }
 
+async function editableControlSnapshot(root) {
+  return root.locator('input, textarea, select').evaluateAll(elements =>
+    elements.map(element => {
+      const labelledBy = (element.getAttribute('aria-labelledby') ?? '')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(id => element.ownerDocument.getElementById(id)?.textContent?.trim() ?? '')
+        .filter(Boolean)
+        .join(' ');
+      const labels =
+        'labels' in element && element.labels ?
+          Array.from(element.labels)
+            .map(label => label.textContent?.trim() ?? '')
+            .join(' ')
+        : '';
+      const rect = element.getBoundingClientRect();
+      return {
+        tagName: element.tagName.toLowerCase(),
+        type: element.tagName === 'INPUT' && 'type' in element ? element.type : '',
+        name: element.getAttribute('name') ?? '',
+        accessibleName: element.getAttribute('aria-label')?.trim() || labelledBy || labels || '',
+        visible: rect.width > 0 && rect.height > 0 && element.ownerDocument.defaultView?.getComputedStyle(element).visibility !== 'hidden',
+        disabled: 'disabled' in element && element.disabled === true,
+      };
+    }),
+  );
+}
+
+async function restoreOptionalControl(control, original) {
+  if (!original) return;
+  if (original.tagName === 'select') {
+    await control.selectOption(original.value);
+  } else if (original.type === 'checkbox') {
+    if ((await control.isChecked()) !== original.checked) await control.click();
+  } else {
+    await control.fill(original.value);
+  }
+  await control.blur();
+}
+
+async function optionalArraySnapshots(root) {
+  return root.locator('[data-cy^="formCrudArray-"]').evaluateAll(elements =>
+    elements.map(element => {
+      const rect = element.getBoundingClientRect();
+      const addButton = Array.from(element.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Add');
+      return {
+        label:
+          element
+            .querySelector('.form-label')
+            ?.textContent?.replace(/\s*\*+\s*$/, '')
+            .trim() ?? '',
+        visible: rect.width > 0 && rect.height > 0 && element.ownerDocument.defaultView?.getComputedStyle(element).visibility !== 'hidden',
+        addDisabled: addButton?.disabled ?? true,
+      };
+    }),
+  );
+}
+
+async function executeOptionalFormExerciseActions(pageValue, operation, actions, skipped) {
+  const form = pageValue.locator('[data-cy="formCrudOperationForm"]').first();
+  const controlActions = matchOptionalFormExerciseControls(actions, await editableControlSnapshot(form))
+    .filter(action => action.controlPath)
+    .sort((left, right) => (right.controlIndex ?? -1) - (left.controlIndex ?? -1));
+  const successfulActions = [];
+  const controls = form.locator('input, textarea, select');
+  for (const action of controlActions) {
+    if (action.controlIndex === undefined) {
+      skipped.push({ kind: action.kind, path: action.schemaPath, reasonCode: 'rendered-control-not-matched' });
+      continue;
+    }
+    const control = controls.nth(action.controlIndex);
+    const interaction = await interactWithOptionalFormControl(action, control, async () => (await debugState(pageValue)).valid);
+    if (!interaction.interacted) {
+      await restoreOptionalControl(control, interaction.original);
+      skipped.push({ kind: action.kind, path: action.schemaPath, reasonCode: interaction.reasonCode });
+      continue;
+    }
+    successfulActions.push(action);
+  }
+
+  const arrayActions = actions.filter(action => action.kind === 'array');
+  const arraySnapshots = await optionalArraySnapshots(form);
+  const matchedArrays = arrayActions
+    .map(action => {
+      const matches = arraySnapshots
+        .map((_, index) => index)
+        .filter(index => normalizeName(arraySnapshots[index].label) === normalizeName(action.label));
+      const arrayIndex = matches[action.arrayOccurrence ?? 0];
+      return { ...action, arrayIndex };
+    })
+    .sort((left, right) => (right.arrayIndex ?? -1) - (left.arrayIndex ?? -1));
+  const arrays = form.locator('[data-cy^="formCrudArray-"]');
+  for (const action of matchedArrays) {
+    if (action.arrayIndex === undefined || !arraySnapshots[action.arrayIndex]?.visible || arraySnapshots[action.arrayIndex].addDisabled) {
+      skipped.push({ kind: action.kind, path: action.schemaPath, reasonCode: 'array-add-control-unavailable' });
+      continue;
+    }
+    const array = arrays.nth(action.arrayIndex);
+    const outcome = await exerciseOptionalArrayAddition(
+      array,
+      () => debugState(pageValue),
+      () => gotoOperation(pageValue, operation.id),
+      arrayState => valueAtRenderedArrayPath(arrayState.model?.body, action.valuePath),
+    );
+    if (outcome.status === 'rolled-back') {
+      skipped.push({ kind: action.kind, path: action.schemaPath, reasonCode: 'array-add-invalidated-form' });
+      continue;
+    }
+    if (outcome.status !== 'added') {
+      throw new Error(
+        `Optional array ${action.schemaPath.join('.')} ${outcome.status}: direct item count ${outcome.before} -> ${outcome.after}, model item count ${outcome.modelBefore ?? 'unavailable'} -> ${outcome.modelAfter ?? 'unavailable'}`,
+      );
+    }
+    successfulActions.push(action);
+  }
+  return successfulActions;
+}
+
+async function exerciseOptionalFormControls(pageValue, operation) {
+  if (
+    !['POST', 'PUT', 'PATCH'].includes(operation.method) ||
+    !operation.requestContentType?.includes('json') ||
+    !operation.requestBodyFields?.length
+  ) {
+    return;
+  }
+
+  const state = await debugState(pageValue);
+  if (!state.valid) return;
+  const baseBody = baseBodyForApiOperation(operation);
+  if (baseBody === undefined || baseBody === null || typeof baseBody !== 'object') return;
+  const baseCoverage = buildOperationSchemaCoverage([operation], [{ operation, status: 200, requestBody: baseBody }]);
+  const baseOptionalGate = evaluateOperationSchemaCoverage(baseCoverage, {
+    optionalMinimum: optionalFieldCoverageMinimum,
+  }).optionalFieldGate;
+  const baseOptionalRatio = baseOptionalGate.coverageRatio;
+  if (!baseOptionalGate.evaluated || baseOptionalGate.passed) {
+    result.steps.push({
+      name: `optional-form-controls-${operation.id}`,
+      status: 'not-needed',
+      optionalCoverageRatio: baseOptionalRatio,
+      optionalMinimum: optionalFieldCoverageMinimum,
+    });
+    return;
+  }
+  const plan = planOptionalFormExercises(state.fields, operation.requestBodyFields, baseBody, state.model?.body, {
+    budget: optionalFormInteractionBudget,
+    maxArrayAdditions: optionalFormMaxArrayAdditions,
+    maxNestedObjects: optionalFormMaxNestedObjects,
+  });
+  result.coverage.optionalFormControlsPlanned += plan.actions.length;
+  if (plan.actions.length === 0) {
+    result.steps.push({
+      name: `optional-form-controls-${operation.id}`,
+      status: 'not-applicable',
+      candidateCount: plan.candidateCount,
+    });
+    return;
+  }
+
+  const skipped = [];
+  const successfulActions = await executeOptionalFormExerciseActions(pageValue, operation, plan.actions, skipped);
+  let finalState = await debugState(pageValue);
+  if (!finalState.valid) {
+    throw new Error(`Optional Form CRUD interactions invalidated ${operation.id}`);
+  }
+  let projectedBody = mergeOptionalFormExerciseValues(baseBody, finalState.model.body, operation.requestBodyFields, successfulActions);
+  let expansionPlan;
+  const remainingBudget = Math.max(0, optionalFormInteractionBudget - plan.actions.length);
+  if (remainingBudget > 0 && successfulActions.some(action => action.kind === 'array' || action.kind === 'object')) {
+    expansionPlan = planOptionalFormExercises(finalState.fields, operation.requestBodyFields, projectedBody, finalState.model?.body, {
+      budget: remainingBudget,
+      maxArrayAdditions: Math.max(0, optionalFormMaxArrayAdditions - successfulActions.filter(action => action.kind === 'array').length),
+      maxNestedObjects: Math.max(0, optionalFormMaxNestedObjects - successfulActions.filter(action => action.kind === 'object').length),
+      excludedActions: plan.actions,
+    });
+    result.coverage.optionalFormControlsPlanned += expansionPlan.actions.length;
+    await expandAllNestedAccordions(newlyMaterializedOptionalArrayItems(pageValue.locator('[data-cy="formCrudOperationForm"]').first()));
+    const expandedActions = await executeOptionalFormExerciseActions(pageValue, operation, expansionPlan.actions, skipped);
+    successfulActions.push(...expandedActions);
+    finalState = await debugState(pageValue);
+    if (!finalState.valid) {
+      throw new Error(`Expanded optional Form CRUD interactions invalidated ${operation.id}`);
+    }
+    projectedBody = mergeOptionalFormExerciseValues(baseBody, finalState.model.body, operation.requestBodyFields, successfulActions);
+  }
+  if (successfulActions.length > 0) {
+    optionalFormExercises.set(operation.id, { formBody: finalState.model.body, actions: successfulActions });
+  }
+  const projectedOptionalGate = evaluateOperationSchemaCoverage(
+    buildOperationSchemaCoverage([operation], [{ operation, status: 200, requestBody: projectedBody }]),
+    { optionalMinimum: optionalFieldCoverageMinimum },
+  ).optionalFieldGate;
+  result.coverage.optionalFormControlsInteracted += successfulActions.length;
+  result.coverage.optionalFormArrayAdditions += successfulActions.filter(action => action.kind === 'array').length;
+  result.coverage.optionalFormNestedObjects += successfulActions.filter(action => action.kind === 'object').length;
+  result.steps.push({
+    name: `optional-form-controls-${operation.id}`,
+    status: successfulActions.length > 0 ? 'ok' : 'not-applicable',
+    budget: plan.budget,
+    candidateCount: plan.candidateCount,
+    planned: plan.actions.length + (expansionPlan?.actions.length ?? 0),
+    expansionCandidateCount: expansionPlan?.candidateCount ?? 0,
+    expansionPlanned: expansionPlan?.actions.length ?? 0,
+    interacted: successfulActions.length,
+    kinds: [...new Set(successfulActions.map(action => action.kind))].sort(),
+    paths: successfulActions.map(action => `/${action.schemaPath.join('/')}`),
+    skipped,
+    truncated: plan.truncated,
+    optionalCoverageRatio: projectedOptionalGate.coverageRatio,
+    optionalMinimum: optionalFieldCoverageMinimum,
+  });
+}
+
 async function assertAccessibleControls(page, operation, state) {
   const form = page.locator('[data-cy="formCrudOperationForm"]').first();
   const accordionExpansion = await expandAllNestedAccordions(form);
@@ -1661,14 +2131,7 @@ async function exerciseRequiredValidation(page, operation) {
     if (!(await control.isVisible()) || !(await control.isEnabled())) continue;
     const tagName = await control.evaluate(element => element.tagName.toLowerCase());
     const originalValue = await control.inputValue();
-    if (tagName === 'select') {
-      const hasEmptyOption = await control.locator('option[value=""]').count();
-      if (!hasEmptyOption) continue;
-      await control.selectOption('');
-    } else {
-      await control.fill('');
-    }
-    await control.blur();
+    await clearRequiredValidationControl(control, tagName);
     const observation = await control.evaluate(element => {
       const describedBy = (element.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
       return {
@@ -1794,11 +2257,7 @@ async function debugState(page) {
 
 async function gotoOperation(page, operationId) {
   await navigateWithSourceCoverage(page, joinUrl(webBaseUrl, `/form-crud/${operationId}`), { waitUntil: 'domcontentloaded' });
-  await page.locator('[data-cy="formCrud"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
-  if (operationById(operationId)?.method === 'GET') {
-    await page.waitForLoadState('networkidle', { timeout: apiTimeoutMs });
-  }
-  return debugState(page);
+  return waitForFormCrudOperationReady(page, operationId, apiTimeoutMs);
 }
 
 async function submitCurrentOperation(page, stepName, expectedMethods = ['POST', 'PUT', 'PATCH', 'DELETE'], operation = undefined) {
@@ -1850,43 +2309,92 @@ async function recordApiExchange(stepName, response, operation = undefined, sour
   };
   fs.writeFileSync(requestFile, requestText, 'utf8');
   let responseBodySource = 'network';
+  let responseBodyCaptured = true;
   let networkResponseBodyError;
+  let deleteReadbackEvidence;
+  const responseCapture = capturedOperationResponseBodies.get(response);
+  capturedOperationResponseBodies.delete(response);
   try {
-    responseText = await response.text();
+    if (responseCapture === undefined) {
+      throw new Error(`No response body snapshot was captured for ${matchedOperation?.id ?? stepName}`);
+    }
+    responseText = capturedResponseBodyText(responseCapture, matchedOperation?.id ?? stepName);
     fs.writeFileSync(responseFile, responseText, 'utf8');
   } catch (error) {
+    responseBodyCaptured = false;
     networkResponseBodyError = error.message;
-    responseText = await renderedResponseBody(response, source);
-    if (responseText === undefined) {
-      responseBodyError = error.message;
-      fs.writeFileSync(responseFile, `Failed to read response body: ${error.message}`, 'utf8');
-    } else {
-      responseBodySource = 'rendered-ui';
+    let deleteReadbackError;
+    if (matchedOperation?.method === 'DELETE') {
+      const responseUrl = new URL(response.url());
+      const readbackUrl = `${responseUrl.pathname}${responseUrl.search}`;
+      try {
+        deleteReadbackEvidence = await captureSuccessfulDeleteReadbackEvidence(responseCapture, {
+          url: readbackUrl,
+          readback: () => authenticatedFetch(page, readbackUrl, { method: 'GET' }),
+        });
+      } catch (readbackError) {
+        if (!readbackError.deleteReadbackEvidence) throw readbackError;
+        deleteReadbackEvidence = readbackError.deleteReadbackEvidence;
+        deleteReadbackError = readbackError;
+      }
+    }
+    if (deleteReadbackEvidence) {
+      if (deleteReadbackEvidence.verified) {
+        const readbackOperation = declaredOperations.find(
+          candidate =>
+            candidate.method === 'GET' && operationPathPattern(candidate).test(new URL(deleteReadbackEvidence.url, webBaseUrl).pathname),
+        );
+        operationErrorCapture.expectRequest(deleteReadbackEvidence.requestId, 'post-delete', {
+          operationId: readbackOperation?.id,
+        });
+      }
+      responseBodySource = 'authenticated-delete-readback';
+      responseText = JSON.stringify(deleteReadbackEvidence);
+      responseBodyError = deleteReadbackError?.message;
       fs.writeFileSync(responseFile, responseText, 'utf8');
+    } else if (matchedOperation?.method === 'DELETE' && (response.status() < 200 || response.status() >= 300)) {
+      responseBodySource = 'http-status';
+      responseText = '';
+      fs.writeFileSync(responseFile, responseText, 'utf8');
+    } else {
+      responseText = await renderedResponseBody(response, source);
+      if (responseText === undefined) {
+        responseBodyError = error.message;
+        fs.writeFileSync(responseFile, `Failed to read response body: ${error.message}`, 'utf8');
+      } else {
+        responseBodyCaptured = true;
+        responseBodySource = 'rendered-ui';
+        fs.writeFileSync(responseFile, responseText, 'utf8');
+      }
     }
   }
   Object.assign(exchange, {
     requestBodyCaptured: true,
-    responseBodyCaptured: responseBodyError === undefined,
+    responseBodyCaptured,
     responseBodySource,
     responseBodyBytes: responseText === undefined ? 0 : Buffer.byteLength(responseText),
     responseBodyError,
     networkResponseBodyError,
+    responseEvidenceVerified: responseBodyError === undefined,
+    deleteReadbackEvidence,
   });
   fs.writeFileSync(exchangeFile, `${JSON.stringify(exchange, null, 2)}\n`);
   result.apiExchanges.push(exchange);
   if (matchedOperation) {
-    operationExecutionRecords.push({
+    const executionRecord = {
       operation: matchedOperation,
       source,
       status: response.status(),
       requestBody: parseJsonText(requestText),
       responseBody: parseJsonText(responseText),
+      responseBodySource,
+      writeResponseBodyAvailable: networkResponseBodyError === undefined && exchange.responseBodyBytes > 0,
       responseHeaders: response.headers(),
       responseUrl: response.url(),
-      createdByApiOperations:
-        source === 'api-operations' && matchedOperation.method === 'POST' && response.status() >= 200 && response.status() < 300,
-    });
+    };
+    executionRecord.createdByApiOperations =
+      source === 'api-operations' && matchedOperation.method === 'POST' && isConfirmedResourceStateRecord(executionRecord);
+    operationExecutionRecords.push(executionRecord);
   }
   if (responseBodyError) {
     throw new Error(`Failed to persist response body evidence for ${matchedOperation?.id ?? stepName}: ${responseBodyError}`);
@@ -2133,38 +2641,69 @@ async function apiRequest(page, operation, body) {
   );
 }
 
-async function authenticatedFetch(page, pathValue, options = {}) {
-  return page.evaluate(
-    async ({ requestPath, requestOptions }) => {
-      const rawToken = sessionStorage.getItem('jhi-authenticationToken') ?? localStorage.getItem('jhi-authenticationToken') ?? '';
-      let token = rawToken;
-      try {
-        token = JSON.parse(rawToken);
-      } catch {
-        // Stored as a plain string in some generated applications.
-      }
-      const headers = {
-        Accept: 'application/json',
-        ...(requestOptions.body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(requestOptions.headers ?? {}),
-      };
-      if (token) headers.Authorization = `Bearer ${token}`;
-      const response = await fetch(requestPath, {
-        ...requestOptions,
-        headers,
-        body: requestOptions.body === undefined ? undefined : JSON.stringify(requestOptions.body),
-      });
-      const text = await response.text();
-      let parsed;
-      try {
-        parsed = text ? JSON.parse(text) : undefined;
-      } catch {
-        parsed = text;
-      }
-      return { status: response.status, body: parsed };
+async function authenticatedFetch(pageValue, pathValue, options = {}) {
+  const expectedUrl = new URL(pathValue, webBaseUrl);
+  const expectedMethod = String(options.method ?? 'GET').toUpperCase();
+  let result;
+  const response = await captureResponseForAction(
+    pageValue,
+    candidate => {
+      const candidateUrl = new URL(candidate.url());
+      return (
+        candidate.request().method() === expectedMethod &&
+        candidateUrl.origin === expectedUrl.origin &&
+        candidateUrl.pathname === expectedUrl.pathname &&
+        candidateUrl.search === expectedUrl.search
+      );
     },
-    { requestPath: pathValue, requestOptions: options },
+    async () => {
+      result = await pageValue.evaluate(
+        async ({ requestPath, requestOptions }) => {
+          const rawToken = sessionStorage.getItem('jhi-authenticationToken') ?? localStorage.getItem('jhi-authenticationToken') ?? '';
+          let token = rawToken;
+          try {
+            token = JSON.parse(rawToken);
+          } catch {
+            // Stored as a plain string in some generated applications.
+          }
+          const headers = {
+            Accept: 'application/json',
+            ...(requestOptions.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            ...(requestOptions.headers ?? {}),
+          };
+          if (token) headers.Authorization = `Bearer ${token}`;
+          const response = await fetch(requestPath, {
+            ...requestOptions,
+            headers,
+            body: requestOptions.body === undefined ? undefined : JSON.stringify(requestOptions.body),
+          });
+          const text = await response.text();
+          let parsed;
+          try {
+            parsed = text ? JSON.parse(text) : undefined;
+          } catch {
+            parsed = text;
+          }
+          const responseHeaders = {};
+          for (const name of ['content-type', 'etag', 'last-modified', 'location', 'retry-after']) {
+            const value = response.headers.get(name);
+            if (value !== null) responseHeaders[name] = value;
+          }
+          return { status: response.status, body: parsed, url: response.url, headers: responseHeaders };
+        },
+        { requestPath: pathValue, requestOptions: options },
+      );
+    },
+    { timeout: apiTimeoutMs, label: `${expectedMethod} ${expectedUrl.pathname}` },
   );
+  const operationErrorEvent = operationErrorCapture?.eventForResponse(response);
+  return {
+    ...result,
+    authenticated: operationErrorEvent?.authenticated,
+    target: operationErrorEvent?.target,
+    requestId: operationErrorEvent?.requestId,
+    evidenceRef: operationErrorEvent?.evidenceRef,
+  };
 }
 
 async function configureReferencePickerViaAdmin(page, config) {
@@ -2241,15 +2780,20 @@ async function configureReferencePickerViaAdmin(page, config) {
     await multipleCheckbox.click();
   }
 
-  const response = await captureResponseForAction(
+  const savedCapture = await captureResponseBodySnapshotForAction(
     page,
     candidate => responseMatchesResource(candidate, 'PUT'),
     () => root.locator('[data-cy="formCrudReferencePickersSave"]').click(),
     { timeout: apiTimeoutMs, label: 'reference picker admin save' },
   );
-  if (response.status() < 200 || response.status() >= 300) {
-    throw new Error(`Reference picker admin save failed: HTTP ${response.status()}`);
-  }
+  const responseBody = await parseSuccessfulResponseJson(savedCapture, 'reference picker admin save', async () => {
+    const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
+    if (persisted.status < 200 || persisted.status >= 300) {
+      throw new Error(`Reference picker admin save verification failed: HTTP ${persisted.status}`);
+    }
+    return persisted.body;
+  });
+  const { response } = savedCapture;
   let requestedBody;
   try {
     requestedBody = JSON.parse(response.request().postData() ?? '[]');
@@ -2259,25 +2803,28 @@ async function configureReferencePickerViaAdmin(page, config) {
   if (!findReferencePickerConfigBySemanticKey(requestedBody, config)) {
     throw new Error('Reference picker admin PUT request did not contain the configured semantic key');
   }
-  const responseBody = await response.json();
   const returnedConfig = findReferencePickerConfigBySemanticKey(responseBody, config);
   if (!returnedConfig) {
-    throw new Error('Reference picker admin PUT response did not return the configured semantic key');
+    throw new Error('Reference picker admin save did not persist the configured semantic key');
   }
 
   await root.locator('[data-cy="formCrudReferencePickersSuccess"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
   await screenshot(page, 'reference-picker-admin-saved');
 
-  const reloadResponse = await captureResponseForAction(
+  const reloadCapture = await captureResponseBodySnapshotForAction(
     page,
     candidate => responseMatchesResource(candidate, 'GET'),
     () => page.reload({ waitUntil: 'domcontentloaded' }),
     { timeout: apiTimeoutMs, label: 'reference picker admin reload' },
   );
-  if (reloadResponse.status() < 200 || reloadResponse.status() >= 300) {
-    throw new Error(`Reference picker admin reload failed: HTTP ${reloadResponse.status()}`);
-  }
-  const persistedConfig = requireReferencePickerConfig(await reloadResponse.json(), returnedConfig, 'restored after admin reload');
+  const reloadedBody = await parseSuccessfulResponseJson(reloadCapture, 'reference picker admin reload', async () => {
+    const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
+    if (persisted.status < 200 || persisted.status >= 300) {
+      throw new Error(`Reference picker admin reload verification failed: HTTP ${persisted.status}`);
+    }
+    return persisted.body;
+  });
+  const persistedConfig = requireReferencePickerConfig(reloadedBody, returnedConfig, 'restored after admin reload');
   await referencePickerPanel(root, persistedConfig);
   await screenshot(page, 'reference-picker-admin-reloaded');
   result.steps.push({
@@ -2307,7 +2854,7 @@ async function referencePickerPanel(root, config) {
 async function deleteReferencePickerViaAdmin(page, savedConfig) {
   const resourcePath = '/api/form-crud-reference-pickers';
   const responseMatchesResource = (response, method) => response.url().includes(resourcePath) && response.request().method() === method;
-  const loaded = await captureResponseForAction(
+  const loadedCapture = await captureResponseBodySnapshotForAction(
     page,
     response => responseMatchesResource(response, 'GET'),
     () =>
@@ -2316,29 +2863,42 @@ async function deleteReferencePickerViaAdmin(page, savedConfig) {
       }),
     { timeout: apiTimeoutMs, label: 'reference picker admin deletion load' },
   );
-  if (loaded.status() < 200 || loaded.status() >= 300) {
-    throw new Error(`Reference picker admin deletion load failed: HTTP ${loaded.status()}`);
-  }
-  requireReferencePickerConfig(await loaded.json(), savedConfig, 'available before admin deletion');
+  const loadedBody = await parseSuccessfulResponseJson(loadedCapture, 'reference picker admin deletion load', async () => {
+    const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
+    if (persisted.status < 200 || persisted.status >= 300) {
+      throw new Error(`Reference picker admin deletion load verification failed: HTTP ${persisted.status}`);
+    }
+    return persisted.body;
+  });
+  requireReferencePickerConfig(loadedBody, savedConfig, 'available before admin deletion');
   const root = page.locator('[data-cy="formCrudReferencePickers"]').first();
   await root.waitFor({ state: 'visible', timeout: apiTimeoutMs });
   const panel = await referencePickerPanel(root, savedConfig);
-  const removed = await captureResponseForAction(
+  const removedCapture = await captureResponseBodySnapshotForAction(
     page,
     response => responseMatchesResource(response, 'PUT'),
     () => panel.locator('[data-cy="formCrudReferencePickersRemove"]').click(),
     { timeout: apiTimeoutMs, label: 'reference picker admin deletion' },
   );
-  if (removed.status() < 200 || removed.status() >= 300) {
-    throw new Error(`Reference picker admin deletion failed: HTTP ${removed.status()}`);
-  }
-  if (findReferencePickerConfig(await removed.json(), savedConfig)) {
+  let persistedState;
+  const loadPersistedState = async () => {
+    if (persistedState === undefined) {
+      const state = await authenticatedFetch(page, resourcePath, { method: 'GET' });
+      if (state.status < 200 || state.status >= 300) {
+        throw new Error(`Reference picker admin deletion verification failed: HTTP ${state.status}`);
+      }
+      persistedState = state;
+    }
+    return persistedState;
+  };
+  const removedBody = await parseSuccessfulResponseJson(removedCapture, 'reference picker admin deletion', async () => {
+    await loadPersistedState();
+    return undefined;
+  });
+  if (removedBody !== undefined && findReferencePickerConfig(removedBody, savedConfig)) {
     throw new Error('Reference picker admin deletion response retained the saved configuration identity');
   }
-  const persisted = await authenticatedFetch(page, resourcePath, { method: 'GET' });
-  if (persisted.status < 200 || persisted.status >= 300) {
-    throw new Error(`Reference picker admin deletion verification failed: HTTP ${persisted.status}`);
-  }
+  const persisted = await loadPersistedState();
   if (findReferencePickerConfig(persisted.body, savedConfig)) {
     throw new Error('Reference picker configuration identity remained persisted after admin deletion');
   }
@@ -2428,6 +2988,7 @@ async function exerciseOperationRendering(page, operations) {
       throw new Error(`Form CRUD operation ${operation.id} did not render a submit control`);
     }
     await assertStructuredOperationForm(page, operation, state);
+    await exerciseOptionalFormControls(page, operation);
     renderedOperationIds.add(operation.id);
   }
   result.steps.push({ name: 'operation-render-coverage', status: 'ok', count: renderedOperationIds.size });
@@ -2628,12 +3189,13 @@ async function exerciseOpenApiOperationsValidationAndError(page, select, operati
         { timeout: apiTimeoutMs },
       );
       await submit.click();
-      await responsePromise;
+      const response = await responsePromise;
       await page.locator('[data-cy="openapiOperationError"]').waitFor({ state: 'visible', timeout: apiTimeoutMs });
       const statusText = await page.locator('[data-cy="openapiOperationStatus"]').textContent();
       if (!statusText?.includes(String(errorResponse.status))) {
         throw new Error(`API Operations error workflow did not render HTTP ${errorResponse.status} for ${operation.id}`);
       }
+      operationErrorCapture.expectResponse(response, 'expected-negative', { operationId: operation.id });
     } finally {
       await page.unroute('**/*', routeHandler);
     }
@@ -2681,17 +3243,85 @@ function bodyWithResolvedPathParameters(operation, body, parameterValues) {
   return output;
 }
 
-function concreteOperationPath(operation) {
+function concreteOperationPath(operation, { verificationRecord, identityCandidates } = {}) {
   let concretePath = operation.path;
   const resolutions = [];
   for (const parameter of operationPathParameters(operation)) {
     const resolution =
-      pathParameterResolution(operation, parameter, { createdByApiOperations: true }) ?? pathParameterResolution(operation, parameter);
+      (verificationRecord ?
+        pathParameterResolution(operation, parameter, {
+          records: [verificationRecord],
+          allowUnconfirmed: true,
+          identityCandidates,
+        })
+      : undefined) ??
+      pathParameterResolution(operation, parameter, { createdByApiOperations: true }) ??
+      pathParameterResolution(operation, parameter);
     if (!resolution) return undefined;
     concretePath = concretePath.replace(`{${parameter.name}}`, encodeURIComponent(resolution.value));
     resolutions.push({ parameter: parameter.name, ...resolution });
   }
   return { path: apiPath(concretePath), resolutions };
+}
+
+function eventCandidateOutcomeKey(candidate) {
+  return `${candidate.readOperation.id ?? candidate.readOperation.operationId}:${candidate.path}`;
+}
+
+function terminalEventCandidateOutcome(operation) {
+  return [...eventCandidateReadOutcomes.values()].find(outcome => outcome.candidate.readOperation.id === operation.id);
+}
+
+async function materializeEventIdentityCandidate(page, operation) {
+  const candidate = correlatedEventIdentityCandidate(operation, operationExecutionRecords, declaredOperations);
+  if (!candidate) return undefined;
+
+  const key = eventCandidateOutcomeKey(candidate);
+  const existing = eventCandidateReadOutcomes.get(key);
+  if (existing) return existing;
+
+  const targetPath = apiPath(candidate.path);
+  const readResponse = await authenticatedFetch(page, targetPath, { method: 'GET' });
+  const classified = classifyEventCandidateRead(candidate, {
+    ...readResponse,
+    url: readResponse.url ?? targetPath,
+  });
+  const outcome = { ...classified, candidate };
+  eventCandidateReadOutcomes.set(key, outcome);
+
+  const readOperation = candidate.readOperation;
+  submittedOperationIds.add(readOperation.id);
+  apiOperationsPageSubmittedOperationIds.add(readOperation.id);
+  if (outcome.usable) {
+    successfulOperationIds.add(readOperation.id);
+    apiOperationsPageSuccessfulOperationIds.add(readOperation.id);
+    operationExecutionRecords.push(outcome.resourceRecord);
+  } else {
+    apiOperationsPageUnexpectedFailures.push({
+      operationId: readOperation.id,
+      method: readOperation.method,
+      path: readOperation.path,
+      status: outcome.evidence.canonicalRead.status,
+      url: outcome.evidence.canonicalRead.url,
+      phase: 'event-candidate-canonical-read',
+      classification: outcome.classification,
+      externallyPreconditioned: outcome.externallyPreconditioned,
+      reasonCode: outcome.reasonCode,
+      reason: outcome.reason,
+      evidence: outcome.evidence,
+    });
+  }
+  result.steps.push({
+    name: `api-operations-event-candidate-${readOperation.id}`,
+    status: outcome.usable ? 'ok' : outcome.classification,
+    operationId: readOperation.id,
+    httpStatus: outcome.evidence.canonicalRead.status,
+    url: outcome.evidence.canonicalRead.url,
+    reasonCode: outcome.reasonCode,
+    reason: outcome.reason,
+    evidence: outcome.evidence,
+  });
+  return outcome;
 }
 
 async function fillOpenApiParameterControl(control, parameter, value) {
@@ -2706,6 +3336,14 @@ async function fillOpenApiParameterControl(control, parameter, value) {
 
 async function prepareOpenApiOperation(page, select, operation) {
   await selectOpenApiOperation(page, select, operation);
+  const terminalCandidateOutcome = terminalEventCandidateOutcome(operation);
+  if (terminalCandidateOutcome) {
+    return {
+      executable: false,
+      terminal: true,
+      eventCandidateOutcome: terminalCandidateOutcome,
+    };
+  }
   const parameterValues = {};
   const identityResolutions = [];
   for (const parameter of operation.parameters ?? []) {
@@ -2713,10 +3351,38 @@ async function prepareOpenApiOperation(page, select, operation) {
     const control = page.locator(`[data-cy=${JSON.stringify(dataCy)}]`).first();
     let value = '';
     if (parameter.location === 'path') {
-      const resolution =
+      let resolution =
         pathParameterResolution(operation, parameter, {
           createdByApiOperations: true,
         }) ?? pathParameterResolution(operation, parameter);
+      if (!resolution) {
+        const eventCandidateOutcome = await materializeEventIdentityCandidate(page, operation);
+        if (eventCandidateOutcome) {
+          if (eventCandidateOutcome.candidate.readOperation.id === operation.id) {
+            return {
+              executable: false,
+              terminal: true,
+              eventCandidateOutcome,
+            };
+          }
+          if (!eventCandidateOutcome.usable) {
+            return {
+              executable: false,
+              unexecutable: true,
+              workflowBlocked: true,
+              externallyPreconditioned: eventCandidateOutcome.externallyPreconditioned,
+              reasonCode:
+                eventCandidateOutcome.externallyPreconditioned ? 'external-precondition-unsatisfied' : 'canonical-read-incompatible-state',
+              reason: eventCandidateOutcome.reason,
+              externalPrecondition: eventCandidateOutcome.evidence,
+            };
+          }
+          resolution =
+            pathParameterResolution(operation, parameter, {
+              createdByApiOperations: true,
+            }) ?? pathParameterResolution(operation, parameter);
+        }
+      }
       value = resolution?.value ?? '';
       if (!value) {
         return {
@@ -2740,7 +3406,7 @@ async function prepareOpenApiOperation(page, select, operation) {
 
   let requestBody;
   if (operation.requestContentType) {
-    requestBody = bodyWithResolvedPathParameters(operation, bodyForApiOperation(operation), parameterValues);
+    requestBody = bodyWithResolvedPathParameters(operation, bodyForApiOperation(operation, parameterValues), parameterValues);
     const bodyControl = page.locator('[data-cy="openapiRequestBody"]').first();
     if (requestBody === undefined && operation.requestBodyRequired) {
       return {
@@ -2773,13 +3439,26 @@ function recordApiOperationsRoundTrip(
   record,
   responseBody = record.responseBody,
   responseFields = record.operation.responseBodyFields,
+  { writeResponseBodyAvailable = true, readbackIdentityVerified = false, readbackPathVerified = false } = {},
 ) {
   const roundTrip = operationRoundTripResult(record, responseBody, responseFields);
   if (!roundTrip.checked) return true;
   result.coverage.apiOperationsPageRoundTripChecks += 1;
-  if (roundTrip.matched) {
+  const outcome = classifyPersistenceReadOutcome(200, roundTrip, {
+    writeResponseBodyAvailable,
+    readbackIdentityVerified,
+    readbackPathVerified,
+  });
+  if (outcome.classification === 'success') {
     result.coverage.apiOperationsPageSuccessfulRoundTripChecks += 1;
-    result.steps.push({ name: stepName, status: 'ok', operationId: record.operation.id });
+    result.steps.push({
+      name: stepName,
+      status: 'ok',
+      operationId: record.operation.id,
+      roundTripMatched: roundTrip.matched,
+      readbackIdentityVerified,
+      readbackPathVerified,
+    });
     return true;
   }
   result.steps.push({
@@ -2803,76 +3482,130 @@ function verifyCreatedOperationDetailRoundTrips() {
   for (const createRecord of operationExecutionRecords.filter(
     record => record.createdByApiOperations && record.requestBody !== undefined,
   )) {
-    const prefix = operationStaticPrefix(createRecord.operation);
+    const capability = persistenceReadCapability(createRecord.operation, declaredOperations, {
+      location: createRecord.responseHeaders?.location,
+      requestBody: createRecord.requestBody,
+    });
+    if (!capability.available) continue;
+    const concrete =
+      capability.location || capability.matchKind === 'same-item' ?
+        undefined
+      : concreteOperationPath(capability.readOperation, {
+          verificationRecord: createRecord,
+          identityCandidates: relevantExecutionRecords(capability.readOperation),
+        });
+    const target = persistenceReadTarget(capability, {
+      responseUrl: createRecord.responseUrl,
+      resolvedPath: concrete?.path,
+      resolutions: concrete?.resolutions,
+    });
+    if (!target.available) continue;
+    const targetPath = target.path;
     const detailRecord = operationExecutionRecords
       .filter(
         record =>
           record.source === 'api-operations' &&
           record.status >= 200 &&
           record.status < 300 &&
-          record.operation.method === 'GET' &&
-          operationPathParameters(record.operation).length > 0 &&
-          operationStaticPrefix(record.operation) === prefix,
+          record.operation.id === capability.readOperation.id &&
+          concreteUrlPath(record.responseUrl) === targetPath,
       )
       .at(-1);
     if (!detailRecord) continue;
+    const readbackIdentity = persistenceReadIdentity(capability.readOperation, targetPath, detailRecord.responseBody);
     recordApiOperationsRoundTrip(
       `api-operations-${createRecord.operation.id}-persisted-detail`,
       createRecord,
       detailRecord.responseBody,
       detailRecord.operation.responseBodyFields,
+      {
+        writeResponseBodyAvailable: createRecord.writeResponseBodyAvailable,
+        readbackIdentityVerified: readbackIdentity.verified,
+        readbackPathVerified: target.readbackPathVerified,
+      },
     );
   }
 }
 
+function recordUnavailableWriteRead(record, unavailableCapability) {
+  const entry = {
+    operationId: record.operation.id,
+    reasonCode: unavailableCapability.reasonCode,
+    reason: unavailableCapability.reason,
+  };
+  result.coverage.persistence.unavailableWriteReadChecks.push(entry);
+  result.steps.push({
+    name: `persistence-write-read-${record.operation.id}`,
+    status: 'unavailable',
+    ...entry,
+  });
+  return true;
+}
+
 async function verifyWritePersistence(page, record) {
-  if (!record.requestBody || typeof record.requestBody !== 'object') return true;
-  let targetPath;
-  let identityEvidence = [];
-  const detailOperation = declaredOperations.find(
-    candidate =>
-      candidate.method === 'GET' &&
-      operationPathParameters(candidate).length > 0 &&
-      operationStaticPrefix(candidate) === operationStaticPrefix(record.operation),
-  );
-  const location = record.responseHeaders?.location;
-  if (location) {
-    try {
-      const locationUrl = new URL(location, webBaseUrl);
-      targetPath = `${locationUrl.pathname}${locationUrl.search}`;
-      identityEvidence = [{ source: 'location-header', value: targetPath }];
-    } catch {
-      targetPath = location;
-      identityEvidence = [{ source: 'location-header', value: location }];
-    }
-  }
-  if (!targetPath) {
-    const concrete = detailOperation ? concreteOperationPath(detailOperation) : undefined;
-    targetPath = concrete?.path;
-    identityEvidence = concrete?.resolutions ?? [];
-  }
-  if (!targetPath) {
-    result.coverage.persistence.unavailableWriteReadChecks.push({
-      operationId: record.operation.id,
-      reasonCode: 'resource-url-unavailable',
+  if (record.requestBody === undefined) {
+    return recordUnavailableWriteRead(record, {
+      reasonCode: 'write-request-body-unavailable',
+      reason: 'the successful write has no captured request body to compare',
     });
-    return true;
   }
+  if (record.requestBody === null || typeof record.requestBody !== 'object') {
+    return recordUnavailableWriteRead(record, {
+      reasonCode: 'write-request-body-not-comparable',
+      reason: 'the persistence comparator does not support a non-structured write request body',
+    });
+  }
+  const capability = persistenceReadCapability(record.operation, declaredOperations, {
+    location: record.responseHeaders?.location,
+    requestBody: record.requestBody,
+  });
+  if (!capability.available) {
+    return recordUnavailableWriteRead(record, capability);
+  }
+
+  const detailOperation = capability.readOperation;
+  const concrete =
+    capability.location || capability.matchKind === 'same-item' ?
+      undefined
+    : concreteOperationPath(detailOperation, {
+        verificationRecord: record,
+        identityCandidates: relevantExecutionRecords(detailOperation),
+      });
+  const target = persistenceReadTarget(capability, {
+    responseUrl: record.responseUrl,
+    resolvedPath: concrete?.path,
+    resolutions: concrete?.resolutions,
+  });
+  const identityEvidence = target.identityEvidence ?? [];
+  if (capability.ignoredLocation) {
+    identityEvidence.push({ source: 'location-header-ignored', ...capability.ignoredLocation });
+  }
+  if (!target.available) return recordUnavailableWriteRead(record, target);
+  const targetPath = target.path;
 
   result.coverage.persistence.writeReadChecks += 1;
   const attempts = record.status === 202 ? persistencePollAttempts : 1;
-  let persisted;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    persisted = await authenticatedFetch(page, targetPath, { method: 'GET' });
-    if (persisted.status >= 200 && persisted.status < 300) break;
-    if (attempt < attempts) await page.waitForTimeout(persistencePollIntervalMs);
-  }
   const persistedSchema =
     detailOperation?.responseBodyFields?.length ? detailOperation.responseBodyFields
     : record.operation.responseBodyFields?.length ? record.operation.responseBodyFields
     : record.operation.requestBodyFields;
-  const roundTrip = operationRoundTripResult(record, persisted?.body, persistedSchema);
-  const passed = persisted?.status >= 200 && persisted.status < 300 && roundTrip.checked && roundTrip.matched;
+  let persisted;
+  let roundTrip;
+  let readbackIdentity;
+  let persistenceOutcome;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    persisted = await authenticatedFetch(page, targetPath, { method: 'GET' });
+    roundTrip = operationRoundTripResult(record, persisted?.body, persistedSchema);
+    readbackIdentity = persistenceReadIdentity(detailOperation, targetPath, persisted?.body);
+    persistenceOutcome = classifyPersistenceReadOutcome(persisted?.status, roundTrip, {
+      writeResponseBodyAvailable: record.writeResponseBodyAvailable,
+      readbackIdentityVerified: readbackIdentity.verified,
+      readbackPathVerified: target.readbackPathVerified,
+    });
+    if (persistenceOutcome.classification === 'success') break;
+    if (attempt < attempts) await page.waitForTimeout(persistencePollIntervalMs);
+  }
+  const passed = persistenceOutcome.classification === 'success';
   result.steps.push({
     name: `persistence-write-read-${record.operation.id}`,
     status: passed ? 'ok' : 'unexpected-failure',
@@ -2880,17 +3613,30 @@ async function verifyWritePersistence(page, record) {
     identityEvidence,
     roundTripChecked: roundTrip.checked,
     roundTripMatched: roundTrip.matched,
+    writeResponseBodyAvailable: record.writeResponseBodyAvailable,
+    readbackIdentityVerified: readbackIdentity.verified,
+    readbackIdentityEvidence: readbackIdentity.evidence,
+    readbackPathVerified: target.readbackPathVerified,
+    reasonCode: persistenceOutcome.reasonCode,
     attempts,
   });
   if (!passed) {
+    record.persistenceVerified = false;
+    record.createdByApiOperations = false;
     apiOperationsPageSuccessfulOperationIds.delete(record.operation.id);
     apiOperationsPageUnexpectedFailures.push({
       operationId: record.operation.id,
       phase: 'persistence-write-read',
-      reasonCode: 'persisted-resource-mismatch',
+      reasonCode: persistenceOutcome.reasonCode,
       reason: `written resource could not be read back consistently from ${targetPath}`,
     });
     return false;
+  }
+  record.persistenceVerified = true;
+  record.persistedResponseBody = persisted.body;
+  record.verifiedPersistenceReadPath = targetPath;
+  if (record.source === 'api-operations' && record.operation.method === 'POST') {
+    record.createdByApiOperations = true;
   }
   result.coverage.persistence.successfulWriteReadChecks += 1;
   return true;
@@ -2911,19 +3657,47 @@ async function exerciseAllOpenApiOperations(page, operations) {
   result.steps.push({ name: 'api-operations-page-execution-coverage', status: 'planned', count: ordered.length });
 
   for (const operation of ordered) {
+    const prerequisite = operationPrerequisiteDisposition(operation);
+    if (prerequisite.classification !== 'eligible') {
+      const entry = {
+        ...externalPrerequisiteOperation(operation),
+        required: prerequisite.required,
+        reasonCode: prerequisite.reasonCode,
+        evidencePaths: prerequisite.evidencePaths ?? [],
+        prerequisites: prerequisite.prerequisites ?? [],
+      };
+      if (prerequisite.classification === 'blocked-prerequisite') {
+        apiOperationsPageBlockedPrerequisiteOperations.push(entry);
+      } else {
+        apiOperationsPageDisabledOptionalOperations.push(entry);
+      }
+      result.steps.push({
+        name: `api-operations-execute-${operation.id}`,
+        status: prerequisite.classification,
+        ...entry,
+      });
+      continue;
+    }
     const prepared = await prepareOpenApiOperation(page, select, operation);
     if (!prepared.executable) {
+      if (prepared.terminal) continue;
       const entry = {
         operationId: operation.id,
         method: operation.method,
         path: operation.path,
         reasonCode: prepared.reasonCode,
         reason: prepared.reason,
+        externallyPreconditioned: prepared.externallyPreconditioned,
+        externalPrecondition: prepared.externalPrecondition,
       };
       const preparationClassification = classifyOperationPreparationFailure(prepared);
       if (preparationClassification === 'unexecutable') {
         apiOperationsPageUnexecutableOperations.push(entry);
-        result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'unexecutable', ...entry });
+        result.steps.push({
+          name: `api-operations-execute-${operation.id}`,
+          status: prepared.externallyPreconditioned ? 'externally-preconditioned' : 'unexecutable',
+          ...entry,
+        });
       } else {
         apiOperationsPageHarnessErrors.push(entry);
         result.steps.push({ name: `api-operations-execute-${operation.id}`, status: 'harness-error', ...entry });
@@ -2988,6 +3762,7 @@ async function exerciseAllOpenApiOperations(page, operations) {
       .catch(() => undefined);
     const responseClassification = classifyOperationResponse(operation.responseStatusCodes, status);
     if (responseClassification === 'expected-negative') {
+      operationErrorCapture.expectResponse(response, 'expected-negative', { operationId: operation.id });
       apiOperationsPageExpectedNegativeOperations.push({
         operationId: operation.id,
         method: operation.method,
@@ -3038,28 +3813,44 @@ async function exerciseAllOpenApiOperations(page, operations) {
 
   verifyCreatedOperationDetailRoundTrips();
   await screenshot(page, 'api-operations-execution-complete');
-  const missing2xx = operations.filter(operation => !apiOperationsPageSuccessfulOperationIds.has(operation.id));
+  const applicableOperations = operations.filter(
+    operation => operationPrerequisiteDisposition(operation).classification !== 'disabled-optional',
+  );
+  const missing2xx = applicableOperations.filter(operation => !apiOperationsPageSuccessfulOperationIds.has(operation.id));
   const terminalIds = new Set([
     ...apiOperationsPageSuccessfulOperationIds,
+    ...apiOperationsPageBlockedPrerequisiteOperations.map(entry => entry.operationId),
     ...apiOperationsPageExpectedNegativeOperations.map(entry => entry.operationId),
     ...apiOperationsPageUnexecutableOperations.map(entry => entry.operationId),
     ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
     ...apiOperationsPageUnexpectedFailures.map(entry => entry.operationId),
   ]);
-  const missingTerminal = operations.filter(operation => !terminalIds.has(operation.id));
+  const missingTerminal = applicableOperations.filter(operation => !terminalIds.has(operation.id));
+  let coverageStatus = 'ok';
+  if (
+    apiOperationsPageBlockedPrerequisiteOperations.length ||
+    apiOperationsPageHarnessErrors.length ||
+    apiOperationsPageUnexpectedFailures.length ||
+    missingTerminal.length
+  ) {
+    coverageStatus = 'failed';
+  } else if (apiOperationsPageUnexecutableOperations.length) {
+    coverageStatus = 'ok-with-unexecutable';
+  }
   result.steps.push({
     name: 'api-operations-page-execution-coverage',
-    status:
-      apiOperationsPageHarnessErrors.length || apiOperationsPageUnexpectedFailures.length || missingTerminal.length ? 'failed'
-      : apiOperationsPageUnexecutableOperations.length ? 'ok-with-unexecutable'
-      : 'ok',
+    status: coverageStatus,
     success2xx: apiOperationsPageSuccessfulOperationIds.size,
+    eligible: applicableOperations.length - apiOperationsPageBlockedPrerequisiteOperations.length,
+    blockedPrerequisite: apiOperationsPageBlockedPrerequisiteOperations.length,
+    disabledOptional: apiOperationsPageDisabledOptionalOperations.length,
     expectedNegative: apiOperationsPageExpectedNegativeOperations.length,
     unexecutable: apiOperationsPageUnexecutableOperations.length,
     harnessError: apiOperationsPageHarnessErrors.length,
     unexpectedFailure: apiOperationsPageUnexpectedFailures.length,
     terminal: terminalIds.size,
     declared: operations.length,
+    applicable: applicableOperations.length,
     missing2xxOperationIds: missing2xx.map(operation => operation.id),
     missingTerminalOperationIds: missingTerminal.map(operation => operation.id),
   });
@@ -3070,10 +3861,14 @@ async function exerciseAllOpenApiOperations(page, operations) {
   }
   if (
     requireAllApiOperationsAccounted &&
-    (missingTerminal.length || apiOperationsPageHarnessErrors.length || apiOperationsPageUnexpectedFailures.length)
+    (apiOperationsPageBlockedPrerequisiteOperations.length ||
+      missingTerminal.length ||
+      apiOperationsPageHarnessErrors.length ||
+      apiOperationsPageUnexpectedFailures.length)
   ) {
     throw new Error(
       `API Operations execution gate failed: ${[
+        ...apiOperationsPageBlockedPrerequisiteOperations.map(entry => entry.operationId),
         ...apiOperationsPageHarnessErrors.map(entry => entry.operationId),
         ...apiOperationsPageUnexpectedFailures.map(entry => entry.operationId),
         ...missingTerminal.map(operation => operation.id),
@@ -3608,6 +4403,9 @@ async function exerciseDeleteCreatedItem(page, entry) {
         `Deleted resource ${entry.resource.deleteOperation.id} remained readable or returned an unexpected HTTP ${postDelete.status}`,
       );
     }
+    operationErrorCapture.expectRequest(postDelete.requestId, 'post-delete', {
+      operationId: entry.resource.detailOperation.id,
+    });
     result.coverage.persistence.postDeleteNotFoundChecks += 1;
   }
 }
@@ -3617,18 +4415,38 @@ try {
   browser = await chromium.launch({ headless });
   page = await browser.newPage();
   page.setDefaultTimeout(timeoutMs);
-  let authenticated = false;
+  operationErrorCapture = createPlaywrightOperationErrorCapture({
+    targetOrigin: webBaseUrl,
+    authenticated: () => authenticated,
+    evidenceFile: operationErrorReportFile,
+  });
+  page.on('request', request => {
+    operationErrorCapture.captureRequest(request);
+  });
   page.on('console', message => {
-    result.console.push({ type: message.type(), text: message.text(), authenticated });
+    const entry = { type: message.type(), text: message.text(), authenticated };
+    if (message.type() === 'error') {
+      const event = operationErrorCapture.captureConsole(message);
+      entry.evidenceRef = event.evidenceRef;
+    }
+    result.console.push(entry);
   });
   page.on('pageerror', error => {
-    result.pageErrors.push({ message: error.message, stack: error.stack });
+    const event = operationErrorCapture.capturePageError(error, page.url());
+    result.pageErrors.push({
+      message: error.message,
+      stack: error.stack,
+      authenticated: event.authenticated,
+      target: event.target,
+      evidenceRef: event.evidenceRef,
+    });
+  });
+  page.on('requestfailed', request => {
+    const event = operationErrorCapture.captureRequestFailure(request);
+    result.requestFailures.push(event);
   });
   page.on('response', response => {
-    const status = response.status();
-    if (authenticated && (status >= 500 || (failOnHttp4xx && status >= 400))) {
-      result.failedResponses.push(compactResponse(response));
-    }
+    operationErrorCapture.captureResponse(response);
   });
 
   await navigateWithSourceCoverage(page, joinUrl(webBaseUrl, '/login'), { waitUntil: 'domcontentloaded' });
@@ -3738,46 +4556,45 @@ try {
     );
   }
 
-  const consoleErrors = result.console.filter(
-    entry =>
-      entry.type === 'error' &&
-      entry.authenticated &&
-      !/Failed to load resource: the server responded with a status of [45]\d\d/i.test(entry.text),
-  );
   if (result.pageErrors.length > 0) {
     throw new Error(`Browser page error(s): ${result.pageErrors.map(error => error.message).join('; ')}`);
-  }
-  if (result.failedResponses.length > 0) {
-    throw new Error(
-      `Failed HTTP response(s): ${result.failedResponses.map(response => `${response.method} ${response.url} ${response.status}`).join('; ')}`,
-    );
-  }
-  if (failOnConsoleError && consoleErrors.length > 0) {
-    throw new Error(`Browser console error(s): ${consoleErrors.map(entry => entry.text).join('; ')}`);
   }
 
   result.status = 'passed';
 } catch (error) {
-  result.status = 'failed';
-  result.error = { message: error.message, stack: error.stack };
-  process.exitCode = 1;
+  if (!terminationSignal) {
+    result.status = 'failed';
+    result.error = { message: error.message, stack: error.stack };
+    process.exitCode = 1;
+  }
 } finally {
-  try {
-    await collectSourceCoverage();
-  } catch (coverageError) {
-    result.sourceCoverage = {
-      ...result.sourceCoverage,
-      enabled: sourceCoverageEnabled,
-      error: { message: coverageError.message, stack: coverageError.stack },
-    };
-    if (sourceCoverageEnabled) {
-      result.status = 'failed';
-      result.error ??= { message: coverageError.message, stack: coverageError.stack };
-      process.exitCode = 1;
+  if (!terminationSignal) {
+    try {
+      await collectSourceCoverage();
+    } catch (coverageError) {
+      if (!terminationSignal) {
+        result.sourceCoverage = {
+          ...result.sourceCoverage,
+          enabled: sourceCoverageEnabled,
+          error: { message: coverageError.message, stack: coverageError.stack },
+        };
+        if (sourceCoverageEnabled) {
+          result.status = 'failed';
+          result.error ??= { message: coverageError.message, stack: coverageError.stack };
+          process.exitCode = 1;
+        }
+      }
     }
   }
-  if (browser) {
-    await browser.close();
+  if (terminationSignal) {
+    await terminationPromise;
+  } else {
+    try {
+      await closeBrowser();
+    } catch (error) {
+      if (!terminationSignal) throw error;
+    }
+    if (terminationSignal) await terminationPromise;
+    else writeResultReport();
   }
-  writeResultReport();
 }

@@ -5,6 +5,7 @@ import {
   findReferencePickerConfig,
   findReferencePickerConfigBySemanticKey,
   requireReferencePickerConfig,
+  requireReferencePickerIdentityMapping,
 } from './reference-picker-admin-state.mjs';
 
 const requested = {
@@ -44,5 +45,18 @@ test('fails persistence when the saved identity is missing even if the same sema
   assert.throws(
     () => requireReferencePickerConfig(reloaded, returned, 'restored after reload'),
     /identity saved-id was not restored after reload/,
+  );
+});
+
+test('proves the source compatibility id maps to the external pickerId', () => {
+  assert.deepEqual(requireReferencePickerIdentityMapping({ id: 'mapped-id' }, { pickerId: 'mapped-id' }, { id: 'mapped-id' }), {
+    sourceId: 'mapped-id',
+    externalPickerId: 'mapped-id',
+    sourceReadbackId: 'mapped-id',
+  });
+
+  assert.throws(
+    () => requireReferencePickerIdentityMapping({ id: 'source-id' }, { pickerId: 'different-external-id' }, { id: 'source-id' }),
+    /source id did not map to the persisted external pickerId/,
   );
 });

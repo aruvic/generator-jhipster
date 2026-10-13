@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   accessibilityIssues,
+  clearRequiredValidationControl,
   expandAllNestedAccordions,
   requiredBodyValidationApplicability,
   requiredFormlyControlIssues,
@@ -190,6 +191,28 @@ test('matches duplicate labels to required controls without hiding missing requi
       actualControl: 'optional-location-code',
     },
   ]);
+});
+
+test('clears required selects that do not render an empty option', async () => {
+  const events = [];
+  const select = {
+    selectedIndex: 0,
+    dispatchEvent: event => events.push({ type: event.type, bubbles: event.bubbles }),
+  };
+  let blurred = false;
+  const control = {
+    evaluate: async callback => callback(select),
+    fill: async () => assert.fail('select controls must not be filled as text'),
+    blur: async () => {
+      blurred = true;
+    },
+  };
+
+  await clearRequiredValidationControl(control, 'select');
+
+  assert.equal(select.selectedIndex, -1);
+  assert.deepEqual(events, [{ type: 'change', bubbles: true }]);
+  assert.equal(blurred, true);
 });
 
 test('requires browser validation and submit blocking for an emptied required field', () => {

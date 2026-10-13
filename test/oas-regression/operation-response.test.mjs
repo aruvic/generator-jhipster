@@ -17,6 +17,10 @@ test('only accepts 2xx for executable happy-path operations', () => {
   assert.equal(classifyOperationResponse(['500', 'default'], 500), 'unexpected-failure');
 });
 
+test('accepts HTTP 202 for an executable happy-path operation', () => {
+  assert.equal(classifyOperationResponse(['202'], 202), 'success-2xx');
+});
+
 test('requires an explicit expected-negative scenario and status', () => {
   assert.equal(
     classifyOperationResponse(['400', '404'], 404, {
